@@ -1,0 +1,23 @@
+[2026-07-21 12:43:11] [INFO] ✅ 配置文件加载完成，生成 35 个节点订阅数据
+[2026-07-21 12:43:13] [ERROR] ❌ Subapi 转换 HTTP 错误 [HTTP 400 Bad Request] [目标: clash, 订阅源: http://testserver/v2ray?token=test-token-12345, 规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini] - 详细返回: No nodes were found!
+[2026-07-21 12:47:00] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 649724 字节]
+[2026-07-21 12:48:27] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 649724 字节, 第 1 次尝试]
+[2026-07-21 12:50:59] [ERROR] Error fetching preferred nodes: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1000)>
+[2026-07-21 12:50:59] [INFO] ✅ 配置文件加载完成，生成 15 个节点订阅数据
+[2026-07-21 12:51:04] [WARNING] ⚠️ Subapi 在线转换超时/网络抖动 (第 1/5 次请求超时 10s: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1000))，增加超时时间至 20s 并进行第 2 次重试...
+测试 curl 命令: curl -s -L -A "Mozilla/5.0" "https://subapi.19910417.xyz/sub?target=clash&url=http%3A%2F%2Ftestserver%2Fv2ray%3Ftoken%3Dtest-token-12345&config=https%3A%2F%2Fraw.githubusercontent.com%2FJayYang1991%2FACL4SSR%2Frefs%2Fheads%2Fmain%2FClash%2Fconfig%2FACL4SSR_Online_Full_CF.ini"
+[2026-07-21 12:56:29] [INFO] ✅ 本地节点解析完成，生成 35 个节点 Base64 订阅
+[2026-07-21 13:01:29] [INFO] ✅ 本地节点解析完成，生成 35 个节点 Base64 订阅
+[2026-07-21 13:12:39] [INFO] ✅ 本地节点解析完成，生成 35 个节点 Base64 订阅
+[2026-07-21 14:32:19] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 649716 字节, 第 1 次尝试]
+[2026-07-21 14:32:53] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 649716 字节, 第 1 次尝试]
+[2026-07-21 14:33:16] [INFO] ✅ 本地节点解析完成，生成 35 个节点 Base64 订阅
+[2026-07-21 14:33:18] [ERROR] ❌ Subapi 转换 HTTP 错误 [HTTP 400 Bad Request] [目标: clash, 订阅源: http://testserver/v2ray?token=52126bffd75b427ca9b6ef3d79e342ab] - 详细返回: No nodes were found!
+测试 curl 命令: curl -s -L -A "Mozilla/5.0" "https://subapi.19910417.xyz/sub?target=clash&url=http%3A%2F%2Ftestserver%2Fv2ray%3Ftoken%3D52126bffd75b427ca9b6ef3d79e342ab&config=https%3A%2F%2Fraw.githubusercontent.com%2FJayYang1991%2FACL4SSR%2Frefs%2Fheads%2Fmain%2FClash%2Fconfig%2FACL4SSR_Online_Full_CF.ini"
+[2026-07-21 14:39:50] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 649716 字节, 第 1 次尝试]
+[2026-07-21 18:48:08] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 652697 字节, 第 1 次尝试]
+[2026-07-21 18:48:43] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 652697 字节, 第 1 次尝试]
+[2026-07-21 18:54:35] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 652697 字节, 第 1 次尝试]
+[2026-07-21 18:55:28] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 652697 字节, 第 1 次尝试]
+[2026-07-21 18:59:22] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 652697 字节, 第 1 次尝试]
+[2026-07-21 19:04:31] [INFO] ✅ Subapi 订阅转换成功! [目标: clash, 策略规则: https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini, 响应大小: 652697 字节, 第 1 次尝试]

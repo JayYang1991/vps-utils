@@ -1,0 +1,64 @@
+{
+  "log": {
+    "level": "{SINGBOX_LOG_LEVEL}",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "vless",
+      "tag": "vless-reality",
+      "listen": "0.0.0.0",
+      "listen_port": "{SINGBOX_PORT}",
+      "users": [
+        {
+          "uuid": "{SINGBOX_UUID}",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "{SINGBOX_DOMAIN}",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "{SINGBOX_DOMAIN}",
+            "server_port": 443
+          },
+          "private_key": "{SINGBOX_PRIVATE_KEY}",
+          "short_id": [
+            "{SINGBOX_SHORT_ID}"
+          ]
+        }
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "hy2-in",
+      "listen": "0.0.0.0",
+      "listen_port": "{SINGBOX_HY2_PORT}",
+      "users": [
+        {
+          "password": "{SINGBOX_HY2_PASSWORD}"
+        }
+      ],
+      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
+      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "tls": {
+        "enabled": true,
+        "server_name": "{SINGBOX_HY2_DOMAIN}",
+        "alpn": [
+          "h3"
+        ],
+        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
+        "key_path": "{SINGBOX_HY2_KEY_PATH}"
+      },
+      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ]
+}

@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>sing-box 订阅转换服务控制台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <style>
+        body { background: #0b0f19; color: #f8fafc; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .glass-card { background: rgba(26, 34, 52, 0.75); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .glass-card-sm { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(8px); border: 1px solid rgba(255, 255, 255, 0.08); }
+        #qrcode img { margin: 0 auto; border-radius: 12px; padding: 10px; background: #ffffff; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); }
+        .modal { background-color: rgba(0, 0, 0, 0.75); backdrop-filter: blur(6px); }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 3px; }
+        optgroup { background: #0f172a; color: #94a3b8; font-weight: 600; }
+        option { background: #1e293b; color: #f8fafc; }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen p-4 sm:p-6">
+
+    <!-- 登录容器 -->
+    <div id="loginSection" class="glass-card p-8 rounded-3xl shadow-2xl w-full max-w-md border border-indigo-500/20">
+        <div class="flex items-center gap-3 mb-4">
+            <div class="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 text-xl font-bold">
+                ⚡
+            </div>
+            <div>
+                <h1 class="text-2xl font-bold text-white tracking-tight">订阅转换服务</h1>
+                <p class="text-xs text-slate-400">sing-box 智能自适应订阅管理平台</p>
+            </div>
+        </div>
+        
+        <div class="space-y-4 mt-6">
+            <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">管理员账号</label>
+                <input id="username" type="text" placeholder="输入用户名" class="w-full px-4 py-2.5 bg-slate-900/90 border border-slate-700/80 text-white rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition text-sm">
+            </div>
+            <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">登录密码</label>
+                <input id="password" type="password" placeholder="输入密码" class="w-full px-4 py-2.5 bg-slate-900/90 border border-slate-700/80 text-white rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition text-sm">
+            </div>
+            <button onclick="handleLogin()" class="w-full py-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white font-medium rounded-xl transition shadow-lg shadow-indigo-600/30 text-sm">
+                安全登录
+            </button>
+            <p id="loginError" class="text-rose-400 text-xs hidden text-center">用户名或密码错误，请重试</p>
+        </div>
+    </div>
+
+    <!-- 主容器 (登录后显示) -->
+    <div id="mainSection" class="glass-card p-6 sm:p-8 rounded-3xl shadow-2xl w-full max-w-2xl hidden relative border border-slate-700/50">
+        <!-- 头部栏 -->
+        <div class="flex items-center justify-between pb-6 mb-6 border-b border-slate-800">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400 text-xl font-bold">
+                    🚀
+                </div>
+                <div>
+                    <h1 class="text-xl sm:text-2xl font-bold text-white tracking-tight">sing-box 订阅转换控制台</h1>
+                    <div class="flex items-center gap-2 mt-0.5">
+                        <span class="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-medium">
+                            <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> 服务运行正常
+                        </span>
+                        <span class="text-slate-600">•</span>
+                        <span class="text-[11px] text-slate-400">默认 ACL4SSR_Online_Full_CF 规则</span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="showRotateModal()" title="重置订阅 Token/UUID" class="p-2 text-slate-400 hover:text-amber-400 hover:bg-slate-800/60 rounded-xl transition flex items-center gap-1 text-xs">
+                    <span>🔑</span>
+                    <span class="hidden sm:inline">重置 Token</span>
+                </button>
+                <button onclick="showPasswordModal()" title="修改密码" class="p-2 text-slate-400 hover:text-indigo-400 hover:bg-slate-800/60 rounded-xl transition">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                </button>
+                <button onclick="handleLogout()" title="退出登录" class="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800/60 rounded-xl transition">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="space-y-6">
+            <!-- 0. 转换规则配置文件下拉选择 -->
+            <div class="p-4 bg-slate-900/80 rounded-2xl border border-indigo-500/30">
+                <div class="flex items-center justify-between mb-2">
+                    <label class="text-xs font-semibold text-indigo-300 flex items-center gap-1.5">
+                        <span>🎯 转换规则配置文件 (SUBCONFIG)</span>
+                    </label>
+                    <span class="text-[11px] text-emerald-400">已默认预设 Online_Full_CF 规则</span>
+                </div>
+                <select id="subConfigSelect" onchange="updateSubUrls()" class="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700/90 text-slate-200 text-xs rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition cursor-pointer">
+                    <option value="https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini">🔥 默认规则: 识别多地区、CloudFlareCDN 负载均衡 CF节点专用 Online_Full_MultiMode_CF</option>
+                </select>
+            </div>
+
+            <!-- 1. 功能区域：生成自适应订阅链接 -->
+            <div class="p-5 bg-gradient-to-r from-indigo-900/40 via-purple-900/20 to-slate-900/60 rounded-2xl border border-indigo-500/40 relative overflow-hidden shadow-lg shadow-indigo-950/40">
+                <div class="absolute top-0 right-0 p-3 opacity-10 font-mono text-xs select-none">ADAPTIVE_SUB_GEN</div>
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center gap-2">
+                        <span class="text-base font-semibold text-indigo-300">✨ 智能自适应订阅链接</span>
+                        <span class="text-[10px] px-2 py-0.5 bg-indigo-500/30 text-indigo-200 border border-indigo-400/40 rounded-full font-medium">推荐首选</span>
+                    </div>
+                    <span class="text-xs text-slate-400">自动解析客户端 User-Agent</span>
+                </div>
+                <p class="text-xs text-slate-300 mb-3">无需区分客户端类型，将此链接直接导入 Clash、sing-box 或 V2Ray，系统会自动识别并适配对应配置。</p>
+                <div class="flex gap-2">
+                    <input id="subUrl" type="text" readonly value="正在获取..." class="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700/80 text-indigo-300 font-mono text-xs rounded-xl outline-none focus:border-indigo-500">
+                    <button onclick="copyToClipboard('subUrl')" class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl text-xs transition whitespace-nowrap shadow-md shadow-indigo-600/30">
+                        复制链接
+                    </button>
+                    <button onclick="openQRModal('subUrl', '智能自适应订阅')" class="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium rounded-xl text-xs transition flex items-center gap-1.5 whitespace-nowrap border border-slate-700">
+                        <span>📱</span> 扫码
+                    </button>
+                </div>
+            </div>
+
+            <!-- 2. 分客户端订阅管理卡片 -->
+            <div>
+                <h2 class="text-sm font-semibold text-slate-300 mb-3 flex items-center gap-2">
+                    <span>📦 专属客户端订阅</span>
+                    <span class="text-xs font-normal text-slate-500">(支持独立目标转换)</span>
+                </h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+                    <!-- Clash 卡片 -->
+                    <div class="glass-card-sm p-4 rounded-2xl border border-amber-500/20 hover:border-amber-500/40 transition">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-semibold text-amber-400 flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-amber-400"></span> Clash / Mihomo
+                            </span>
+                            <div class="flex items-center gap-1">
+                                <button onclick="copyToClipboard('clashUrl')" class="text-[11px] text-slate-400 hover:text-amber-300 px-1.5 py-0.5 rounded hover:bg-slate-800 transition">复制</button>
+                                <button onclick="openQRModal('clashUrl', 'Clash 订阅')" class="text-[11px] text-slate-400 hover:text-amber-300 px-1.5 py-0.5 rounded hover:bg-slate-800 transition">扫码</button>
+                            </div>
+                        </div>
+                        <input id="clashUrl" type="text" readonly value="" class="w-full px-2.5 py-1.5 bg-slate-950/80 border border-slate-800 text-slate-300 rounded-lg text-[11px] font-mono mb-2.5 outline-none">
+                        <button onclick="importToClient('clash')" class="w-full py-1.5 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1">
+                            ⚡ 一键导入到 Clash
+                        </button>
+                    </div>
+
+                    <!-- sing-box 卡片 -->
+                    <div class="glass-card-sm p-4 rounded-2xl border border-emerald-500/20 hover:border-emerald-500/40 transition">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-emerald-400"></span> sing-box
+                            </span>
+                            <div class="flex items-center gap-1">
+                                <button onclick="copyToClipboard('singboxUrl')" class="text-[11px] text-slate-400 hover:text-emerald-300 px-1.5 py-0.5 rounded hover:bg-slate-800 transition">复制</button>
+                                <button onclick="openQRModal('singboxUrl', 'sing-box 订阅')" class="text-[11px] text-slate-400 hover:text-emerald-300 px-1.5 py-0.5 rounded hover:bg-slate-800 transition">扫码</button>
+                            </div>
+                        </div>
+                        <input id="singboxUrl" type="text" readonly value="" class="w-full px-2.5 py-1.5 bg-slate-950/80 border border-slate-800 text-slate-300 rounded-lg text-[11px] font-mono mb-2.5 outline-none">
+                        <button onclick="importToClient('singbox')" class="w-full py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1">
+                            📦 一键导入到 sing-box
+                        </button>
+                    </div>
+
+                    <!-- V2Ray / Base64 卡片 -->
+                    <div class="glass-card-sm p-4 rounded-2xl border border-cyan-500/20 hover:border-cyan-500/40 transition">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-semibold text-cyan-400 flex items-center gap-1.5">
+                                <span class="w-2 h-2 rounded-full bg-cyan-400"></span> V2Ray / Base64
+                            </span>
+                            <div class="flex items-center gap-1">
+                                <button onclick="copyToClipboard('v2rayUrl')" class="text-[11px] text-slate-400 hover:text-cyan-300 px-1.5 py-0.5 rounded hover:bg-slate-800 transition">复制</button>
+                                <button onclick="openQRModal('v2rayUrl', 'V2Ray / Base64 订阅')" class="text-[11px] text-slate-400 hover:text-cyan-300 px-1.5 py-0.5 rounded hover:bg-slate-800 transition">扫码</button>
+                            </div>
+                        </div>
+                        <input id="v2rayUrl" type="text" readonly value="" class="w-full px-2.5 py-1.5 bg-slate-950/80 border border-slate-800 text-slate-300 rounded-lg text-[11px] font-mono mb-2.5 outline-none">
+                        <button onclick="importToClient('shadowrocket')" class="w-full py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 rounded-lg text-xs font-medium transition flex items-center justify-center gap-1">
+                            🚀 导入小火箭 Shadowrocket
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 3. 安全与状态管理栏 -->
+            <div class="p-4 bg-slate-900/80 rounded-2xl border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div class="flex items-center gap-2 text-xs text-slate-300">
+                    <span class="text-amber-400 text-sm">🔒</span>
+                    <div>
+                        <span class="font-medium text-slate-200">订阅安全保护 Token</span>
+                        <p class="text-[11px] text-slate-400">泄露或疑被盗用时可随时一键重置更新</p>
+                    </div>
+                </div>
+                <button onclick="showRotateModal()" class="w-full sm:w-auto px-4 py-2 bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-medium transition flex items-center justify-center gap-1.5 whitespace-nowrap">
+                    🔑 更换订阅 Token / UUID
+                </button>
+            </div>
+
+            <!-- 4. 操作控制与刷新节点按钮 -->
+            <div class="space-y-3 pt-1">
+                <button id="refreshIpBtn" onclick="handleRefreshIP()" class="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-medium transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-900/30">
+                    <svg id="refreshIcon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <span>刷新优选 IP 与生成最新订阅</span>
+                </button>
+
+                <!-- 实时日志控制台 -->
+                <div id="logContainer" class="hidden">
+                    <div class="flex items-center justify-between bg-slate-900 text-slate-400 px-3.5 py-2 rounded-t-xl text-xs font-mono border-t border-x border-slate-800">
+                        <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> 执行日志控制台</span>
+                        <button onclick="clearLogs()" class="hover:text-white transition">清空</button>
+                    </div>
+                    <div id="logContent" class="bg-black/95 text-emerald-400 p-3.5 rounded-b-xl text-xs font-mono h-44 overflow-y-auto whitespace-pre-wrap break-all border-b border-x border-slate-800 custom-scrollbar"></div>
+                </div>
+
+                <!-- 说明面板 -->
+                <div class="p-4 bg-slate-900/60 border-l-2 border-indigo-500 rounded-xl text-slate-300">
+                    <p class="text-xs font-semibold text-indigo-400 mb-1">转换服务说明：</p>
+                    <p class="text-[11px] text-slate-400 leading-relaxed">
+                        • 规则 1：读取服务端 <code>vless-grpc</code> 的 host 与 uuid，通过 edgetunnel 获取 Cloudflare 优选 IP 节点并替换配置。<br>
+                        • 规则 2：解析服务端 Reality 及 Hysteria2 等协议节点，自动衍生 Public Key，追加在优选节点之后。<br>
+                        • 规则 3：默认预设 `ACL4SSR_Online_Full_CF` 规则，支持在线 `subapi.19910417.xyz` 转换。
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 1. 二维码扫描 Modal -->
+    <div id="qrModal" class="fixed inset-0 modal flex items-center justify-center hidden z-50 p-4">
+        <div class="glass-card p-6 sm:p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-slate-700/80 relative text-center">
+            <button onclick="closeQRModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white transition">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+            </button>
+            <h2 id="qrModalTitle" class="text-base font-bold text-white mb-1">扫描订阅二维码</h2>
+            <p class="text-xs text-slate-400 mb-4">使用移动端客户端 (Clash / Shadowrocket / sing-box) 扫描</p>
+            
+            <div class="p-4 bg-slate-950/80 rounded-2xl border border-slate-800 inline-block mb-4">
+                <div id="qrcode"></div>
+            </div>
+
+            <div class="text-[11px] text-slate-400 bg-slate-900/60 p-2.5 rounded-xl font-mono break-all text-left mb-4" id="qrUrlText"></div>
+
+            <button onclick="copyCurrentQRUrl()" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-medium transition shadow-md shadow-indigo-600/30">
+                复制当前二维码链接
+            </button>
+        </div>
+    </div>
+
+    <!-- 2. 更换 Token / UUID 确认 Modal -->
+    <div id="rotateModal" class="fixed inset-0 modal flex items-center justify-center hidden z-50 p-4">
+        <div class="glass-card p-6 rounded-2xl shadow-2xl w-full max-w-sm border border-amber-500/30">
+            <div class="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 text-xl font-bold mb-3">
+                🔑
+            </div>
+            <h2 class="text-base font-bold text-white mb-1">重置订阅 Token / UUID</h2>
+            <p class="text-xs text-slate-300 mb-4 leading-relaxed">
+                确定要更换订阅安全 Token 吗？<br>
+                重置后，<span class="text-amber-400 font-medium">旧的订阅链接与二维码将立即失效</span>，生成的新链接需重新导入客户端。
+            </p>
+            <div class="flex gap-2">
+                <button onclick="closeRotateModal()" class="w-1/2 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition">取消</button>
+                <button onclick="handleRotateToken()" class="w-1/2 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-medium transition shadow-md shadow-amber-600/30">确认重置</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3. 修改密码 Modal -->
+    <div id="passwordModal" class="fixed inset-0 modal flex items-center justify-center hidden z-50 p-4">
+        <div class="glass-card p-6 rounded-2xl shadow-2xl w-full max-w-sm border border-slate-700">
+            <h2 class="text-base font-bold text-white mb-1">修改管理密码</h2>
+            <p class="text-xs text-slate-400 mb-4">请输入新的管理密码（至少 6 位）</p>
+            <input id="newPassword" type="password" placeholder="输入新密码" class="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700 text-white rounded-xl mb-4 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+            <div class="flex gap-2">
+                <button onclick="closePasswordModal()" class="w-1/2 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium transition">取消</button>
+                <button onclick="handleChangePassword()" class="w-1/2 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-medium transition">确认修改</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const DEFAULT_CONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini";
+        const subUrlInput = document.getElementById('subUrl');
+        const clashUrlInput = document.getElementById('clashUrl');
+        const singboxUrlInput = document.getElementById('singboxUrl');
+        const v2rayUrlInput = document.getElementById('v2rayUrl');
+        const subConfigSelect = document.getElementById('subConfigSelect');
+        const loginSection = document.getElementById('loginSection');
+        const mainSection = document.getElementById('mainSection');
+        const qrModal = document.getElementById('qrModal');
+        const rotateModal = document.getElementById('rotateModal');
+        const passwordModal = document.getElementById('passwordModal');
+        
+        let rawBaseData = { sub_url: "", clash_url: "", singbox_url: "", v2ray_url: "" };
+        let subUrl = "";
+        let qrCodeObj = null;
+        let activeQRUrl = "";
+
+        async function checkAuth() {
+            try {
+                const response = await fetch('/config/info');
+                if (response.ok) {
+                    const data = await response.json();
+                    showMain(data);
+                    loadSubConfigs();
+                } else {
+                    showLogin();
+                }
+            } catch (err) {
+                showLogin();
+            }
+        }
+
+        async function loadSubConfigs() {
+            try {
+                const res = await fetch('/api/subconfigs');
+                if (res.ok) {
+                    const groups = await res.json();
+                    renderSubConfigOptions(groups);
+                }
+            } catch (e) {
+                console.error("Error loading SUBCONFIG.json:", e);
+            }
+        }
+
+        function renderSubConfigOptions(groups) {
+            subConfigSelect.innerHTML = "";
+            if (!Array.isArray(groups)) return;
+
+            let hasDefaultSelected = false;
+
+            groups.forEach(g => {
+                const optgroup = document.createElement('optgroup');
+                optgroup.label = g.label || "规则分组";
+                if (Array.isArray(g.options)) {
+                    g.options.forEach(opt => {
+                        const option = document.createElement('option');
+                        option.value = opt.value;
+                        option.textContent = opt.label;
+                        if (opt.value === DEFAULT_CONFIG_URL) {
+                            option.selected = true;
+                            hasDefaultSelected = true;
+                        }
+                        optgroup.appendChild(option);
+                    });
+                }
+                subConfigSelect.appendChild(optgroup);
+            });
+
+            if (!hasDefaultSelected) {
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = DEFAULT_CONFIG_URL;
+                defaultOpt.textContent = "🔥 默认规则: 识别多地区、CloudFlareCDN 负载均衡 CF节点专用 Online_Full_MultiMode_CF";
+                defaultOpt.selected = true;
+                subConfigSelect.insertBefore(defaultOpt, subConfigSelect.firstChild);
+            }
+
+            updateSubUrls();
+        }
+
+        function updateSubUrls() {
+            const selectedConfig = subConfigSelect.value || DEFAULT_CONFIG_URL;
+            const configParam = selectedConfig ? `&config=${encodeURIComponent(selectedConfig)}` : "";
+
+            subUrl = rawBaseData.sub_url + configParam;
+            subUrlInput.value = subUrl;
+            clashUrlInput.value = rawBaseData.clash_url + configParam;
+            singboxUrlInput.value = rawBaseData.singbox_url + configParam;
+            v2rayUrlInput.value = rawBaseData.v2ray_url; // v2ray base64 does not use config param
+        }
+
+        async function handleLogin() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorTip = document.getElementById('loginError');
+
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                body: JSON.stringify({ username, password })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.is_first_login) {
+                    passwordModal.classList.remove('hidden');
+                } else {
+                    window.location.reload();
+                }
+            } else {
+                errorTip.classList.remove('hidden');
+            }
+        }
+
+        function showPasswordModal() { passwordModal.classList.remove('hidden'); }
+        function closePasswordModal() { passwordModal.classList.add('hidden'); }
+        
+        function showRotateModal() { rotateModal.classList.remove('hidden'); }
+        function closeRotateModal() { rotateModal.classList.add('hidden'); }
+
+        async function handleRotateToken() {
+            try {
+                const res = await fetch('/api/rotate-token', { method: 'POST' });
+                if (res.ok) {
+                    const data = await res.json();
+                    showMain(data);
+                    closeRotateModal();
+                    alert("🔑 订阅安全 Token / UUID 已成功更新！旧链接已失效。");
+                } else {
+                    alert("更新 Token 失败，请查看日志。");
+                }
+            } catch (e) {
+                alert("请求发生错误: " + e.message);
+            }
+        }
+
+        async function handleChangePassword() {
+            const new_password = document.getElementById('newPassword').value;
+            if (new_password.length < 6) {
+                alert("密码长度不足6位");
+                return;
+            }
+
+            const res = await fetch('/api/change-password', {
+                method: 'POST',
+                body: JSON.stringify({ new_password })
+            });
+
+            if (res.ok) {
+                alert("密码修改成功！");
+                passwordModal.classList.add('hidden');
+                window.location.reload();
+            }
+        }
+
+        function showMain(data) {
+            loginSection.classList.add('hidden');
+            mainSection.classList.remove('hidden');
+            
+            rawBaseData = {
+                sub_url: data.sub_url,
+                clash_url: data.clash_url,
+                singbox_url: data.singbox_url,
+                v2ray_url: data.v2ray_url
+            };
+            
+            updateSubUrls();
+        }
+
+        function showLogin() {
+            loginSection.classList.remove('hidden');
+            mainSection.classList.add('hidden');
+        }
+
+        async function handleLogout() {
+            await fetch('/api/logout');
+            window.location.reload();
+        }
+
+        function copyToClipboard(id) {
+            const input = document.getElementById(id);
+            if (!input || !input.value) return;
+            input.select();
+            navigator.clipboard.writeText(input.value).then(() => {
+                alert('已成功复制链接到剪贴板！');
+            }).catch(() => {
+                document.execCommand('copy');
+                alert('已成功复制链接到剪贴板！');
+            });
+        }
+
+        function openQRModal(inputId, title) {
+            const input = document.getElementById(inputId);
+            if (!input || !input.value) return;
+            
+            activeQRUrl = input.value;
+            document.getElementById('qrModalTitle').innerText = title || "扫描订阅二维码";
+            document.getElementById('qrUrlText').innerText = activeQRUrl;
+            
+            const qrContainer = document.getElementById('qrcode');
+            qrContainer.innerHTML = "";
+            
+            qrCodeObj = new QRCode(qrContainer, {
+                text: activeQRUrl,
+                width: 180,
+                height: 180,
+                correctLevel: QRCode.CorrectLevel.M
+            });
+
+            qrModal.classList.remove('hidden');
+        }
+
+        function closeQRModal() {
+            qrModal.classList.add('hidden');
+        }
+
+        function copyCurrentQRUrl() {
+            if (!activeQRUrl) return;
+            navigator.clipboard.writeText(activeQRUrl).then(() => {
+                alert('已复制二维码链接到剪贴板！');
+            });
+        }
+
+        function importToClient(clientType) {
+            if (!subUrl) return;
+            let targetUrl = subUrl;
+            
+            if (clientType === 'clash') {
+                targetUrl = clashUrlInput.value || subUrl;
+                window.location.href = `clash://install-config?url=${encodeURIComponent(targetUrl)}`;
+            } else if (clientType === 'singbox') {
+                targetUrl = singboxUrlInput.value || subUrl;
+                window.location.href = `sing-box://import-remote-profile?url=${encodeURIComponent(targetUrl)}`;
+            } else if (clientType === 'shadowrocket') {
+                targetUrl = v2rayUrlInput.value || subUrl;
+                window.location.href = `sub://${btoa(targetUrl)}`;
+            }
+        }
+
+        async function handleRefreshIP() {
+            const btn = document.getElementById('refreshIpBtn');
+            const icon = document.getElementById('refreshIcon');
+            const span = btn.querySelector('span');
+            const logContainer = document.getElementById('logContainer');
+            const logContent = document.getElementById('logContent');
+            
+            logContainer.classList.remove('hidden');
+            logContent.innerText = "🚀 开始刷新 Cloudflare 优选 IP 与生成最新订阅...\n";
+            
+            btn.disabled = true;
+            btn.classList.add('opacity-75', 'cursor-not-allowed');
+            icon.classList.add('animate-spin');
+            span.innerText = "正在刷新中...";
+
+            try {
+                const response = await fetch('/api/refresh-ip', { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error(`HTTP 错误! 状态码: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    
+                    const text = decoder.decode(value, { stream: true });
+                    logContent.innerText += text;
+                    logContent.scrollTop = logContent.scrollHeight;
+                }
+            } catch (err) {
+                logContent.innerText += `\n❌ 发生异常: ${err.message}\n`;
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                icon.classList.remove('animate-spin');
+                span.innerText = "刷新优选 IP 与生成最新订阅";
+            }
+        }
+
+        function clearLogs() {
+            document.getElementById('logContent').innerText = "";
+        }
+
+        checkAuth();
+    </script>
+</body>
+</html>

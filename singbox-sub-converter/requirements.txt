@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pyyaml
+watchdog
+python-multipart
+python-dotenv
+requests
+cryptography
