@@ -1,4 +1,8 @@
 #!/bin/bash
+#
+# install.sh
+# singbox-sub-converter 一键安装与更新脚本
+# 自动从 JayYang1991/vps-utils 最新 Release 下载打包好的压缩包安装与升级。
 
 # 开启错误即停止模式
 set -e
@@ -18,8 +22,10 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-PROJECT_DIR=$(cd "$(dirname "$0")"; pwd)
-VENV_DIR="$PROJECT_DIR/venv"
+GITHUB_REPO="JayYang1991/vps-utils"
+PACKAGE_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/singbox-sub-converter.tar.gz"
+TARGET_DIR="/usr/local/singbox-sub-converter"
+VENV_DIR="${TARGET_DIR}/venv"
 SERVICE_NAME="singbox-sub-converter"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 
@@ -101,6 +107,22 @@ else
     SUB_TOKEN=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
 fi
 
+download_and_extract_package() {
+  echo "正在从 GitHub Release 下载最新的 singbox-sub-converter.tar.gz ..."
+  echo "下载地址: ${PACKAGE_URL}"
+
+  TMP_ARCHIVE=$(mktemp /tmp/singbox-sub-converter.XXXXXX.tar.gz)
+  if ! curl -4 -L -q --retry 5 --retry-delay 5 -o "${TMP_ARCHIVE}" "${PACKAGE_URL}"; then
+    rm -f "${TMP_ARCHIVE}"
+    error_handler "下载最新 singbox-sub-converter.tar.gz 压缩包"
+  fi
+
+  echo "正在解压安装包至 ${TARGET_DIR} ..."
+  mkdir -p "${TARGET_DIR}/data"
+  tar -xzf "${TMP_ARCHIVE}" -C "${TARGET_DIR}"
+  rm -f "${TMP_ARCHIVE}"
+}
+
 if [ "$ACTION" = "update" ]; then
     echo "================================================"
     echo "正在更新 sing-box 订阅转换服务..."
@@ -108,14 +130,9 @@ if [ "$ACTION" = "update" ]; then
     echo "服务端口  : $PORT"
     echo "================================================"
 
-    # 如果是 Git 仓库，自动拉取最新代码
-    if [ -d "$PROJECT_DIR/.git" ]; then
-        echo "1. 正在拉取最新的 Git 源码..."
-        cd "$PROJECT_DIR"
-        git pull || echo "提示: Git pull 跳过或无需更新"
-    fi
+    download_and_extract_package
 
-    echo "2. 正在升级 Python 依赖..."
+    echo "1. 正在升级 Python 依赖..."
     if [ ! -d "$VENV_DIR" ]; then
         python3 -m venv "$VENV_DIR" || error_handler "创建虚拟环境"
     fi
@@ -123,9 +140,9 @@ if [ "$ACTION" = "update" ]; then
     . "$VENV_DIR/bin/activate" || error_handler "激活虚拟环境"
     set -e
     "$VENV_DIR/bin/pip" install --upgrade pip || error_handler "更新 pip"
-    "$VENV_DIR/bin/pip" install --upgrade -r "$PROJECT_DIR/requirements.txt" || error_handler "升级依赖包"
+    "$VENV_DIR/bin/pip" install --upgrade -r "$TARGET_DIR/requirements.txt" || error_handler "升级依赖包"
 
-    echo "3. 正在更新 systemd 服务配置..."
+    echo "2. 正在更新 systemd 服务配置..."
     cat <<EOF > $SERVICE_FILE
 [Unit]
 Description=sing-box Adaptive Subscription Converter Service
@@ -134,13 +151,13 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$PROJECT_DIR
+WorkingDirectory=$TARGET_DIR
 ExecStart=$VENV_DIR/bin/python3 -m app.main
 Restart=always
 TimeoutStartSec=15s
 TimeoutStopSec=3s
 KillMode=mixed
-Environment="PYTHONPATH=$PROJECT_DIR"
+Environment="PYTHONPATH=$TARGET_DIR"
 Environment="SB_CONFIG_PATH=/etc/sing-box/config.json"
 Environment="PORT=$PORT"
 Environment="SUB_TOKEN=$SUB_TOKEN"
@@ -150,7 +167,7 @@ Environment="SERVER_HOST=$SERVER_IP"
 WantedBy=multi-user.target
 EOF
 
-    echo "4. 正在快速平滑重启服务..."
+    echo "3. 正在快速平滑重启服务..."
     systemctl daemon-reload || error_handler "重载 systemd 配置"
     systemctl stop $SERVICE_NAME || true
     pkill -9 -f "app.main" || true
@@ -181,17 +198,19 @@ echo "服务器 IP : $SERVER_IP (非优选节点地址)"
 echo "服务端口  : $PORT"
 echo "================================================"
 
-echo "1. 正在更新系统并安装基础依赖 (python3-venv python3-pip)..."
+echo "1. 正在更新系统并安装基础依赖 (python3-venv python3-pip curl tar)..."
 apt update || error_handler "更新软件包列表"
-apt install -y python3-venv python3-pip || error_handler "安装依赖包"
+apt install -y python3-venv python3-pip curl tar || error_handler "安装依赖包"
 
-echo "2. 正在创建 Python 虚拟环境并初始化数据目录..."
-mkdir -p "$PROJECT_DIR/data"
+download_and_extract_package
+
+echo "2. 初始化数据目录与权限..."
+mkdir -p "$TARGET_DIR/data"
 if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR" || error_handler "创建虚拟环境"
 fi
-chown -R root:root "$PROJECT_DIR/data"
-chmod -R 755 "$PROJECT_DIR/data"
+chown -R root:root "$TARGET_DIR"
+chmod -R 755 "$TARGET_DIR"
 
 set +e
 . "$VENV_DIR/bin/activate" || error_handler "激活虚拟环境"
@@ -199,7 +218,7 @@ set -e
 
 echo "3. 正在安装项目依赖..."
 "$VENV_DIR/bin/pip" install --upgrade pip || error_handler "更新 pip"
-"$VENV_DIR/bin/pip" install -r "$PROJECT_DIR/requirements.txt" || error_handler "安装 requirements.txt 依赖"
+"$VENV_DIR/bin/pip" install -r "$TARGET_DIR/requirements.txt" || error_handler "安装 requirements.txt 依赖"
 
 echo "4. 正在配置 systemd 服务..."
 cat <<EOF > $SERVICE_FILE
@@ -210,13 +229,13 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=$PROJECT_DIR
+WorkingDirectory=$TARGET_DIR
 ExecStart=$VENV_DIR/bin/python3 -m app.main
 Restart=always
 TimeoutStartSec=15s
 TimeoutStopSec=3s
 KillMode=mixed
-Environment="PYTHONPATH=$PROJECT_DIR"
+Environment="PYTHONPATH=$TARGET_DIR"
 Environment="SB_CONFIG_PATH=/etc/sing-box/config.json"
 Environment="PORT=$PORT"
 Environment="SUB_TOKEN=$SUB_TOKEN"
