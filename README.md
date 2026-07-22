@@ -1,6 +1,6 @@
 # VPS Utils - VPS 自动化部署与订阅转换工具箱
 
-`vps-utils` 是一个面向 Linux VPS 运维、代理服务端部署（sing-box）、订阅自适应转换以及优选 IP 管理的全套工具箱与实用项目合集。
+`vps-utils` 是一个面向 Linux VPS 运维、代理服务端部署（sing-box）、订阅自适应转换、内网穿透（cloudflared）以及优选 IP 管理的全套工具箱与实用项目合集。
 
 ---
 
@@ -11,6 +11,7 @@
 | [fhs-install-singbox](./fhs-install-singbox) | sing-box 服务端 FHS 部署与 VPS 远程/Vultr 自动化部署工具 | `setup_vps_server.sh`<br>`install-singbox-server.sh` | [fhs-install-singbox README](./fhs-install-singbox/README.md) |
 | [singbox-sub-converter](./singbox-sub-converter) | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务 | `install.sh`<br>`pack.sh` | [singbox-sub-converter README](./singbox-sub-converter/README.md) |
 | [subconverter](./subconverter) | 通用代理订阅格式转换后端服务（带 Systemd 一键安装脚本） | `install.sh` | [subconverter README](./subconverter/README.md) |
+| [cloudflared-tunnel](./cloudflared-tunnel) | Cloudflare Official Agent 部署，实现 Cloudflare Tunnel 内网穿透服务 | `install.sh` | [cloudflared-tunnel README](./cloudflared-tunnel/README.md) |
 | [preferred-ip-manager](./preferred-ip-manager) | Cloudflare Worker 订阅管理与 Telegram/CFST 自动化测速同步工具 | `sub-worker.js`<br>`process_ips.py` | [preferred-ip-manager README](./preferred-ip-manager/README.md) |
 
 ---
@@ -51,7 +52,20 @@
 
 ---
 
-### 4. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 管理与测速同步工具
+### 4. [cloudflared-tunnel](./cloudflared-tunnel) — Cloudflare Tunnel 内网穿透服务
+
+官方 Cloudflare Agent (`cloudflared`) 的自动化安装与后台 Systemd 服务配置项目：
+
+- **自动化多架构安装**：自动检测 `amd64` / `arm64` / `arm` / `386` 架构并拉取 Cloudflare 官方最新二进制文件。
+- **双模式运行支持**：
+  - **命名 Tunnel 模式**（`-t TOKEN`）：连接 Cloudflare Zero Trust，稳定发布公网 HTTPS 服务。
+  - **Quick Tunnel 模式**（无 Token）：临时将本地服务（如 8000 或 25500 端口）映射为 `.trycloudflare.com` 公网域名。
+
+> 📖 **详细说明与完整选项**：参阅 [cloudflared-tunnel/README.md](./cloudflared-tunnel/README.md)
+
+---
+
+### 5. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 管理与测速同步工具
 
 结合 Cloudflare Worker 无服务器架构与 Python 本地自动化测速同步全流程解决方案：
 
@@ -95,6 +109,9 @@ vps-utils/
 ├── subconverter/                       # 订阅转换后端程序
 │   ├── README.md                      # subconverter 安装指南
 │   └── install.sh                     # 自动化安装与端口配置脚本
+├── cloudflared-tunnel/                 # Cloudflare Tunnel 内网穿透服务
+│   ├── README.md                      # cloudflared-tunnel 安装指南
+│   └── install.sh                     # 自动化安装与 Systemd 服务部署脚本
 └── preferred-ip-manager/               # 优选 IP 管理与测速工具
     ├── README.md                      # preferred-ip-manager 详细指南
     ├── sub-worker.js                  # Cloudflare Worker 订阅服务
