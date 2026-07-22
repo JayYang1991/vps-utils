@@ -91,6 +91,68 @@ bash fhs-install-singbox/setup_vps_server.sh --vultr
 
 ---
 
+## 🌐 Cloudflare Tunnel 域名映射与网络公网发布指南
+
+为了确保全套服务正常对外提供访问，以及客户端（如 Clash、sing-box）能够通过 **Cloudflare 优选 IP** 顺畅连接节点，**需要将 VPS 上的以下 3 个核心服务端口通过 Cloudflare (Tunnel) 映射至公网域名**：
+
+### 端口与映射域名对照表
+
+| 服务名称 | VPS 本地端口 | 推荐公网映射域名示例 | 说明与用途 |
+| --- | --- | --- | --- |
+| **`singbox-sub-converter`** | `8000` (HTTP) | `https://sub.yourdomain.com` | 自适应订阅转换 Frontend/API 界面，提供客户端订阅拉取与 Token 重置。 |
+| **`subconverter`** | `25500` (HTTP) | `https://subapi.yourdomain.com` | 后端高级订阅转换引擎 API，处理通用协议模板转换。 |
+| **`sing-box (vless-grpc)`** | `8088` (gRPC/HTTPS) | `https://grpc.yourdomain.com` | `vless-grpc` 协议入站端口。映射后供 Clash/sing-box 客户端通过 Cloudflare 优选 IP 直接连接中转。 |
+
+---
+
+### 1. 使用 Cloudflare Zero Trust 控制台配置 (GUI 推荐)
+
+在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) -> **Networks** -> **Tunnels** 中，点击对应的 Tunnel 并添加 **Public Hostnames**：
+
+1. **自适应订阅转换服务 (`singbox-sub-converter`)**：
+   - Subdomain: `sub` | Domain: `yourdomain.com`
+   - Service: `HTTP` -> `localhost:8000`
+2. **订阅转换后端服务 (`subconverter`)**：
+   - Subdomain: `subapi` | Domain: `yourdomain.com`
+   - Service: `HTTP` -> `localhost:25500`
+3. **sing-box gRPC 节点入站 (`vless-grpc`)**：
+   - Subdomain: `grpc` | Domain: `yourdomain.com`
+   - Service: `HTTPS` -> `localhost:8088`
+   - **Additional application settings**: 开启 **TLS** -> **No TLS Verify** (忽略本地自签证书校验)
+
+---
+
+### 2. 使用 Cloudflare Tunnel 本地配置文件配置 (`config.yml`)
+
+若在 VPS 上使用本地 `/etc/cloudflared/config.yml` 运行，示例如下：
+
+```yaml
+tunnel: <YOUR-TUNNEL-UUID>
+credentials-file: /etc/cloudflared/<YOUR-TUNNEL-UUID>.json
+
+ingress:
+  # 1. singbox-sub-converter 自适应订阅前端与 API (端口 8000)
+  - hostname: sub.yourdomain.com
+    service: http://localhost:8000
+
+  # 2. subconverter 转换后端 API (端口 25500)
+  - hostname: subapi.yourdomain.com
+    service: http://localhost:25500
+
+  # 3. sing-box vless-grpc 节点入站 (端口 8088，用于优选 IP 节点转发)
+  - hostname: grpc.yourdomain.com
+    service: https://localhost:8088
+    originRequest:
+      noTLSVerify: true
+
+  # 默认 404 响应
+  - service: http_status:404
+```
+
+> 💡 **提示**：公网域名映射完成后，只需将域名配置填入 `singbox-sub-converter` 后端，客户端获取订阅时即可自动获得带有 Cloudflare 优选 IP 且经 CDN 加速的 `vless-grpc` 节点。
+
+---
+
 ## 📂 仓库目录结构
 
 ```text
