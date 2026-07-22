@@ -19,6 +19,7 @@ REPO_BRANCH="${V2RAY_REPO_BRANCH:-master}"
 VPS_IP=""
 VULTR_VPS_ID=""
 SSH_USER="root"
+SSH_PASS=""
 USE_VULTR=false
 FORCE_INSTALL=false
 LOCAL_PUB_KEY=""
@@ -34,6 +35,7 @@ show_help() {
   echo "General Options:"
   echo "  -i, --ip IP           Specify target VPS IP address for direct installation"
   echo "  -u, --user USER       Specify SSH username (default: root)"
+  echo "  -p, --pass PASS       Specify SSH password (optional for key injection)"
   echo "  -f, --force           Force re-install (passed to installation script)"
   echo "  -h, --help            Show this help message"
   echo ""
@@ -186,18 +188,19 @@ remote_cmd = f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_ke
 
 pid, fd = pty.fork()
 if pid == 0:
-    os.execvp("ssh", ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "PreferredAuthentications=password,keyboard-interactive", f"{user}@{host}", remote_cmd])
+    os.execvp("ssh", ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=no", "-o", "PreferredAuthentications=password,keyboard-interactive", f"{user}@{host}", remote_cmd])
 else:
     output = b""
     password_sent = False
     start_time = time.time()
-    while time.time() - start_time < 15:
+    while time.time() - start_time < 20:
         try:
             data = os.read(fd, 1024)
             if not data:
                 break
             output += data
             if not password_sent and (b"password:" in data.lower() or b"password" in data.lower() or b"passcode" in data.lower()):
+                time.sleep(0.2)
                 os.write(fd, (password + "\n").encode())
                 password_sent = True
         except Exception:
@@ -229,16 +232,24 @@ eof
     return 0
   fi
 
-  if [[ "$USE_VULTR" == "true" && -n "$VULTR_VPS_ID" ]]; then
+  local vps_pass="${SSH_PASS:-}"
+
+  if [[ -z "$vps_pass" && "$USE_VULTR" == "true" && -n "$VULTR_VPS_ID" ]]; then
     log "Fetching instance default password from Vultr for SSH key injection..."
-    local vps_pass
     vps_pass=$(get_vultr_instance_password "$VULTR_VPS_ID")
-    if [[ -n "$vps_pass" ]]; then
-      log "Installing local SSH public key using Vultr instance password..."
-      if copy_ssh_key_with_password "$SSH_USER" "$VPS_IP" "$vps_pass" "$LOCAL_PUB_KEY"; then
-        log "Local SSH public key successfully installed on existing Vultr instance!"
-        return 0
-      fi
+  fi
+
+  if [[ -z "$vps_pass" && -t 0 ]]; then
+    echo -n "Enter SSH password for ${SSH_USER}@${VPS_IP}: "
+    read -r -s vps_pass
+    echo ""
+  fi
+
+  if [[ -n "$vps_pass" ]]; then
+    log "Installing local SSH public key using password..."
+    if copy_ssh_key_with_password "$SSH_USER" "$VPS_IP" "$vps_pass" "$LOCAL_PUB_KEY"; then
+      log "Local SSH public key successfully installed on remote server!"
+      return 0
     fi
   fi
 
@@ -296,7 +307,7 @@ check_ssh_until_success() {
 
     # 2. Check if SSH port 22 is open and accepting logins
     local ssh_check
-    ssh_check=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout="$timeout" -l "$user" -p "$port" "$host" "exit" 2>&1 || true)
+    ssh_check=$(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout="$timeout" -l "$user" -p "$port" "$host" "exit" 2>&1 || true)
     if [[ "$ssh_check" =~ "Permission denied" ]] || [[ "$ssh_check" =~ "password" ]]; then
       if [[ "$key_injected" == "false" ]]; then
         key_injected=true
@@ -335,7 +346,7 @@ install_singbox() {
   
   local output
   output=$(
-    ssh -T -o StrictHostKeyChecking=no "${SSH_USER}@${VPS_IP}" << eof
+    ssh -T -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
     sudo dpkg --configure -a || true
     curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/install-singbox-server.sh https://raw.githubusercontent.com/JayYang1991/fhs-install-v2ray/${REPO_BRANCH}/install-singbox-server.sh
     sudo bash /tmp/install-singbox-server.sh --port ${port} --domain ${domain} --uuid ${uuid} --short-id ${short_id} --log-level ${log_level} --hy2-port ${hy2_port} --hy2-domain ${hy2_domain} --hy2-password ${hy2_password} --hy2-up-mbps ${hy2_up_mbps} --hy2-down-mbps ${hy2_down_mbps} --hy2-masquerade '${hy2_masquerade}' ${force_flag}
@@ -355,6 +366,7 @@ main() {
     case $1 in
       -i | --ip) VPS_IP="$2"; shift 2 ;;
       -u | --user) SSH_USER="$2"; shift 2 ;;
+      -p | --pass) SSH_PASS="$2"; shift 2 ;;
       -f | --force) FORCE_INSTALL=true; shift ;;
       --vultr) USE_VULTR=true; shift ;;
       -h | --help) show_help; exit 0 ;;
