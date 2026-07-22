@@ -25,6 +25,38 @@ error() {
   echo -e "${RED}[ERROR]${NC} $1"
 }
 
+show_help() {
+  echo "Usage: $0 [OPTIONS]"
+  echo ""
+  echo "Options:"
+  echo "  -p, --port PORT     指定 subconverter 监听端口 (默认: 25500)"
+  echo "  -h, --help          显示此帮助信息"
+  echo ""
+  echo "环境变量:"
+  echo "  SUBCONVERTER_PORT   指定 subconverter 监听端口 (默认: 25500)"
+}
+
+# --- Options Parsing ---
+SUBCONVERTER_PORT="${SUBCONVERTER_PORT:-25500}"
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -p | --port)
+      SUBCONVERTER_PORT="$2"
+      shift 2
+      ;;
+    -h | --help)
+      show_help
+      exit 0
+      ;;
+    *)
+      warn "未知参数: $1"
+      show_help
+      exit 1
+      ;;
+  esac
+done
+
 # --- Check Root Permissions ---
 if [[ $EUID -ne 0 ]]; then
   error "此脚本必须以 root 权限运行，请使用 'sudo bash $0'"
@@ -115,6 +147,18 @@ if [[ ! -f "/usr/local/subconverter/pref.ini" && -f "/usr/local/subconverter/pre
   cp /usr/local/subconverter/pref.example.ini /usr/local/subconverter/pref.ini
 fi
 
+# Configure specified port in pref.ini
+if [[ -f "/usr/local/subconverter/pref.ini" ]]; then
+  log "配置 subconverter 监听端口为: ${SUBCONVERTER_PORT} ..."
+  if grep -qE "^[[:space:]]*port[[:space:]]*=" /usr/local/subconverter/pref.ini; then
+    sed -i -E "s/^[[:space:]]*port[[:space:]]*=.*/port = ${SUBCONVERTER_PORT}/" /usr/local/subconverter/pref.ini
+  elif grep -qE "\[server\]" /usr/local/subconverter/pref.ini; then
+    sed -i "/\[server\]/a port = ${SUBCONVERTER_PORT}" /usr/local/subconverter/pref.ini
+  else
+    echo -e "\n[server]\nport = ${SUBCONVERTER_PORT}" >> /usr/local/subconverter/pref.ini
+  fi
+fi
+
 # Create Systemd Service Unit
 SYSTEMD_SERVICE_FILE="/etc/systemd/system/subconverter.service"
 log "创建 Systemd 服务配置文件: ${SYSTEMD_SERVICE_FILE} ..."
@@ -149,7 +193,7 @@ sleep 2
 
 if systemctl is-active --quiet subconverter; then
   log "subconverter 服务已成功安装并启动！"
-  log "监听端口: 25500 (默认)"
+  log "监听端口: ${SUBCONVERTER_PORT}"
   log "服务管理命令:"
   log "  查看状态: systemctl status subconverter"
   log "  重启服务: systemctl restart subconverter"
