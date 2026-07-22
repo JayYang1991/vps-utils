@@ -65,7 +65,7 @@ case "$ARCH" in
     ;;
 esac
 
-GITHUB_REPO="tindy2013/subconverter"
+GITHUB_REPO="JayYang1991/vps-utils"
 DOWNLOAD_FILENAME="subconverter_${ARCH_NAME}.tar.gz"
 DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/${DOWNLOAD_FILENAME}"
 
