@@ -85,17 +85,17 @@ bash install-singbox-server.sh --port 8443 --domain google.com --hy2-port 8444
 
 #### 模式 A：直接通过 IP 远程部署
 
-在本地执行，通过 SSH 连接远程已有 VPS 并自动安装：
+在本地执行，通过 SSH 连接远程已有 VPS，**默认将自动部署全套服务**（`sing-box` 服务端 + `subconverter` + `singbox-sub-converter`）：
 
 ```bash
-# 默认部署 sing-box 服务端
+# 默认安装全套服务 (sing-box + subconverter + singbox-sub-converter)
 bash setup_vps_server.sh --ip 1.2.3.4 --user root
 
-# 一键远程部署全套服务 (sing-box 服务端 + subconverter + singbox-sub-converter)
-bash setup_vps_server.sh --ip 1.2.3.4 --all
+# 如果只需要单独安装 sing-box 服务端
+bash setup_vps_server.sh --ip 1.2.3.4 --only-singbox
 
-# 单独部署 subconverter 和 singbox-sub-converter
-bash setup_vps_server.sh --ip 1.2.3.4 --with-subconverter --with-singbox-sub-converter
+# 跳过 subconverter，仅部署 sing-box 服务端与 singbox-sub-converter
+bash setup_vps_server.sh --ip 1.2.3.4 --no-subconverter
 
 # 结合环境变量传递自定义参数
 SINGBOX_PORT=8443 SINGBOX_DOMAIN="microsoft.com" bash setup_vps_server.sh --ip 1.2.3.4 --force
@@ -103,14 +103,17 @@ SINGBOX_PORT=8443 SINGBOX_DOMAIN="microsoft.com" bash setup_vps_server.sh --ip 1
 
 #### 远程组件选择与端口参数
 
-| 参数选项 | 默认值 | 说明 |
+| 参数选项 | 默认状态 | 说明 |
 | --- | --- | --- |
-| `--with-subconverter` | 关闭 | 远程一键部署 `subconverter` 服务 |
+| `--all` | 默认开启 | 远程一键部署全套服务 (**sing-box 服务端** + **subconverter** + **singbox-sub-converter**) |
+| `--no-singbox` | - | 跳过 sing-box 服务端的安装 |
+| `--no-subconverter` | - | 跳过 subconverter 服务的安装 |
+| `--no-singbox-sub-converter` | - | 跳过 singbox-sub-converter 服务的安装 |
+| `--only-singbox` | - | 仅部署 sing-box 服务端 |
+| `--only-subconverter` | - | 仅部署 subconverter 服务 |
+| `--only-singbox-sub-converter` | - | 仅部署 singbox-sub-converter 服务 |
 | `--subconverter-port PORT` | `25500` | 指定 subconverter 端口 (环境变量: `SUBCONVERTER_PORT`) |
-| `--with-singbox-sub-converter` | 关闭 | 远程一键部署 `singbox-sub-converter` 自适应订阅转换服务 |
 | `--singbox-sub-converter-port PORT` | `8000` | 指定 singbox-sub-converter 端口 (环境变量: `SINGBOX_SUB_CONVERTER_PORT`) |
-| `--all` | 关闭 | 远程部署全套服务 (**sing-box 服务端** + **subconverter** + **singbox-sub-converter**) |
-| `--no-singbox` | 关闭 | 跳过 sing-box 服务端的安装 |
 
 #### 模式 B：Vultr 自动创建并部署
 

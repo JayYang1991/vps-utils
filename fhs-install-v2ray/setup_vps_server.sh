@@ -3,7 +3,7 @@
 #
 # setup_vps_server.sh
 # 通用 VPS 远程安装脚本，支持直接指定 IP 或自动创建 Vultr 实例，
-# 并可远程一键部署 sing-box 服务端、subconverter 和 singbox-sub-converter 服务。
+# 默认一键远程部署全套组件：sing-box 服务端、subconverter 和 singbox-sub-converter。
 
 # --- Configuration (Externalized with Defaults for Vultr) ---
 MY_REGION="${VULTR_REGION:-nrt}"
@@ -24,10 +24,10 @@ SSH_PASS=""
 USE_VULTR=false
 FORCE_INSTALL=false
 
-# Component Control Flags
+# Component Control Flags (Default: ALL components enabled)
 INSTALL_SINGBOX=true
-INSTALL_SUBCONVERTER=false
-INSTALL_SINGBOX_SUB_CONVERTER=false
+INSTALL_SUBCONVERTER=true
+INSTALL_SINGBOX_SUB_CONVERTER=true
 
 LOCAL_PUB_KEY=""
 LOCAL_KEY_PATH=""
@@ -49,11 +49,14 @@ show_help() {
   echo "Vultr Options:"
   echo "  --vultr                            Enable automatic Vultr instance creation (if IP not provided)"
   echo ""
-  echo "Component Selection Options:"
-  echo "  --subconverter, --with-subconverter                Install subconverter service"
-  echo "  --sub-converter, --with-singbox-sub-converter      Install singbox-sub-converter service"
-  echo "  --all                              Install sing-box server, subconverter AND singbox-sub-converter"
+  echo "Component Selection Options (ALL components installed by default):"
   echo "  --no-singbox                       Skip sing-box server installation"
+  echo "  --no-subconverter                  Skip subconverter installation"
+  echo "  --no-singbox-sub-converter         Skip singbox-sub-converter installation"
+  echo "  --only-singbox                     Install ONLY sing-box server"
+  echo "  --only-subconverter                Install ONLY subconverter service"
+  echo "  --only-singbox-sub-converter       Install ONLY singbox-sub-converter service"
+  echo "  --all                              Install ALL components (default)"
   echo ""
   echo "Component Port Options:"
   echo "  --subconverter-port PORT           Specify subconverter port (default: 25500, env: SUBCONVERTER_PORT)"
@@ -363,7 +366,7 @@ eof
 
 install_singbox_sub_converter() {
   local port="${SINGBOX_SUB_CONVERTER_PORT:-8000}"
-  log "Starting remote installation of singbox-sub-converter on ${VPS_IP} (port: ${port})..."
+  log "Starting remote installation of singbox-sub-converter on ${VPS_IP} (port: ${port}, server IP: ${VPS_IP})..."
 
   local output
   output=$(
@@ -390,6 +393,27 @@ main() {
       -p | --pass) SSH_PASS="$2"; shift 2 ;;
       -f | --force) FORCE_INSTALL=true; shift ;;
       --vultr) USE_VULTR=true; shift ;;
+      --no-singbox) INSTALL_SINGBOX=false; shift ;;
+      --no-subconverter) INSTALL_SUBCONVERTER=false; shift ;;
+      --no-singbox-sub-converter | --no-sub-converter) INSTALL_SINGBOX_SUB_CONVERTER=false; shift ;;
+      --only-singbox)
+        INSTALL_SINGBOX=true
+        INSTALL_SUBCONVERTER=false
+        INSTALL_SINGBOX_SUB_CONVERTER=false
+        shift
+        ;;
+      --only-subconverter)
+        INSTALL_SINGBOX=false
+        INSTALL_SUBCONVERTER=true
+        INSTALL_SINGBOX_SUB_CONVERTER=false
+        shift
+        ;;
+      --only-singbox-sub-converter)
+        INSTALL_SINGBOX=false
+        INSTALL_SUBCONVERTER=false
+        INSTALL_SINGBOX_SUB_CONVERTER=true
+        shift
+        ;;
       --subconverter | --with-subconverter) INSTALL_SUBCONVERTER=true; shift ;;
       --subconverter-port) SUBCONVERTER_PORT="$2"; shift 2 ;;
       --singbox-sub-converter | --with-singbox-sub-converter | --sub-converter) INSTALL_SINGBOX_SUB_CONVERTER=true; shift ;;
@@ -400,7 +424,6 @@ main() {
         INSTALL_SINGBOX_SUB_CONVERTER=true
         shift
         ;;
-      --no-singbox) INSTALL_SINGBOX=false; shift ;;
       -h | --help) show_help; exit 0 ;;
       *) warn "Unknown parameter: $1"; show_help; exit 1 ;;
     esac
