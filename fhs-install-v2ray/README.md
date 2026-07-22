@@ -85,15 +85,32 @@ bash install-singbox-server.sh --port 8443 --domain google.com --hy2-port 8444
 
 #### 模式 A：直接通过 IP 远程部署
 
-在本地执行，通过 SSH 连接远程已有 VPS 并自动安装 sing-box：
+在本地执行，通过 SSH 连接远程已有 VPS 并自动安装：
 
 ```bash
-# 直接安装
+# 默认部署 sing-box 服务端
 bash setup_vps_server.sh --ip 1.2.3.4 --user root
+
+# 一键远程部署全套服务 (sing-box 服务端 + subconverter + singbox-sub-converter)
+bash setup_vps_server.sh --ip 1.2.3.4 --all
+
+# 单独部署 subconverter 和 singbox-sub-converter
+bash setup_vps_server.sh --ip 1.2.3.4 --with-subconverter --with-singbox-sub-converter
 
 # 结合环境变量传递自定义参数
 SINGBOX_PORT=8443 SINGBOX_DOMAIN="microsoft.com" bash setup_vps_server.sh --ip 1.2.3.4 --force
 ```
+
+#### 远程组件选择与端口参数
+
+| 参数选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--with-subconverter` | 关闭 | 远程一键部署 `subconverter` 服务 |
+| `--subconverter-port PORT` | `25500` | 指定 subconverter 端口 (环境变量: `SUBCONVERTER_PORT`) |
+| `--with-singbox-sub-converter` | 关闭 | 远程一键部署 `singbox-sub-converter` 自适应订阅转换服务 |
+| `--singbox-sub-converter-port PORT` | `8000` | 指定 singbox-sub-converter 端口 (环境变量: `SINGBOX_SUB_CONVERTER_PORT`) |
+| `--all` | 关闭 | 远程部署全套服务 (**sing-box 服务端** + **subconverter** + **singbox-sub-converter**) |
+| `--no-singbox` | 关闭 | 跳过 sing-box 服务端的安装 |
 
 #### 模式 B：Vultr 自动创建并部署
 

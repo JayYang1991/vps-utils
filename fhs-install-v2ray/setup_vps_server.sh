@@ -2,7 +2,8 @@
 # shellcheck disable=SC2268
 #
 # setup_vps_server.sh
-# 通用 VPS 远程安装脚本，支持直接指定 IP 或自动创建 Vultr 实例。
+# 通用 VPS 远程安装脚本，支持直接指定 IP 或自动创建 Vultr 实例，
+# 并可远程一键部署 sing-box 服务端、subconverter 和 singbox-sub-converter 服务。
 
 # --- Configuration (Externalized with Defaults for Vultr) ---
 MY_REGION="${VULTR_REGION:-nrt}"
@@ -22,6 +23,12 @@ SSH_USER="root"
 SSH_PASS=""
 USE_VULTR=false
 FORCE_INSTALL=false
+
+# Component Control Flags
+INSTALL_SINGBOX=true
+INSTALL_SUBCONVERTER=false
+INSTALL_SINGBOX_SUB_CONVERTER=false
+
 LOCAL_PUB_KEY=""
 LOCAL_KEY_PATH=""
 RED='\033[0;31m'
@@ -33,14 +40,24 @@ show_help() {
   echo "Usage: $0 [OPTIONS]"
   echo ""
   echo "General Options:"
-  echo "  -i, --ip IP           Specify target VPS IP address for direct installation"
-  echo "  -u, --user USER       Specify SSH username (default: root)"
-  echo "  -p, --pass PASS       Specify SSH password (optional for key injection)"
-  echo "  -f, --force           Force re-install (passed to installation script)"
-  echo "  -h, --help            Show this help message"
+  echo "  -i, --ip IP                        Specify target VPS IP address for direct installation"
+  echo "  -u, --user USER                    Specify SSH username (default: root)"
+  echo "  -p, --pass PASS                    Specify SSH password (optional for key injection)"
+  echo "  -f, --force                        Force re-install (passed to installation scripts)"
+  echo "  -h, --help                         Show this help message"
   echo ""
   echo "Vultr Options:"
-  echo "  --vultr               Enable automatic Vultr instance creation (if IP not provided)"
+  echo "  --vultr                            Enable automatic Vultr instance creation (if IP not provided)"
+  echo ""
+  echo "Component Selection Options:"
+  echo "  --subconverter, --with-subconverter                Install subconverter service"
+  echo "  --sub-converter, --with-singbox-sub-converter      Install singbox-sub-converter service"
+  echo "  --all                              Install sing-box server, subconverter AND singbox-sub-converter"
+  echo "  --no-singbox                       Skip sing-box server installation"
+  echo ""
+  echo "Component Port Options:"
+  echo "  --subconverter-port PORT           Specify subconverter port (default: 25500, env: SUBCONVERTER_PORT)"
+  echo "  --singbox-sub-converter-port PORT  Specify singbox-sub-converter port (default: 8000, env: SINGBOX_SUB_CONVERTER_PORT)"
   echo ""
   echo "sing-box Configuration (Env Vars):"
   echo "  SINGBOX_PORT (default: 443)"
@@ -262,14 +279,12 @@ check_ssh_until_success() {
   local key_injected=false
 
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    # 1. Check if key auth already works
     if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout="$timeout" -l "$user" -p "$port" "$host" "whoami" 2>/dev/null | grep -q "^${user}$"; then
       log "SSH connection successful (key authentication active)."
       ensure_remote_authorized_keys >/dev/null 2>&1 || true
       return 0
     fi
 
-    # 2. Check if SSH port 22 is open and accepting logins
     local ssh_check
     ssh_check=$(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout="$timeout" -l "$user" -p "$port" "$host" "exit" 2>&1 || true)
     if [[ "$ssh_check" =~ "Permission denied" ]] || [[ "$ssh_check" =~ "password" ]]; then
@@ -306,7 +321,7 @@ install_singbox() {
   local force_flag=""
   [[ "$FORCE_INSTALL" == "true" ]] && force_flag="--force"
 
-  log "Starting remote installation on ${VPS_IP}..."
+  log "Starting remote installation of sing-box server on ${VPS_IP}..."
   
   local output
   output=$(
@@ -319,10 +334,52 @@ eof
   local ret_val=$?
 
   if [[ $ret_val -ne 0 ]]; then
-    warn "远端安装 sing-box 失败"
+    warn "远端安装 sing-box 服务端失败"
     return 1
   fi
-  log "远端 sing-box 安装成功！"
+  log "远端 sing-box 服务端安装成功！"
+}
+
+install_subconverter() {
+  local port="${SUBCONVERTER_PORT:-25500}"
+  log "Starting remote installation of subconverter on ${VPS_IP} (port: ${port})..."
+
+  local output
+  output=$(
+    ssh -T -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
+    sudo dpkg --configure -a || true
+    curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/install-subconverter.sh https://raw.githubusercontent.com/JayYang1991/vps-utils/${REPO_BRANCH}/subconverter/install.sh
+    sudo bash /tmp/install-subconverter.sh -p ${port}
+eof
+  )
+  local ret_val=$?
+
+  if [[ $ret_val -ne 0 ]]; then
+    warn "远端安装 subconverter 失败"
+    return 1
+  fi
+  log "远端 subconverter 安装成功！"
+}
+
+install_singbox_sub_converter() {
+  local port="${SINGBOX_SUB_CONVERTER_PORT:-8000}"
+  log "Starting remote installation of singbox-sub-converter on ${VPS_IP} (port: ${port})..."
+
+  local output
+  output=$(
+    ssh -T -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
+    sudo dpkg --configure -a || true
+    curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/install-singbox-sub-converter.sh https://raw.githubusercontent.com/JayYang1991/vps-utils/${REPO_BRANCH}/singbox-sub-converter/install.sh
+    sudo bash /tmp/install-singbox-sub-converter.sh ${VPS_IP} ${port}
+eof
+  )
+  local ret_val=$?
+
+  if [[ $ret_val -ne 0 ]]; then
+    warn "远端安装 singbox-sub-converter 失败"
+    return 1
+  fi
+  log "远端 singbox-sub-converter 安装成功！"
 }
 
 main() {
@@ -333,6 +390,17 @@ main() {
       -p | --pass) SSH_PASS="$2"; shift 2 ;;
       -f | --force) FORCE_INSTALL=true; shift ;;
       --vultr) USE_VULTR=true; shift ;;
+      --subconverter | --with-subconverter) INSTALL_SUBCONVERTER=true; shift ;;
+      --subconverter-port) SUBCONVERTER_PORT="$2"; shift 2 ;;
+      --singbox-sub-converter | --with-singbox-sub-converter | --sub-converter) INSTALL_SINGBOX_SUB_CONVERTER=true; shift ;;
+      --singbox-sub-converter-port) SINGBOX_SUB_CONVERTER_PORT="$2"; shift 2 ;;
+      --all)
+        INSTALL_SINGBOX=true
+        INSTALL_SUBCONVERTER=true
+        INSTALL_SINGBOX_SUB_CONVERTER=true
+        shift
+        ;;
+      --no-singbox) INSTALL_SINGBOX=false; shift ;;
       -h | --help) show_help; exit 0 ;;
       *) warn "Unknown parameter: $1"; show_help; exit 1 ;;
     esac
@@ -363,7 +431,18 @@ main() {
   fi
 
   check_ssh_until_success "$VPS_IP" "$SSH_USER" || exit 1
-  install_singbox
+
+  if [[ "$INSTALL_SINGBOX" == "true" ]]; then
+    install_singbox
+  fi
+
+  if [[ "$INSTALL_SUBCONVERTER" == "true" ]]; then
+    install_subconverter
+  fi
+
+  if [[ "$INSTALL_SINGBOX_SUB_CONVERTER" == "true" ]]; then
+    install_singbox_sub_converter
+  fi
 }
 
 main "$@"
