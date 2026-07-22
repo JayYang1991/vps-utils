@@ -52,7 +52,7 @@ set -e
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")
 
 # ===================== Download URLs =====================
-SINGBOX_SERVER_TEMPLATE_URL="https://raw.githubusercontent.com/JayYang1991/fhs-install-v2ray/main/singbox_server_config.json"
+SINGBOX_SERVER_TEMPLATE_URL="https://raw.githubusercontent.com/JayYang1991/vps-utils/main/fhs-install-v2ray/singbox_server_config.json"
 
 # ===================== Functions =====================
 
