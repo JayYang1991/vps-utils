@@ -145,14 +145,14 @@ import sys, json
 try:
     data = json.load(sys.stdin)
     inst = data.get("instance", data)
-    print(inst.get("default_password") or inst.get("main_pass") or inst.get("password") or "")
+    print(inst.get("default_password") or inst.get("main_pass") or inst.get("password") or inst.get("kvm") or "")
 except Exception:
     pass
 ' 2>/dev/null)
   fi
 
   if [[ -z "$pass" ]]; then
-    pass=$(vultr-cli instance get "$vps_id" 2>/dev/null | grep -iE "(password|main pass)" | awk -F':' '{print $2}' | tr -d ' \r\n')
+    pass=$(vultr-cli instance get "$vps_id" 2>/dev/null | grep -iE "(password|main pass)" | head -n1 | awk -F':' '{print $2}' | tr -d ' \r\n')
   fi
 
   echo "$pass"
@@ -163,6 +163,10 @@ copy_ssh_key_with_password() {
   local host="$2"
   local password="$3"
   local pub_key="$4"
+
+  if [[ -z "$password" ]]; then
+    return 1
+  fi
 
   if command -v sshpass >/dev/null 2>&1; then
     sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password,keyboard-interactive "${user}@${host}" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qF '${pub_key}' ~/.ssh/authorized_keys || echo '${pub_key}' >> ~/.ssh/authorized_keys" >/dev/null 2>&1
@@ -193,7 +197,7 @@ else:
             if not data:
                 break
             output += data
-            if not password_sent and (b"password:" in data.lower() or b"password" in data.lower()):
+            if not password_sent and (b"password:" in data.lower() or b"password" in data.lower() or b"passcode" in data.lower()):
                 os.write(fd, (password + "\n").encode())
                 password_sent = True
         except Exception:
@@ -208,10 +212,8 @@ else:
 }
 
 ensure_remote_authorized_keys() {
-  get_local_public_key || return 0
-  [[ -z "$LOCAL_PUB_KEY" ]] && return 0
-
-  log "Verifying local SSH public key installation on ${VPS_IP}..."
+  get_local_public_key || return 1
+  [[ -z "$LOCAL_PUB_KEY" ]] && return 1
 
   if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 "${SSH_USER}@${VPS_IP}" "whoami" >/dev/null 2>&1; then
     ssh -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" bash -s << eof > /dev/null 2>&1
@@ -228,7 +230,7 @@ eof
   fi
 
   if [[ "$USE_VULTR" == "true" && -n "$VULTR_VPS_ID" ]]; then
-    log "Key-based login not ready on existing Vultr instance. Fetching default password..."
+    log "Fetching instance default password from Vultr for SSH key injection..."
     local vps_pass
     vps_pass=$(get_vultr_instance_password "$VULTR_VPS_ID")
     if [[ -n "$vps_pass" ]]; then
@@ -241,6 +243,7 @@ eof
   fi
 
   warn "Could not automatically inject SSH key using password."
+  return 1
 }
 
 is_private_ip() {
@@ -280,23 +283,36 @@ check_ssh_until_success() {
   local max_attempts="${5:-60}"
   local interval="${6:-5}"
 
-  log "Waiting for SSH to become available on $host:$port as $user..."
+  log "Waiting for SSH service on $host:$port as $user..."
+  local key_injected=false
+
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    local output
-    if output=$(ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout="$timeout" -l "$user" -p "$port" "$host" "whoami" 2> /dev/null); then
-      if [[ "$output" == "$user" ]]; then
-        log "SSH connection successful."
-        return 0
-      fi
+    # 1. Check if key auth already works
+    if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout="$timeout" -l "$user" -p "$port" "$host" "whoami" 2>/dev/null | grep -q "^${user}$"; then
+      log "SSH connection successful (key authentication active)."
+      ensure_remote_authorized_keys >/dev/null 2>&1 || true
+      return 0
     fi
 
-    # If key auth fails during waiting, attempt key injection via Vultr password if applicable
-    if [[ "$USE_VULTR" == "true" && -n "$VULTR_VPS_ID" ]]; then
-      ensure_remote_authorized_keys >/dev/null 2>&1 || true
+    # 2. Check if SSH port 22 is open and accepting logins
+    local ssh_check
+    ssh_check=$(ssh -o StrictHostKeyChecking=no -o ConnectTimeout="$timeout" -l "$user" -p "$port" "$host" "exit" 2>&1 || true)
+    if [[ "$ssh_check" =~ "Permission denied" ]] || [[ "$ssh_check" =~ "password" ]]; then
+      if [[ "$key_injected" == "false" ]]; then
+        key_injected=true
+        if ensure_remote_authorized_keys; then
+          if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout="$timeout" -l "$user" -p "$port" "$host" "whoami" 2>/dev/null | grep -q "^${user}$"; then
+            log "SSH connection successful after key injection."
+            return 0
+          fi
+        fi
+      fi
     fi
 
     [[ $attempt -lt $max_attempts ]] && sleep "$interval"
   done
+
+  warn "Failed to establish SSH connection to $host:$port"
   return 1
 }
 
@@ -370,7 +386,6 @@ main() {
     exit 1
   fi
 
-  ensure_remote_authorized_keys
   check_ssh_until_success "$VPS_IP" "$SSH_USER" || exit 1
   install_singbox
 }
