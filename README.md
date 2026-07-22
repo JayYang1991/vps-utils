@@ -12,6 +12,7 @@
 | [singbox-sub-converter](./singbox-sub-converter) | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务 | `install.sh`<br>`pack.sh` | [singbox-sub-converter README](./singbox-sub-converter/README.md) |
 | [subconverter](./subconverter) | 通用代理订阅格式转换后端服务（带 Systemd 一键安装脚本） | `install.sh` | [subconverter README](./subconverter/README.md) |
 | [cloudflared-tunnel](./cloudflared-tunnel) | Cloudflare Official Agent 部署，实现 Cloudflare Tunnel 内网穿透服务 | `install.sh` | [cloudflared-tunnel README](./cloudflared-tunnel/README.md) |
+| [cloudflare-warp](./cloudflare-warp) | Cloudflare Official WARP 客户端部署与 Systemd 服务一键配置 | `install.sh` | [cloudflare-warp README](./cloudflare-warp/README.md) |
 | [preferred-ip-manager](./preferred-ip-manager) | Cloudflare Worker 订阅管理与 Telegram/CFST 自动化测速同步工具 | `sub-worker.js`<br>`process_ips.py` | [preferred-ip-manager README](./preferred-ip-manager/README.md) |
 
 ---
@@ -65,7 +66,19 @@
 
 ---
 
-### 5. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 管理与测速同步工具
+### 5. [cloudflare-warp](./cloudflare-warp) — Cloudflare WARP 客户端部署
+
+官方 Cloudflare WARP 客户端 (`cloudflare-warp` / `warp-cli`) 的自动化下载安装与 Systemd 服务配置：
+
+- **自动配置官方 Apt / Yum 源**：自动检测 Debian/Ubuntu 或 RHEL/CentOS/Fedora 系统及其版本架构并安装官方软件包。
+- **开机自启服务**：自动配置并启动后台 `warp-svc` Systemd 服务。
+- **纯净安装**：仅负责软件环境的部署与服务启动，不擅自修改任何网络模式与账户注册，由用户根据需求通过 `warp-cli` 手动配置。
+
+> 📖 **详细说明与完整选项**：参阅 [cloudflare-warp/README.md](./cloudflare-warp/README.md)
+
+---
+
+### 6. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 管理与测速同步工具
 
 结合 Cloudflare Worker 无服务器架构与 Python 本地自动化测速同步全流程解决方案：
 
