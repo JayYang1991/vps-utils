@@ -81,11 +81,11 @@ bash install-singbox-server.sh --port 8443 --domain google.com --hy2-port 8444
 
 ### 2. 远程 VPS 部署与 Vultr 自动化 (`setup_vps_server.sh`)
 
-`setup_vps_server.sh` 可以在控制端直接对远程 VPS 进行部署，也可结合 Vultr API 自动创建 VPS 实例。
+`setup_vps_server.sh` 可以在控制端（本地机器）直接对远程 VPS 进行 SSH 一键部署，也可结合 Vultr API 自动创建 VPS 实例并一键完成部署。
 
 #### 模式 A：直接通过 IP 远程部署
 
-在本地执行，通过 SSH 连接远程 VPS 并自动安装 sing-box：
+在本地执行，通过 SSH 连接远程已有 VPS 并自动安装 sing-box：
 
 ```bash
 # 直接安装
@@ -97,14 +97,71 @@ SINGBOX_PORT=8443 SINGBOX_DOMAIN="microsoft.com" bash setup_vps_server.sh --ip 1
 
 #### 模式 B：Vultr 自动创建并部署
 
-需提前安装并配置好 `vultr-cli` 及其 API Token：
+使用 `--vultr` 选项前，需要在本地控制端完成以下准备工作：
+
+##### 步骤 1：安装 `vultr-cli` 客户端
+
+在本地命令行工具中安装 Vultr 官方 CLI 工具：
+
+- **Linux**:
+  ```bash
+  # 下载最新发布版本解压至系统路径
+  curl -sS https://api.github.com/repos/vultr/vultr-cli/releases/latest \
+    | grep "browser_download_url.*linux_amd64" \
+    | cut -d '"' -f 4 \
+    | wget -i - -O vultr-cli.tar.gz
+  tar -xvf vultr-cli.tar.gz
+  sudo mv vultr-cli /usr/local/bin/
+  rm vultr-cli.tar.gz
+  ```
+- **macOS (Homebrew)**:
+  ```bash
+  brew install vultr/vultr-cli/vultr-cli
+  ```
+- **Windows**:
+  从 [Vultr CLI Releases](https://github.com/vultr/vultr-cli/releases) 下载 `.zip` 解压并将可执行文件添加至系统 Path 环境变量中。
+
+##### 步骤 2：配置 Vultr API Token
+
+1. 登录 [Vultr 控制台](https://my.vultr.com/)，进入 **Account** -> **API**。
+2. 点击 **Enable API** 开启 API 访问权限，并允许您的控制端外网 IP（或设为 `0.0.0.0/0`）。
+3. 复制 **Personal Access Token**。
+4. 在本地终端中设置环境变量：
+   ```bash
+   export VULTR_API_KEY="your_personal_access_token_here"
+   ```
+   *建议将上句写入 `~/.bashrc` 或 `~/.zshrc` 中以便长期生效。*
+5. 测试连接：
+   ```bash
+   vultr-cli account info
+   ```
+
+##### 步骤 3：一键自动创建与部署
 
 ```bash
-# 自动在 Vultr 创建实例并完成安装
+# 使用默认配置自动创建实例并完成安装
 bash setup_vps_server.sh --vultr
+```
 
-# 可通过环境变量自定义 Vultr 实例规格
-VULTR_REGION="nrt" VULTR_PLAN="vc2-1c-1gb" VULTR_LABEL="my_vps" bash setup_vps_server.sh --vultr
+##### 可选：Vultr 实例定制环境变量
+
+可通过环境变量自定义开机的实例规格与地域：
+
+| 环境变量 | 默认值 | 描述 |
+| --- | --- | --- |
+| `VULTR_REGION` | `nrt` | 节点地域代码（`nrt` 为东京 Tokyo, `sgp` 为新加坡, `icn` 为首尔等） |
+| `VULTR_PLAN` | `vc2-1c-1gb` | 实例套餐规格（如 `vc2-1c-1gb` 为 1核 1GB 内存） |
+| `VULTR_OS` | `2284` | 操作系统 ID (`2284` 为 Ubuntu 24.04 LTS x64) |
+| `VULTR_LABEL` | `ubuntu_2404` | 实例 Label 标签名称 |
+| `VULTR_HOST` | `jayyang` | 实例的主机名 Hostname |
+| `VULTR_TAG` | `v2ray` | 实例 Tag 分组标签 |
+| `VULTR_SSH_KEYS` | (空) | 已导入 Vultr 的 SSH Key ID（多个用逗号隔开） |
+| `VULTR_SCRIPT_ID` | (空) | 已在 Vultr 注册的 Startup Script ID |
+
+**高级调用示例**：
+```bash
+# 在东京 (nrt) 创建 1C1G 实例，并指定安装参数
+VULTR_REGION="nrt" VULTR_PLAN="vc2-1c-1gb" SINGBOX_PORT=8443 bash setup_vps_server.sh --vultr
 ```
 
 ---
