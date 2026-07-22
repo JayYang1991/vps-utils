@@ -14,7 +14,7 @@ show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  -l, --label <label>   Specify the label of the instance to remove (default: ubuntu_2204)"
+    echo "  -l, --label <label>   Specify the label of the instance to remove (default: ubuntu_2404)"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Environment Variables:"

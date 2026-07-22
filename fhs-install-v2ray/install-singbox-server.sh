@@ -49,9 +49,10 @@ fi
 
 set -e
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")
+
 # ===================== Download URLs =====================
 SINGBOX_SERVER_TEMPLATE_URL="https://raw.githubusercontent.com/JayYang1991/fhs-install-v2ray/master/singbox_server_config.json"
-SINGBOX_CLIENT_TEMPLATE_URL="https://raw.githubusercontent.com/JayYang1991/fhs-install-v2ray/master/singbox_client_config.json"
 
 # ===================== Functions =====================
 
@@ -146,17 +147,17 @@ uninstall_singbox() {
 }
 
 download_templates() {
-  echo "${aoi}info: 正在下载配置模板...${reset}"
+  echo "${aoi}info: 正在获取配置模板...${reset}"
 
   TEMPLATE_DIR=$(mktemp -d)
 
-  if ! curl -R -H 'Cache-Control: no-cache' -o "${TEMPLATE_DIR}/singbox_server_config.json" "$SINGBOX_SERVER_TEMPLATE_URL"; then
+  if curl -R -H 'Cache-Control: no-cache' -o "${TEMPLATE_DIR}/singbox_server_config.json" "$SINGBOX_SERVER_TEMPLATE_URL"; then
+    echo "${green}info: 服务端模板下载成功${reset}"
+  elif [[ -n "$SCRIPT_DIR" && -f "${SCRIPT_DIR}/singbox_server_config.json" ]]; then
+    echo "${aoi}info: 使用本地服务端模板: ${SCRIPT_DIR}/singbox_server_config.json${reset}"
+    cp "${SCRIPT_DIR}/singbox_server_config.json" "${TEMPLATE_DIR}/singbox_server_config.json"
+  else
     echo "${red}error: 下载服务端模板失败: $SINGBOX_SERVER_TEMPLATE_URL${reset}"
-    exit 1
-  fi
-
-  if ! curl -R -H 'Cache-Control: no-cache' -o "${TEMPLATE_DIR}/singbox_client_config.json" "$SINGBOX_CLIENT_TEMPLATE_URL"; then
-    echo "${red}error: 下载客户端模板失败: $SINGBOX_CLIENT_TEMPLATE_URL${reset}"
     exit 1
   fi
 }
@@ -259,21 +260,12 @@ write_config() {
   echo "${aoi}info: 正在写入配置文件...${reset}"
 
   local server_template
-  local client_template
-  local server_ip
   local server_config_path="/etc/sing-box/config.json"
-  local client_config_path
 
   server_template="${TEMPLATE_DIR}/singbox_server_config.json"
-  client_template="${TEMPLATE_DIR}/singbox_client_config.json"
 
   if [[ ! -f "$server_template" ]]; then
     echo "${red}error: 未找到服务端模板: $server_template${reset}"
-    exit 1
-  fi
-
-  if [[ ! -f "$client_template" ]]; then
-    echo "${red}error: 未找到客户端模板: $client_template${reset}"
     exit 1
   fi
 
@@ -313,29 +305,6 @@ write_config() {
   fi
 
   echo "${green}info: 配置文件验证通过${reset}"
-
-  server_ip=$(get_server_ip)
-  if [[ -z "$server_ip" ]]; then
-    echo "${red}error: 无法获取服务器 IP 地址${reset}"
-    exit 1
-  fi
-
-  client_config_path=$(mktemp -p /tmp singbox_client_config.XXXXXX.json)
-  if ! sed \
-    -e "s|{SINGBOX_SERVER_IP}|$(escape_sed_replacement "${server_ip}")|g" \
-    -e "s|\"{SINGBOX_PORT}\"|${PORT}|g" \
-    -e "s|{SINGBOX_PORT}|${PORT}|g" \
-    -e "s|\"server_port\"[[:space:]]*:[[:space:]]*\"${PORT}\"|\"server_port\": ${PORT}|g" \
-    -e "s|{SINGBOX_UUID}|$(escape_sed_replacement "${UUID}")|g" \
-    -e "s|{SINGBOX_DOMAIN}|$(escape_sed_replacement "${DOMAIN}")|g" \
-    -e "s|{SINGBOX_PUBLIC_KEY}|$(escape_sed_replacement "${PUBLIC_KEY}")|g" \
-    -e "s|{SINGBOX_SHORT_ID}|$(escape_sed_replacement "${SHORT_ID}")|g" \
-    "$client_template" > "$client_config_path"; then
-    echo "${red}error: 写入客户端配置文件失败${reset}"
-    exit 1
-  fi
-
-  CLIENT_CONFIG_PATH="$client_config_path"
 }
 
 configure_firewall() {
@@ -378,30 +347,8 @@ start_service() {
   echo "${green}info: sing-box 服务已启动${reset}"
 }
 
-get_server_ip() {
-  local server_ip=""
-
-  if command -v curl > /dev/null 2>&1; then
-    server_ip=$(curl -s -4 ifconfig.me 2> /dev/null) ||
-      server_ip=$(curl -s -4 icanhazip.com 2> /dev/null) ||
-      server_ip=$(curl -s -4 ipecho.net/plain 2> /dev/null)
-  fi
-
-  if [[ -z "$server_ip" ]] && command -v wget > /dev/null 2>&1; then
-    server_ip=$(wget -q -O - ifconfig.me 2> /dev/null) ||
-      server_ip=$(wget -q -O - icanhazip.com 2> /dev/null)
-  fi
-
-  echo "$server_ip"
-}
-
 print_info() {
-  if [[ -n "$CLIENT_CONFIG_PATH" ]]; then
-    echo "客户端配置文件: $CLIENT_CONFIG_PATH"
-  else
-    echo "${red}error: 未生成客户端配置文件${reset}"
-    exit 1
-  fi
+  echo "${green}info: sing-box 服务端安装成功！配置文件：/etc/sing-box/config.json${reset}"
 }
 
 # ===================== Parse Arguments =====================

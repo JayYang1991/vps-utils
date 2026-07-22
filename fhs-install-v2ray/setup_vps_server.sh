@@ -11,8 +11,8 @@ MY_OS="${VULTR_OS:-2284}" # Ubuntu 24.04
 MY_HOST="${VULTR_HOST:-jayyang}"
 MY_LABEL="${VULTR_LABEL:-ubuntu_2404}"
 MY_TAG="${VULTR_TAG:-v2ray}"
-MY_SSH_KEYS="${VULTR_SSH_KEYS:-c5e8bf26-ab13-454a-a827-c2afff006a67,fa784b8e-c8d9-40d3-ab66-c7b0177a4013}"
-SCRIPT_ID="${VULTR_SCRIPT_ID:-89005eb6-6e67-40fb-b873-c8399295f05e}"
+MY_SSH_KEYS="${VULTR_SSH_KEYS:-}"
+SCRIPT_ID="${VULTR_SCRIPT_ID:-}"
 REPO_BRANCH="${V2RAY_REPO_BRANCH:-master}"
 
 # --- Internal Variables ---
@@ -41,6 +41,9 @@ show_help() {
   echo "  SINGBOX_PORT (default: 443)"
   echo "  SINGBOX_DOMAIN (default: www.cloudflare.com)"
   echo "  SINGBOX_UUID, SINGBOX_SHORT_ID, SINGBOX_LOG_LEVEL"
+  echo "  SINGBOX_HY2_PORT (default: 123)"
+  echo "  SINGBOX_HY2_DOMAIN (default: hy2.jayyang.cn)"
+  echo "  SINGBOX_HY2_PASSWORD, SINGBOX_HY2_UP_MBPS, SINGBOX_HY2_DOWN_MBPS, SINGBOX_HY2_MASQUERADE"
 }
 
 log() {
@@ -78,7 +81,8 @@ is_private_ip() {
 get_vultr_ip() {
   log "Fetching Vultr VPS IP for label: $MY_LABEL..."
   VPS_IP=$(vultr-cli instance list | grep "$MY_LABEL" | awk '{print $2}')
-  local vps_id=$(vultr-cli instance list | grep "$MY_LABEL" | awk '{print $1}')
+  local vps_id
+  vps_id=$(vultr-cli instance list | grep "$MY_LABEL" | awk '{print $1}')
 
   if [[ -n "$VPS_IP" && "$VPS_IP" != "0.0.0.0" ]] && is_private_ip "$VPS_IP"; then
     log "IPv4 ($VPS_IP) is invalid or private. Attempting to fetch IPv6..."
@@ -121,6 +125,12 @@ install_singbox() {
   local uuid="${SINGBOX_UUID:-auto}"
   local short_id="${SINGBOX_SHORT_ID:-auto}"
   local log_level="${SINGBOX_LOG_LEVEL:-info}"
+  local hy2_port="${SINGBOX_HY2_PORT:-123}"
+  local hy2_domain="${SINGBOX_HY2_DOMAIN:-hy2.jayyang.cn}"
+  local hy2_password="${SINGBOX_HY2_PASSWORD:-auto}"
+  local hy2_up_mbps="${SINGBOX_HY2_UP_MBPS:-200}"
+  local hy2_down_mbps="${SINGBOX_HY2_DOWN_MBPS:-200}"
+  local hy2_masquerade="${SINGBOX_HY2_MASQUERADE:-https://www.cloudflare.com}"
   local force_flag=""
   [[ "$FORCE_INSTALL" == "true" ]] && force_flag="--force"
 
@@ -131,7 +141,7 @@ install_singbox() {
     ssh -T -o StrictHostKeyChecking=no "${SSH_USER}@${VPS_IP}" << eof
     sudo dpkg --configure -a || true
     curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/install-singbox-server.sh https://raw.githubusercontent.com/JayYang1991/fhs-install-v2ray/${REPO_BRANCH}/install-singbox-server.sh
-    sudo bash /tmp/install-singbox-server.sh --port ${port} --domain ${domain} --uuid ${uuid} --short-id ${short_id} --log-level ${log_level} ${force_flag}
+    sudo bash /tmp/install-singbox-server.sh --port ${port} --domain ${domain} --uuid ${uuid} --short-id ${short_id} --log-level ${log_level} --hy2-port ${hy2_port} --hy2-domain ${hy2_domain} --hy2-password ${hy2_password} --hy2-up-mbps ${hy2_up_mbps} --hy2-down-mbps ${hy2_down_mbps} --hy2-masquerade '${hy2_masquerade}' ${force_flag}
 eof
   )
   local ret_val=$?
@@ -140,31 +150,19 @@ eof
     warn "远端安装 sing-box 失败"
     return 1
   fi
-
-  local remote_client_config=$(echo "$output" | awk -F': ' '/客户端配置文件/ {print $2}' | tail -n 1 | tr -d '\r')
-  if [[ -n "$remote_client_config" ]]; then
-    local local_dest
-    local_dest=$(mktemp -p /tmp singbox_client_config.XXXXXX.json)
-    log "Downloading client config from remote..."
-    if scp -o StrictHostKeyChecking=no "${SSH_USER}@${VPS_IP}:${remote_client_config}" "$local_dest" > /dev/null 2>&1; then
-      log "Done. Client config saved at: $(readlink -f "$local_dest")"
-    else
-      warn "Failed to download client config from ${VPS_IP}"
-    fi
-  fi
+  log "远端 sing-box 安装成功！"
 }
 
 main() {
   while [[ "$#" -gt 0 ]]; do
     case $1 in
-      -i | --ip) VPS_IP="$2"; shift ;;
-      -u | --user) SSH_USER="$2"; shift ;;
-      -f | --force) FORCE_INSTALL=true ;;
-      --vultr) USE_VULTR=true ;;
+      -i | --ip) VPS_IP="$2"; shift 2 ;;
+      -u | --user) SSH_USER="$2"; shift 2 ;;
+      -f | --force) FORCE_INSTALL=true; shift ;;
+      --vultr) USE_VULTR=true; shift ;;
       -h | --help) show_help; exit 0 ;;
       *) warn "Unknown parameter: $1"; show_help; exit 1 ;;
     esac
-    shift
   done
 
   check_dependencies
@@ -177,7 +175,10 @@ main() {
       log "Instance already exists with IP: $VPS_IP"
     else
       log "Creating new Vultr instance..."
-      vultr-cli instance create --region="$MY_REGION" --plan="$MY_PLAN" --os="$MY_OS" --script-id="$SCRIPT_ID" --host="$MY_HOST" --label="$MY_LABEL" --tags="$MY_TAG" --ssh-keys="$MY_SSH_KEYS" --ipv6 || exit 1
+      local vultr_cmd=("vultr-cli" "instance" "create" "--region=$MY_REGION" "--plan=$MY_PLAN" "--os=$MY_OS" "--host=$MY_HOST" "--label=$MY_LABEL" "--tags=$MY_TAG" "--ipv6")
+      [[ -n "$SCRIPT_ID" ]] && vultr_cmd+=("--script-id=$SCRIPT_ID")
+      [[ -n "$MY_SSH_KEYS" ]] && vultr_cmd+=("--ssh-keys=$MY_SSH_KEYS")
+      "${vultr_cmd[@]}" || exit 1
       while ! get_vultr_ip; do sleep 2; done
       log "New VPS IP: $VPS_IP"
     fi
