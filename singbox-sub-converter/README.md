@@ -31,9 +31,26 @@
 5. **订阅 Token / UUID 动态安全重置**:
    - 前端管理界面提供 **「🔑 更换订阅 Token / UUID」** 功能，一键生成新 Token 并更新服务与订阅链接，使旧链接立即失效。
 
+---
+
 ## 快速安装与更新 (Systemd)
 
-在 VPS 上运行以下命令进行自动安装或平滑在线更新（**`SERVER_IP` 为必选参数**）：
+脚本会自动从 `JayYang1991/vps-utils` 的 GitHub Releases 中下载最新打包好的安装包，解压部署至 `/usr/local/singbox-sub-converter/` 并自动配置开机自启服务（**`SERVER_IP` 为必选参数**）：
+
+### 方式 1: 远程一键安装与在线更新（推荐）
+
+```bash
+# 1. 一键全新安装 (必填 SERVER_IP，默认端口 8000)
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/singbox-sub-converter/install.sh) 154.12.34.56
+
+# 2. 一键安装并指定自定义端口 (例如端口 9000)
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/singbox-sub-converter/install.sh) 154.12.34.56 9000
+
+# 3. 一键在线平滑更新 (保留已有 SERVER_IP、端口与用户数据)
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/singbox-sub-converter/install.sh) update
+```
+
+### 方式 2: 克隆/下载本仓库后运行本地安装
 
 ```bash
 cd singbox-sub-converter
@@ -45,12 +62,14 @@ sudo ./install.sh 154.12.34.56
 # 2. 指定自定义服务端口安装 (例如 SERVER_IP 154.12.34.56 端口 9000)
 sudo ./install.sh 154.12.34.56 9000
 
-# 3. 在线一键更新服务 (保留已有 SERVER_IP 与端口)
+# 3. 在线一键更新服务 (保留已有 SERVER_IP、端口与用户数据)
 sudo ./install.sh update
 
 # 4. 在线更新时更新 SERVER_IP 或修改端口
 sudo ./install.sh update 154.12.34.56 9500
 ```
+
+---
 
 ## 日志查看与问题排查
 
@@ -61,11 +80,11 @@ sudo ./install.sh update 154.12.34.56 9500
 sudo journalctl -u singbox-sub-converter -f
 ```
 
-### 方式 2: 查看应用日志文件 (`data/app.log`)
-日志文件存储在项目根目录的 `data/app.log`，支持按 5MB 轮转分割：
+### 方式 2: 查看应用日志文件 (`/usr/local/singbox-sub-converter/data/app.log`)
+日志文件存储在 `/usr/local/singbox-sub-converter/data/app.log`，支持按 5MB 轮转分割：
 ```bash
 # 查看最新 100 行日志
-tail -n 100 -f data/app.log
+tail -n 100 -f /usr/local/singbox-sub-converter/data/app.log
 ```
 
 ### 方式 3: Web API 接口查询
@@ -74,6 +93,8 @@ tail -n 100 -f data/app.log
 # 在服务端通过 curl 查询
 curl -s http://127.0.0.1:8000/api/logs
 ```
+
+---
 
 ## 服务管理命令
 
@@ -84,12 +105,18 @@ sudo systemctl status singbox-sub-converter
 # 重启服务
 sudo systemctl restart singbox-sub-converter
 
+# 停止服务
+sudo systemctl stop singbox-sub-converter
+
 # 查看服务日志
-sudo journalctl -u singbox-sub-converter -f
+sudo journalctl -u singbox-sub-converter -n 50 --no-pager
 ```
 
-## 默认凭据
+---
 
-- 默认端口: `8000` (或安装时指定的自定义端口)
-- 默认用户名: `jayyang`
-- 默认密码: `admin1234` (首次登录后强制要求修改)
+## 默认凭据与部署路径
+
+- **安装部署目录**：`/usr/local/singbox-sub-converter`
+- **默认服务端口**：`8000` (或安装时指定的自定义端口)
+- **默认用户名**：`jayyang`
+- **默认密码**：`admin1234` (首次登录后强制要求修改)
