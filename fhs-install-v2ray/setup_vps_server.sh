@@ -170,48 +170,36 @@ copy_ssh_key_with_password() {
     return 1
   fi
 
+  local remote_cmd="mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qF '${pub_key}' ~/.ssh/authorized_keys || echo '${pub_key}' >> ~/.ssh/authorized_keys"
+
+  # Method 1: sshpass if installed
   if command -v sshpass >/dev/null 2>&1; then
-    sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password,keyboard-interactive "${user}@${host}" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qF '${pub_key}' ~/.ssh/authorized_keys || echo '${pub_key}' >> ~/.ssh/authorized_keys" >/dev/null 2>&1
+    sshpass -p "$password" ssh -o StrictHostKeyChecking=no \
+      -o ConnectTimeout=10 \
+      -o PreferredAuthentications=password,keyboard-interactive \
+      -o PubkeyAuthentication=no \
+      "${user}@${host}" "$remote_cmd" >/dev/null 2>&1
     return $?
   fi
 
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c '
-import pty, os, sys, time
+  # Method 2: OpenSSH native SSH_ASKPASS
+  local askpass_script
+  askpass_script=$(mktemp -t vps_askpass.XXXXXX 2>/dev/null || mktemp /tmp/vps_askpass.XXXXXX)
+  cat << eof > "$askpass_script"
+#!/bin/sh
+echo '${password}'
+eof
+  chmod 700 "$askpass_script"
 
-user = sys.argv[1]
-host = sys.argv[2]
-password = sys.argv[3]
-pub_key = sys.argv[4]
-
-remote_cmd = f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qF \"{pub_key}\" ~/.ssh/authorized_keys || echo \"{pub_key}\" >> ~/.ssh/authorized_keys"
-
-pid, fd = pty.fork()
-if pid == 0:
-    os.execvp("ssh", ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=no", "-o", "PreferredAuthentications=password,keyboard-interactive", f"{user}@{host}", remote_cmd])
-else:
-    output = b""
-    password_sent = False
-    start_time = time.time()
-    while time.time() - start_time < 20:
-        try:
-            data = os.read(fd, 1024)
-            if not data:
-                break
-            output += data
-            if not password_sent and (b"password:" in data.lower() or b"password" in data.lower() or b"passcode" in data.lower()):
-                time.sleep(0.2)
-                os.write(fd, (password + "\n").encode())
-                password_sent = True
-        except Exception:
-            break
-    _, exit_status = os.waitpid(pid, 0)
-    sys.exit(exit_status >> 8)
-' "$user" "$host" "$password" "$pub_key" >/dev/null 2>&1
-    return $?
-  fi
-
-  return 1
+  SSH_ASKPASS="$askpass_script" SSH_ASKPASS_REQUIRE=force DISPLAY="${DISPLAY:-:0}" \
+  ssh -o StrictHostKeyChecking=no \
+      -o ConnectTimeout=10 \
+      -o PreferredAuthentications=password,keyboard-interactive \
+      -o PubkeyAuthentication=no \
+      "${user}@${host}" "$remote_cmd" >/dev/null 2>&1
+  local res=$?
+  rm -f "$askpass_script"
+  return $res
 }
 
 ensure_remote_authorized_keys() {
