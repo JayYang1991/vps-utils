@@ -20,6 +20,8 @@ VPS_IP=""
 SSH_USER="root"
 USE_VULTR=false
 FORCE_INSTALL=false
+LOCAL_PUB_KEY=""
+LOCAL_KEY_PATH=""
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
@@ -65,6 +67,91 @@ check_dependencies() {
       exit 1
     fi
   done
+}
+
+get_local_public_key() {
+  if [[ -n "$LOCAL_PUB_KEY" ]]; then
+    return 0
+  fi
+
+  local key_candidates=(
+    "$HOME/.ssh/id_ed25519.pub"
+    "$HOME/.ssh/id_rsa.pub"
+    "$HOME/.ssh/id_ecdsa.pub"
+    "$HOME/.ssh/id_dsa.pub"
+  )
+
+  for key_file in "${key_candidates[@]}"; do
+    if [[ -f "$key_file" ]]; then
+      LOCAL_KEY_PATH="$key_file"
+      LOCAL_PUB_KEY=$(tr -d '\r\n' < "$key_file")
+      return 0
+    fi
+  done
+
+  log "No local SSH public key found. Generating a new ed25519 key pair..."
+  mkdir -p "$HOME/.ssh"
+  chmod 700 "$HOME/.ssh"
+  if ssh-keygen -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519" > /dev/null 2>&1; then
+    LOCAL_KEY_PATH="$HOME/.ssh/id_ed25519.pub"
+    LOCAL_PUB_KEY=$(tr -d '\r\n' < "$LOCAL_KEY_PATH")
+    log "Generated SSH key at: $LOCAL_KEY_PATH"
+    return 0
+  else
+    warn "Failed to generate local SSH key pair."
+    return 1
+  fi
+}
+
+ensure_vultr_ssh_key() {
+  get_local_public_key || return 0
+  [[ -z "$LOCAL_PUB_KEY" ]] && return 0
+
+  log "Checking local SSH key in Vultr account..."
+  local hostname_str
+  hostname_str=$(hostname 2>/dev/null || echo "client")
+  local key_name="vps-utils-${hostname_str}"
+  local vultr_key_id=""
+
+  vultr_key_id=$(vultr-cli ssh-key list 2>/dev/null | grep "$key_name" | awk '{print $1}' | head -n1)
+
+  if [[ -z "$vultr_key_id" ]]; then
+    log "Uploading local SSH key ($LOCAL_KEY_PATH) to Vultr..."
+    vultr-cli ssh-key create --name "$key_name" --key "$LOCAL_PUB_KEY" > /dev/null 2>&1 || true
+    vultr_key_id=$(vultr-cli ssh-key list 2>/dev/null | grep "$key_name" | awk '{print $1}' | head -n1)
+  fi
+
+  if [[ -n "$vultr_key_id" ]]; then
+    log "Using Vultr SSH Key ID: $vultr_key_id"
+    if [[ -n "$MY_SSH_KEYS" ]]; then
+      if [[ ! ",$MY_SSH_KEYS," =~ ,"$vultr_key_id", ]]; then
+        MY_SSH_KEYS="${MY_SSH_KEYS},${vultr_key_id}"
+      fi
+    else
+      MY_SSH_KEYS="$vultr_key_id"
+    fi
+  fi
+}
+
+ensure_remote_authorized_keys() {
+  get_local_public_key || return 0
+  [[ -z "$LOCAL_PUB_KEY" ]] && return 0
+
+  log "Synchronizing local SSH public key to remote authorized_keys on ${VPS_IP}..."
+  ssh -o StrictHostKeyChecking=no "${SSH_USER}@${VPS_IP}" bash -s << eof > /dev/null 2>&1
+    mkdir -p ~/.ssh
+    chmod 700 ~/.ssh
+    touch ~/.ssh/authorized_keys
+    chmod 600 ~/.ssh/authorized_keys
+    if ! grep -qF "${LOCAL_PUB_KEY}" ~/.ssh/authorized_keys; then
+      echo "${LOCAL_PUB_KEY}" >> ~/.ssh/authorized_keys
+    fi
+eof
+  if [[ $? -eq 0 ]]; then
+    log "Local SSH public key successfully added to remote ~/.ssh/authorized_keys"
+  else
+    warn "Failed to update remote ~/.ssh/authorized_keys"
+  fi
 }
 
 is_private_ip() {
@@ -171,6 +258,7 @@ main() {
     log "Using provided IP for installation: $VPS_IP"
   elif [[ "$USE_VULTR" == "true" ]]; then
     log "Starting Vultr automation..."
+    ensure_vultr_ssh_key
     if get_vultr_ip; then
       log "Instance already exists with IP: $VPS_IP"
     else
@@ -189,6 +277,7 @@ main() {
   fi
 
   check_ssh_until_success "$VPS_IP" "$SSH_USER" || exit 1
+  ensure_remote_authorized_keys
   install_singbox
 }
 
