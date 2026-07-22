@@ -17,6 +17,7 @@ REPO_BRANCH="${V2RAY_REPO_BRANCH:-master}"
 
 # --- Internal Variables ---
 VPS_IP=""
+VULTR_VPS_ID=""
 SSH_USER="root"
 USE_VULTR=false
 FORCE_INSTALL=false
@@ -133,25 +134,113 @@ ensure_vultr_ssh_key() {
   fi
 }
 
+get_vultr_instance_password() {
+  local vps_id="$1"
+  [[ -z "$vps_id" ]] && return 1
+
+  local pass=""
+  if command -v python3 >/dev/null 2>&1; then
+    pass=$(vultr-cli instance get "$vps_id" -o json 2>/dev/null | python3 -c '
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    inst = data.get("instance", data)
+    print(inst.get("default_password") or inst.get("main_pass") or inst.get("password") or "")
+except Exception:
+    pass
+' 2>/dev/null)
+  fi
+
+  if [[ -z "$pass" ]]; then
+    pass=$(vultr-cli instance get "$vps_id" 2>/dev/null | grep -iE "(password|main pass)" | awk -F':' '{print $2}' | tr -d ' \r\n')
+  fi
+
+  echo "$pass"
+}
+
+copy_ssh_key_with_password() {
+  local user="$1"
+  local host="$2"
+  local password="$3"
+  local pub_key="$4"
+
+  if command -v sshpass >/dev/null 2>&1; then
+    sshpass -p "$password" ssh -o StrictHostKeyChecking=no -o PreferredAuthentications=password,keyboard-interactive "${user}@${host}" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qF '${pub_key}' ~/.ssh/authorized_keys || echo '${pub_key}' >> ~/.ssh/authorized_keys" >/dev/null 2>&1
+    return $?
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import pty, os, sys, time
+
+user = sys.argv[1]
+host = sys.argv[2]
+password = sys.argv[3]
+pub_key = sys.argv[4]
+
+remote_cmd = f"mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && grep -qF \"{pub_key}\" ~/.ssh/authorized_keys || echo \"{pub_key}\" >> ~/.ssh/authorized_keys"
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp("ssh", ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "PreferredAuthentications=password,keyboard-interactive", f"{user}@{host}", remote_cmd])
+else:
+    output = b""
+    password_sent = False
+    start_time = time.time()
+    while time.time() - start_time < 15:
+        try:
+            data = os.read(fd, 1024)
+            if not data:
+                break
+            output += data
+            if not password_sent and (b"password:" in data.lower() or b"password" in data.lower()):
+                os.write(fd, (password + "\n").encode())
+                password_sent = True
+        except Exception:
+            break
+    _, exit_status = os.waitpid(pid, 0)
+    sys.exit(exit_status >> 8)
+' "$user" "$host" "$password" "$pub_key" >/dev/null 2>&1
+    return $?
+  fi
+
+  return 1
+}
+
 ensure_remote_authorized_keys() {
   get_local_public_key || return 0
   [[ -z "$LOCAL_PUB_KEY" ]] && return 0
 
-  log "Synchronizing local SSH public key to remote authorized_keys on ${VPS_IP}..."
-  ssh -o StrictHostKeyChecking=no "${SSH_USER}@${VPS_IP}" bash -s << eof > /dev/null 2>&1
-    mkdir -p ~/.ssh
-    chmod 700 ~/.ssh
-    touch ~/.ssh/authorized_keys
-    chmod 600 ~/.ssh/authorized_keys
-    if ! grep -qF "${LOCAL_PUB_KEY}" ~/.ssh/authorized_keys; then
-      echo "${LOCAL_PUB_KEY}" >> ~/.ssh/authorized_keys
-    fi
+  log "Verifying local SSH public key installation on ${VPS_IP}..."
+
+  if ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=5 "${SSH_USER}@${VPS_IP}" "whoami" >/dev/null 2>&1; then
+    ssh -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" bash -s << eof > /dev/null 2>&1
+      mkdir -p ~/.ssh
+      chmod 700 ~/.ssh
+      touch ~/.ssh/authorized_keys
+      chmod 600 ~/.ssh/authorized_keys
+      if ! grep -qF "${LOCAL_PUB_KEY}" ~/.ssh/authorized_keys; then
+        echo "${LOCAL_PUB_KEY}" >> ~/.ssh/authorized_keys
+      fi
 eof
-  if [[ $? -eq 0 ]]; then
-    log "Local SSH public key successfully added to remote ~/.ssh/authorized_keys"
-  else
-    warn "Failed to update remote ~/.ssh/authorized_keys"
+    log "Local SSH public key verified on remote server (passwordless login active)."
+    return 0
   fi
+
+  if [[ "$USE_VULTR" == "true" && -n "$VULTR_VPS_ID" ]]; then
+    log "Key-based login not ready on existing Vultr instance. Fetching default password..."
+    local vps_pass
+    vps_pass=$(get_vultr_instance_password "$VULTR_VPS_ID")
+    if [[ -n "$vps_pass" ]]; then
+      log "Installing local SSH public key using Vultr instance password..."
+      if copy_ssh_key_with_password "$SSH_USER" "$VPS_IP" "$vps_pass" "$LOCAL_PUB_KEY"; then
+        log "Local SSH public key successfully installed on existing Vultr instance!"
+        return 0
+      fi
+    fi
+  fi
+
+  warn "Could not automatically inject SSH key using password."
 }
 
 is_private_ip() {
@@ -168,15 +257,14 @@ is_private_ip() {
 get_vultr_ip() {
   log "Fetching Vultr VPS IP for label: $MY_LABEL..."
   VPS_IP=$(vultr-cli instance list | grep "$MY_LABEL" | awk '{print $2}')
-  local vps_id
-  vps_id=$(vultr-cli instance list | grep "$MY_LABEL" | awk '{print $1}')
+  VULTR_VPS_ID=$(vultr-cli instance list | grep "$MY_LABEL" | awk '{print $1}')
 
   if [[ -n "$VPS_IP" && "$VPS_IP" != "0.0.0.0" ]] && is_private_ip "$VPS_IP"; then
     log "IPv4 ($VPS_IP) is invalid or private. Attempting to fetch IPv6..."
-    if [[ -n "$vps_id" ]]; then
-      VPS_IP=$(vultr-cli instance ipv6 list "$vps_id" | grep -v "IP" | grep -v "==" | head -n1 | awk '{print $1}')
+    if [[ -n "$VULTR_VPS_ID" ]]; then
+      VPS_IP=$(vultr-cli instance ipv6 list "$VULTR_VPS_ID" | grep -v "IP" | grep -v "==" | head -n1 | awk '{print $1}')
       if [[ -z "$VPS_IP" ]]; then
-        VPS_IP=$(vultr-cli instance get "$vps_id" | grep "V6 MAIN IP" | awk '{print $4}')
+        VPS_IP=$(vultr-cli instance get "$VULTR_VPS_ID" | grep "V6 MAIN IP" | awk '{print $4}')
       fi
     fi
   fi
@@ -201,6 +289,12 @@ check_ssh_until_success() {
         return 0
       fi
     fi
+
+    # If key auth fails during waiting, attempt key injection via Vultr password if applicable
+    if [[ "$USE_VULTR" == "true" && -n "$VULTR_VPS_ID" ]]; then
+      ensure_remote_authorized_keys >/dev/null 2>&1 || true
+    fi
+
     [[ $attempt -lt $max_attempts ]] && sleep "$interval"
   done
   return 1
@@ -260,7 +354,7 @@ main() {
     log "Starting Vultr automation..."
     ensure_vultr_ssh_key
     if get_vultr_ip; then
-      log "Instance already exists with IP: $VPS_IP"
+      log "Instance already exists with IP: $VPS_IP (ID: $VULTR_VPS_ID)"
     else
       log "Creating new Vultr instance..."
       local vultr_cmd=("vultr-cli" "instance" "create" "--region=$MY_REGION" "--plan=$MY_PLAN" "--os=$MY_OS" "--host=$MY_HOST" "--label=$MY_LABEL" "--tags=$MY_TAG" "--ipv6")
@@ -276,8 +370,8 @@ main() {
     exit 1
   fi
 
-  check_ssh_until_success "$VPS_IP" "$SSH_USER" || exit 1
   ensure_remote_authorized_keys
+  check_ssh_until_success "$VPS_IP" "$SSH_USER" || exit 1
   install_singbox
 }
 
