@@ -285,11 +285,11 @@ write_config() {
     -e "s|{SINGBOX_SHORT_ID}|$(escape_sed_replacement "${SHORT_ID}")|g" \
     -e "s|\"{SINGBOX_HY2_PORT}\"|${HY2_PORT}|g" \
     -e "s|{SINGBOX_HY2_PORT}|${HY2_PORT}|g" \
-    -e "s|\"up_mbps\"[[:space:]]*:[[:space:]]*\"{SINGBOX_HY2_UP_MBPS}\"|\"up_mbps\": ${HY2_UP_MBPS}|g" \
-    -e "s|\"down_mbps\"[[:space:]]*:[[:space:]]*\"{SINGBOX_HY2_DOWN_MBPS}\"|\"down_mbps\": ${HY2_DOWN_MBPS}|g" \
-    -e "s|{SINGBOX_HY2_PASSWORD}|$(escape_sed_replacement "${HY2_PASSWORD}")|g" \
+    -e "s|\"{SINGBOX_HY2_UP_MBPS}\"|${HY2_UP_MBPS}|g" \
     -e "s|{SINGBOX_HY2_UP_MBPS}|${HY2_UP_MBPS}|g" \
+    -e "s|\"{SINGBOX_HY2_DOWN_MBPS}\"|${HY2_DOWN_MBPS}|g" \
     -e "s|{SINGBOX_HY2_DOWN_MBPS}|${HY2_DOWN_MBPS}|g" \
+    -e "s|{SINGBOX_HY2_PASSWORD}|$(escape_sed_replacement "${HY2_PASSWORD}")|g" \
     -e "s|{SINGBOX_HY2_DOMAIN}|$(escape_sed_replacement "${HY2_DOMAIN}")|g" \
     -e "s|{SINGBOX_HY2_CERT_PATH}|$(escape_sed_replacement "${SINGBOX_HY2_CERT_PATH}")|g" \
     -e "s|{SINGBOX_HY2_KEY_PATH}|$(escape_sed_replacement "${SINGBOX_HY2_KEY_PATH}")|g" \
@@ -299,8 +299,10 @@ write_config() {
     exit 1
   fi
 
-  if ! sing-box check -c "$server_config_path" 2> /dev/null; then
-    echo "${red}error: 配置文件验证失败${reset}"
+  local check_err
+  if ! check_err=$(sing-box check -c "$server_config_path" 2>&1); then
+    echo "${red}error: 配置文件验证失败:${reset}"
+    echo "$check_err"
     exit 1
   fi
 

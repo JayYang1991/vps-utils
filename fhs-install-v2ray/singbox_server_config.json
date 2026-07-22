@@ -234,8 +234,8 @@
           "password": "{SINGBOX_HY2_PASSWORD}"
         }
       ],
-      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
-      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "up_mbps": {SINGBOX_HY2_UP_MBPS},
+      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
       "tls": {
         "enabled": true,
         "server_name": "{SINGBOX_HY2_DOMAIN}",
@@ -257,8 +257,8 @@
           "password": "{SINGBOX_HY2_PASSWORD}"
         }
       ],
-      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
-      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "up_mbps": {SINGBOX_HY2_UP_MBPS},
+      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
       "tls": {
         "enabled": true,
         "server_name": "{SINGBOX_HY2_DOMAIN}",
@@ -280,8 +280,8 @@
           "password": "{SINGBOX_HY2_PASSWORD}"
         }
       ],
-      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
-      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "up_mbps": {SINGBOX_HY2_UP_MBPS},
+      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
       "tls": {
         "enabled": true,
         "server_name": "{SINGBOX_HY2_DOMAIN}",
@@ -303,8 +303,8 @@
           "password": "{SINGBOX_HY2_PASSWORD}"
         }
       ],
-      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
-      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "up_mbps": {SINGBOX_HY2_UP_MBPS},
+      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
       "tls": {
         "enabled": true,
         "server_name": "{SINGBOX_HY2_DOMAIN}",
@@ -326,8 +326,8 @@
           "password": "{SINGBOX_HY2_PASSWORD}"
         }
       ],
-      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
-      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "up_mbps": {SINGBOX_HY2_UP_MBPS},
+      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
       "tls": {
         "enabled": true,
         "server_name": "{SINGBOX_HY2_DOMAIN}",
@@ -349,8 +349,8 @@
           "password": "{SINGBOX_HY2_PASSWORD}"
         }
       ],
-      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
-      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "up_mbps": {SINGBOX_HY2_UP_MBPS},
+      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
       "tls": {
         "enabled": true,
         "server_name": "{SINGBOX_HY2_DOMAIN}",
@@ -372,8 +372,8 @@
           "password": "{SINGBOX_HY2_PASSWORD}"
         }
       ],
-      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
-      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "up_mbps": {SINGBOX_HY2_UP_MBPS},
+      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
       "tls": {
         "enabled": true,
         "server_name": "{SINGBOX_HY2_DOMAIN}",
@@ -395,8 +395,8 @@
           "password": "{SINGBOX_HY2_PASSWORD}"
         }
       ],
-      "up_mbps": "{SINGBOX_HY2_UP_MBPS}",
-      "down_mbps": "{SINGBOX_HY2_DOWN_MBPS}",
+      "up_mbps": {SINGBOX_HY2_UP_MBPS},
+      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
       "tls": {
         "enabled": true,
         "server_name": "{SINGBOX_HY2_DOMAIN}",
