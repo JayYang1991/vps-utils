@@ -8,7 +8,7 @@
 
 | 子项目目录 | 核心功能说明 | 推荐入口 / 关键脚本 | 详细文档链接 |
 | --- | --- | --- | --- |
-| [fhs-install-v2ray](./fhs-install-v2ray) | sing-box 服务端 FHS 部署与 VPS 远程/Vultr 自动化部署工具 | `setup_vps_server.sh`<br>`install-singbox-server.sh` | [fhs-install-v2ray README](./fhs-install-v2ray/README.md) |
+| [fhs-install-singbox](./fhs-install-singbox) | sing-box 服务端 FHS 部署与 VPS 远程/Vultr 自动化部署工具 | `setup_vps_server.sh`<br>`install-singbox-server.sh` | [fhs-install-singbox README](./fhs-install-singbox/README.md) |
 | [singbox-sub-converter](./singbox-sub-converter) | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务 | `install.sh`<br>`pack.sh` | [singbox-sub-converter README](./singbox-sub-converter/README.md) |
 | [subconverter](./subconverter) | 通用代理订阅格式转换后端服务（带 Systemd 一键安装脚本） | `install.sh` | [subconverter README](./subconverter/README.md) |
 | [preferred-ip-manager](./preferred-ip-manager) | Cloudflare Worker 订阅管理与 Telegram/CFST 自动化测速同步工具 | `sub-worker.js`<br>`process_ips.py` | [preferred-ip-manager README](./preferred-ip-manager/README.md) |
@@ -17,7 +17,7 @@
 
 ## 🚀 核心子项目简介
 
-### 1. [fhs-install-v2ray](./fhs-install-v2ray) — sing-box 服务端与 VPS 自动化部署
+### 1. [fhs-install-singbox](./fhs-install-singbox) — sing-box 服务端与 VPS 自动化部署
 
 符合 [Filesystem Hierarchy Standard (FHS)](https://en.wikipedia.org/wiki/Filesystem_Hierarchy_Standard) 标准的 `sing-box` (VLESS + Reality + Hysteria2) 服务端部署与 VPS 远程自动化运维工具包。
 
@@ -25,7 +25,7 @@
 - **`setup_vps_server.sh`**：远程 SSH 一键部署工具，支持直连 IP 部署或结合 Vultr API 自动创建 VPS 实例，自动注入公钥实现免密登录，默认一键安装全套组件。
 - **`remove_vultr_instance.sh`**：Vultr 实例交互式查询与快速清理工具。
 
-> 📖 **详细说明与完整选项**：参阅 [fhs-install-v2ray/README.md](./fhs-install-v2ray/README.md)
+> 📖 **详细说明与完整选项**：参阅 [fhs-install-singbox/README.md](./fhs-install-singbox/README.md)
 
 ---
 
@@ -68,11 +68,11 @@
 
 ```bash
 # 模式 A：直接通过 IP 部署远程 VPS
-bash fhs-install-v2ray/setup_vps_server.sh --ip <VPS_IP>
+bash fhs-install-singbox/setup_vps_server.sh --ip <VPS_IP>
 
 # 模式 B：使用 Vultr API 自动开机并部署
 export VULTR_API_KEY="your_vultr_api_key"
-bash fhs-install-v2ray/setup_vps_server.sh --vultr
+bash fhs-install-singbox/setup_vps_server.sh --vultr
 ```
 
 ---
@@ -82,8 +82,8 @@ bash fhs-install-v2ray/setup_vps_server.sh --vultr
 ```text
 vps-utils/
 ├── README.md                           # 本统一说明文档
-├── fhs-install-v2ray/                 # sing-box 服务端与 VPS 自动化运维脚本
-│   ├── README.md                      # fhs-install-v2ray 详细指南
+├── fhs-install-singbox/                # sing-box 服务端与 VPS 自动化运维脚本
+│   ├── README.md                      # fhs-install-singbox 详细指南
 │   ├── setup_vps_server.sh            # 远程 VPS 自动化部署脚本
 │   ├── install-singbox-server.sh      # sing-box 服务端本地安装脚本
 │   └── singbox_server_config.json     # sing-box 服务端配置模板

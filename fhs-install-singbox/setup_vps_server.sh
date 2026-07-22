@@ -330,7 +330,7 @@ install_singbox() {
   output=$(
     ssh -T -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
     sudo dpkg --configure -a || true
-    curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/install-singbox-server.sh https://raw.githubusercontent.com/JayYang1991/vps-utils/${REPO_BRANCH}/fhs-install-v2ray/install-singbox-server.sh
+    curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/install-singbox-server.sh https://raw.githubusercontent.com/JayYang1991/vps-utils/${REPO_BRANCH}/fhs-install-singbox/install-singbox-server.sh
     sudo bash /tmp/install-singbox-server.sh --port ${port} --domain ${domain} --uuid ${uuid} --short-id ${short_id} --log-level ${log_level} --hy2-port ${hy2_port} --hy2-domain ${hy2_domain} --hy2-password ${hy2_password} --hy2-up-mbps ${hy2_up_mbps} --hy2-down-mbps ${hy2_down_mbps} --hy2-masquerade '${hy2_masquerade}' ${force_flag}
 eof
   )

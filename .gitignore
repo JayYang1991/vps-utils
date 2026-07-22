@@ -10,4 +10,4 @@ venv/
 ip_result.txt
 *.log
 config.json
-fhs-install-v2ray/config.json
+fhs-install-singbox/config.json

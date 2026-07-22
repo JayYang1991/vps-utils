@@ -1,4 +1,4 @@
-# fhs-install-v2ray / sing-box
+# fhs-install-singbox
 
 > 基于 FHS 标准的 Linux sing-box (VLESS + Reality + Hysteria2) 服务端自动化部署与 VPS 运维工具包。
 
@@ -48,7 +48,7 @@
 在目标 Linux 服务器上以 `root` 权限直接运行：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/fhs-install-v2ray/install-singbox-server.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/fhs-install-singbox/install-singbox-server.sh)
 ```
 
 #### 参数与环境变量
