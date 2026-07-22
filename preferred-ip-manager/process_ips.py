@@ -116,12 +116,44 @@ def fetch_sub_ips():
                         # 解码 URL 编码的备注
                         remark = urllib.parse.unquote(match.group(2))
                         ips.append(f"{addr_port}#{remark}")
-            print(f"✅ 从订阅服务器获取到 {len(ips)} 个 IP")
+            print(f"✅ 从订阅服务器获取到 {len(ips)} 个现有 IP")
             return ips
         else:
             print(f"⚠️ 订阅服务器返回异常状态码: {resp.status_code}")
     except Exception as e:
         print(f"⚠️ 获取订阅 IP 失败: {e}")
+    return []
+
+def fetch_history_ips():
+    token = os.environ.get("CF_SUB_TOKEN")
+    url = "https://sub.19910417.xyz/api/history"
+    if token:
+        url = f"{url}?token={token}"
+    print(f"==> 正在从订阅服务器获取历史 IP 记录...")
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
+        if token:
+            headers["Authorization"] = token
+
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("success") and isinstance(data.get("data"), list):
+                history_records = data["data"]
+                history_ips = []
+                for record in history_records:
+                    if isinstance(record, dict) and "ips" in record:
+                        for line in record.get("ips", []):
+                            if line and ":" in line:
+                                history_ips.append(line.strip())
+                print(f"✅ 从订阅服务器获取到 {len(history_ips)} 个历史 IP 记录")
+                return history_ips
+        else:
+            print(f"⚠️ 获取历史 IP 失败 (HTTP {resp.status_code})")
+    except Exception as e:
+        print(f"⚠️ 获取历史 IP 出现异常: {e}")
     return []
 
 def main():
@@ -142,7 +174,7 @@ def main():
         return
     print(f"识别到原始文件: {latest_file}")
 
-    # 2. 解析文件并合并订阅列表
+    # 2. 解析文件并合并订阅列表与历史 IP
     groups = parse_source_file(latest_file)
     
     # 解析完成后清理下载目录
@@ -152,7 +184,9 @@ def main():
         except Exception as e:
             print(f"清理下载文件失败: {txt_file}, {e}")
 
+    # 合并订阅服务器现有 IP 列表
     sub_ips = fetch_sub_ips()
+    sub_added = 0
     for entry in sub_ips:
         if ':' in entry:
             parts = entry.split(':', 1)
@@ -165,6 +199,27 @@ def main():
                 # 避免重复添加 (根据 IP 和端口去重)
                 if not any(ip == e[0] for e in groups[port]):
                     groups[port].append((ip, full_port_str))
+                    sub_added += 1
+
+    # 合并订阅服务器历史 IP 记录
+    history_ips = fetch_history_ips()
+    history_added = 0
+    for entry in history_ips:
+        if ':' in entry:
+            parts = entry.split(':', 1)
+            ip = parts[0].strip()
+            full_port_str = parts[1].strip()
+            
+            numeric_port_match = re.search(r'^(\d+)', full_port_str)
+            if numeric_port_match:
+                port = numeric_port_match.group(1)
+                # 避免重复添加
+                if not any(ip == e[0] for e in groups[port]):
+                    groups[port].append((ip, full_port_str))
+                    history_added += 1
+
+    total_ips = sum(len(v) for v in groups.values())
+    print(f"==> 汇总 IP 数据池完成: TG 下载源 + 现有订阅 IP (新增 {sub_added} 个) + 历史 IP (新增 {history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
 
     if not any(groups.values()):
         print("错误: 没有有效的 IP:Port 数据进行测试")
