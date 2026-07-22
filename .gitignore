@@ -9,3 +9,5 @@ venv/
 # Output & Log files
 ip_result.txt
 *.log
+config.json
+fhs-install-v2ray/config.json

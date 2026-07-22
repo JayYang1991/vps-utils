@@ -310,12 +310,15 @@ write_config() {
 configure_firewall() {
   echo "${aoi}info: 正在配置防火墙...${reset}"
 
+  local tcp_ports=("${PORT}" 443 8443 2053 2083 2087 2096 8080 8088 10086)
+  local udp_ports=("${HY2_PORT}" 443 8443 2053 2087 2083 2096 123 4500)
+
   if command -v ufw > /dev/null 2>&1; then
-    ufw allow "${PORT}/tcp" || true
-    ufw allow "${HY2_PORT}/udp" || true
+    for p in "${tcp_ports[@]}"; do ufw allow "${p}/tcp" || true; done
+    for p in "${udp_ports[@]}"; do ufw allow "${p}/udp" || true; done
   elif command -v firewall-cmd > /dev/null 2>&1; then
-    firewall-cmd --permanent --add-port="${PORT}/tcp" || true
-    firewall-cmd --permanent --add-port="${HY2_PORT}/udp" || true
+    for p in "${tcp_ports[@]}"; do firewall-cmd --permanent --add-port="${p}/tcp" || true; done
+    for p in "${udp_ports[@]}"; do firewall-cmd --permanent --add-port="${p}/udp" || true; done
     firewall-cmd --reload || true
   fi
 }
