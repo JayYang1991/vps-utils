@@ -25,33 +25,6 @@
     },
     {
       "type": "vless",
-      "tag": "vless-reality",
-      "listen": "0.0.0.0",
-      "listen_port": "{SINGBOX_PORT}",
-      "users": [
-        {
-          "uuid": "{SINGBOX_UUID}",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_DOMAIN}",
-        "reality": {
-          "enabled": true,
-          "handshake": {
-            "server": "{SINGBOX_DOMAIN}",
-            "server_port": 443
-          },
-          "private_key": "{SINGBOX_PRIVATE_KEY}",
-          "short_id": [
-            "{SINGBOX_SHORT_ID}"
-          ]
-        }
-      }
-    },
-    {
-      "type": "vless",
       "tag": "vless-reality-443",
       "listen": "0.0.0.0",
       "listen_port": 443,
