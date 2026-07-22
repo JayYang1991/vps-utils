@@ -13,7 +13,7 @@ MY_LABEL="${VULTR_LABEL:-ubuntu_2404}"
 MY_TAG="${VULTR_TAG:-v2ray}"
 MY_SSH_KEYS="${VULTR_SSH_KEYS:-}"
 SCRIPT_ID="${VULTR_SCRIPT_ID:-}"
-REPO_BRANCH="${V2RAY_REPO_BRANCH:-master}"
+REPO_BRANCH="${V2RAY_REPO_BRANCH:-main}"
 
 # --- Internal Variables ---
 VPS_IP=""

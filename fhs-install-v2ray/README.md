@@ -48,7 +48,7 @@
 在目标 Linux 服务器上以 `root` 权限直接运行：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/fhs-install-v2ray/master/install-singbox-server.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/fhs-install-v2ray/main/install-singbox-server.sh)
 ```
 
 #### 参数与环境变量
