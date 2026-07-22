@@ -136,38 +136,6 @@ ensure_vultr_ssh_key() {
   fi
 }
 
-get_vultr_instance_password() {
-  local vps_id="$1"
-  [[ -z "$vps_id" ]] && return 1
-
-  local pass=""
-  if command -v python3 >/dev/null 2>&1; then
-    pass=$(vultr-cli instance get "$vps_id" -o json 2>/dev/null | python3 -c '
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    inst = data.get("instance", data)
-    for k in ["default_password", "main_pass", "password", "kvm"]:
-        v = inst.get(k)
-        if v and isinstance(v, str) and not v.startswith("Error"):
-            print(v)
-            sys.exit(0)
-except Exception:
-    pass
-' 2>/dev/null)
-  fi
-
-  if [[ -z "$pass" ]]; then
-    pass=$(vultr-cli instance get "$vps_id" 2>/dev/null | grep -iE "(password|main pass)" | head -n1 | awk -F':' '{print $2}' | tr -d ' \r\n\t')
-  fi
-
-  if [[ "$pass" =~ "Error" || "$pass" =~ "error" ]]; then
-    pass=""
-  fi
-
-  echo "$pass"
-}
-
 copy_ssh_key_with_password() {
   local user="$1"
   local host="$2"
@@ -234,34 +202,22 @@ eof
 
   local vps_pass="${SSH_PASS:-}"
 
-  if [[ -z "$vps_pass" && "$USE_VULTR" == "true" && -n "$VULTR_VPS_ID" ]]; then
-    log "Fetching instance default password from Vultr for SSH key injection..."
-    vps_pass=$(get_vultr_instance_password "$VULTR_VPS_ID")
+  if [[ -z "$vps_pass" && -t 0 ]]; then
+    echo -n "Please enter SSH password for ${SSH_USER}@${VPS_IP}: "
+    read -r -s vps_pass
+    echo ""
   fi
 
   if [[ -n "$vps_pass" ]]; then
-    log "Attempting SSH public key injection using retrieved password..."
+    log "Installing local SSH public key using password..."
     if copy_ssh_key_with_password "$SSH_USER" "$VPS_IP" "$vps_pass" "$LOCAL_PUB_KEY"; then
       log "Local SSH public key successfully installed on remote server!"
+      SSH_PASS="$vps_pass"
       return 0
     fi
   fi
 
-  if [[ -t 0 ]]; then
-    warn "Automated password retrieval failed or token expired."
-    echo -n "Please enter SSH password for ${SSH_USER}@${VPS_IP}: "
-    read -r -s vps_pass
-    echo ""
-    if [[ -n "$vps_pass" ]]; then
-      log "Installing SSH public key using user-provided password..."
-      if copy_ssh_key_with_password "$SSH_USER" "$VPS_IP" "$vps_pass" "$LOCAL_PUB_KEY"; then
-        log "Local SSH public key successfully installed on remote server!"
-        return 0
-      fi
-    fi
-  fi
-
-  warn "Could not automatically inject SSH key using password."
+  warn "Could not inject SSH key using password."
   return 1
 }
 
