@@ -12,11 +12,13 @@
 - 🔗 **动态订阅生成 (`/sub`)**：自动合并远程优选源与本地 KV 保存的优选 IP，实时动态拼装生成标准 Base64 编码的 VLESS / Trojan 订阅链接。
 - 🖥️ **可视化管理后台 (`/admin`)**：
   - 现代化暗黑玻璃拟物化风格 UI。
-  - 支持优选 IP 列表 (`ADD.txt`) 与 自定义节点列表 (`CUSTOM_NODES.txt`) 切页编辑。
+  - 支持优选 IP 列表 (`ADD.txt`) 编辑与 **历史 IP 记录** 展示/一键恢复。
   - 支持 **覆盖模式** 与 **追加模式**。
-  - 内置在线数据格式校验，防止误填无效 IP、端口或错误协议链接。
-- 🤖 **自动化 API (`/api/update`)**：
-  - 供测速脚本自动推送最新优选 IP 的 HTTP PUT 接口。
+  - 覆盖模式更新时，自动将原有优选 IP 备份至历史记录（最多保存 5 次记录，全历史 IP 自动去重）。
+  - 内置在线数据格式校验，防止误填无效 IP 或端口。
+- 🤖 **自动化 API (`/api/update` & `/api/history`)**：
+  - `/api/update`：供测速脚本自动推送最新优选 IP 的 HTTP PUT 接口（支持覆盖/追加模式）。
+  - `/api/history`：获取历史优选 IP 记录列表的 HTTP GET 接口。
   - 支持 Header `Authorization` 或 URL Token 鉴权。
   - 支持原始文本流 (`--data-binary`) 与 表单上传 (`multipart/form-data`)。
 
@@ -45,7 +47,7 @@
 | `TOKEN` | Plain Text | **必填** | - | `/api/update` 自动化接口更新所用的 API Key / Token |
 | `SUB_SOURCE` | Plain Text | 可选 | `https://sub.cmliussss.net` | 远程优选 IP 订阅源地址 |
 
-> 🗄️ **KV 绑定要求**：须添加 KV 命名空间绑定，Variable Name 设为 `KV`。 Worker 会在 KV 中维护 `ADD.txt`、`CUSTOM_NODES.txt` 和 `UPDATE_TIME`。
+> 🗄️ **KV 绑定要求**：须添加 KV 命名空间绑定，Variable Name 设为 `KV`。 Worker 会在 KV 中维护 `ADD.txt`、`HISTORY.json` 和 `UPDATE_TIME`。
 
 ### 2. Python 自动化脚本环境变量
 
