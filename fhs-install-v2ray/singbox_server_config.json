@@ -5,18 +5,6 @@
   },
   "inbounds": [
     {
-      "type": "socks",
-      "tag": "socks-in",
-      "listen": "0.0.0.0",
-      "listen_port": 10086,
-      "users": [
-        {
-          "username": "jayyang",
-          "password": "aKsB2TCDanlv"
-        }
-      ]
-    },
-    {
       "type": "vless",
       "tag": "vless-grpc",
       "listen": "127.0.0.1",

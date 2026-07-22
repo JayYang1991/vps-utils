@@ -312,7 +312,7 @@ write_config() {
 configure_firewall() {
   echo "${aoi}info: 正在配置防火墙...${reset}"
 
-  local tcp_ports=("${PORT}" 443 8443 2053 2083 2087 2096 8080 8088 10086)
+  local tcp_ports=("${PORT}" 443 8443 2053 2083 2087 2096 8080 8088)
   local udp_ports=("${HY2_PORT}" 443 8443 2053 2087 2083 2096 123 4500)
 
   if command -v ufw > /dev/null 2>&1; then
