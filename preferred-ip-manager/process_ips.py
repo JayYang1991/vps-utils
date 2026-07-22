@@ -1,4 +1,4 @@
-#!/home/jason/miniconda3/bin/python3
+#!/usr/bin/env python3
 import os
 import subprocess
 import glob
@@ -10,7 +10,7 @@ import argparse
 import requests
 
 # --- 配置区 ---
-TG_TOOL = "./telegram_tool.py"
+TG_TOOL = f'"{sys.executable}" ./telegram_tool.py'
 DOWNLOAD_DIR = "./origin-iplist"
 CFST_BIN = "./cfst"
 FINAL_TXT = "ip_result.txt"

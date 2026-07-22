@@ -74,7 +74,21 @@ for dep in $DEPENDENCIES; do
     fi
 done
 
-# 3. 如果无缺失依赖包则退出
+# 3. 检查环境变量配置
+check_env_vars() {
+    echo ""
+    echo "⚙️ 正在检查环境变量配置..."
+    if [ -z "${CF_SUB_TOKEN:-}" ]; then
+        echo "⚠️ [未配置] 环境变量 CF_SUB_TOKEN (订阅服务器 API 更新 Token) 未检测到。"
+        echo "   💡 提示: 若需 process_ips.py 自动将优选 IP 同步更新至订阅服务器，请配置该环境变量:"
+        echo "           export CF_SUB_TOKEN=\"你的_WORKER_UPDATE_TOKEN\""
+        echo "           (可写入 ~/.bashrc 或 ~/.zshrc 以持久化生效)"
+    else
+        echo "✅ [已配置] 环境变量 CF_SUB_TOKEN 已设置。"
+    fi
+}
+
+# 4. 如果无缺失依赖包则检查环境变量后退出
 if [ -z "$missing_deps" ]; then
     echo "🎉 所有 Python 依赖均已就绪，无需重复安装！"
     if [ -d "$VENV_DIR" ]; then
@@ -82,10 +96,11 @@ if [ -z "$missing_deps" ]; then
         echo "   方法 1: $PYTHON_EXEC process_ips.py"
         echo "   方法 2: source .venv/bin/activate && python process_ips.py"
     fi
+    check_env_vars
     exit 0
 fi
 
-# 4. 安装缺失依赖包
+# 5. 安装缺失依赖包
 echo "📦 正在安装缺失的依赖包:$missing_deps ..."
 # shellcheck disable=SC2086
 $PYTHON_EXEC -m pip install $missing_deps
@@ -97,3 +112,5 @@ if [ -d "$VENV_DIR" ]; then
     echo "   运行脚本方法 1: $PYTHON_EXEC process_ips.py"
     echo "   运行脚本方法 2: source .venv/bin/activate && python process_ips.py"
 fi
+
+check_env_vars

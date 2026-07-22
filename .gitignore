@@ -1,0 +1,11 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+# Environments
+.venv/
+venv/
+
+# Output & Log files
+ip_result.txt
+*.log
