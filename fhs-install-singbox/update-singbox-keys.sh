@@ -343,14 +343,10 @@ main() {
     esac
   fi
 
-  # 备份原配置文件
+  # 备份当前配置至用户家目录（不在配置文件所在目录留存备份）
   local timestamp
   timestamp=$(date +%Y%m%d%H%M%S)
-  local backup_path="${CONFIG_PATH}.bak.${timestamp}"
-  echo "${aoi}info: 正在创建系统配置文件备份: $backup_path${reset}"
-  cp "$CONFIG_PATH" "$backup_path"
 
-  # 备份当前配置至用户家目录
   local user_home="${HOME:-/root}"
   if [[ -n "$SUDO_USER" && "$SUDO_USER" != "root" ]]; then
     local sudo_user_home
@@ -368,6 +364,12 @@ main() {
     chown -R "$SUDO_USER" "$user_backup_dir" 2>/dev/null || true
   fi
   echo "${green}info: 已备份当前配置至用户目录: $user_backup_path${reset}"
+
+  # 临时回滚备份存放在 /tmp，退出时自动清理
+  local tmp_backup_path
+  tmp_backup_path=$(mktemp /tmp/singbox_config_XXXXXX.json)
+  cp "$CONFIG_PATH" "$tmp_backup_path"
+  trap 'rm -f "$tmp_backup_path"' EXIT
 
   # 若更新 HY2 域名，重新生成证书
   if [[ "$UPDATE_HY2_DOMAIN" == "true" ]]; then
@@ -481,7 +483,7 @@ EOF
   if ! check_err=$(sing-box check -c "$CONFIG_PATH" 2>&1); then
     echo "${red}error: 配置文件校验失败，还原原配置！${reset}"
     echo "$check_err"
-    cp "$backup_path" "$CONFIG_PATH"
+    cp "$tmp_backup_path" "$CONFIG_PATH"
     exit 1
   fi
   echo "${green}info: 配置文件校验通过${reset}"
@@ -491,7 +493,7 @@ EOF
     echo "${aoi}info: 正在重启 sing-box 服务...${reset}"
     if ! systemctl restart sing-box; then
       echo "${red}error: 启动 sing-box 服务失败，正在还原配置...${reset}"
-      cp "$backup_path" "$CONFIG_PATH"
+      cp "$tmp_backup_path" "$CONFIG_PATH"
       systemctl restart sing-box || true
       exit 1
     fi
@@ -512,8 +514,7 @@ EOF
   echo "${green}           sing-box 服务端配置更新成功！${reset}"
   echo "${green}================================================================${reset}"
   echo " 配置文件: $CONFIG_PATH"
-  echo " 系统备份: $backup_path"
-  echo " 用户备份: $user_backup_path"
+  echo " 备份文件: $user_backup_path"
   echo ""
   echo " 🔑 当前生效密钥与域名信息:"
   echo " --------------------------------------------------------------"
