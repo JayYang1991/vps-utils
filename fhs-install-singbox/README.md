@@ -95,22 +95,27 @@ bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/f
 
 | 参数选项 | 说明 |
 | --- | --- |
-| `-a`, `--all` | 更新所有密钥（默认操作） |
+| `-a`, `--all` | 更新所有密钥（默认操作，包含 UUID、Reality 密钥对、Short ID、Hysteria2 密码） |
 | `--uuid [UUID]` | 更新 VLESS UUID（可选自定义 UUID，默认 `auto` 自动生成） |
 | `--reality-key` | 重置 Reality 密钥对 (PrivateKey 与 PublicKey) |
 | `--short-id [SHORT_ID]` | 更新 Reality Short ID（可选 8 位十六进制，默认 `auto` 自动生成） |
 | `--hy2-password [PASSWORD]` | 更新 Hysteria2 密码（可选自定义密码，默认 `auto` 自动生成） |
+| `--domain DOMAIN` | 更新 Reality SNI 伪装域名（可选，如 `www.cloudflare.com`） |
+| `--hy2-domain DOMAIN` | 更新 Hysteria2 TLS 证书域名并重新生成自签名证书（可选，如 `hy2.example.com`） |
 | `-c`, `--config PATH` | 指定配置文件路径 (默认: `/etc/sing-box/config.json`) |
 | `-y`, `--yes` | 跳过确认提示直接执行 |
 
-#### 自定义密钥更新示例
+#### 自定义配置与域名更新示例
 
 ```bash
 # 仅更新 VLESS UUID 与 Reality 密钥对
 bash update-singbox-keys.sh --uuid --reality-key -y
 
-# 指定自定义 UUID 和 Hysteria2 密码
-bash update-singbox-keys.sh --uuid "b8ca3b83-3660-4966-990c-0d6617f7771e" --hy2-password "MySecretPass123" -y
+# 更新 Reality 伪装域名与 Hysteria2 TLS 域名
+bash update-singbox-keys.sh --domain www.google.com --hy2-domain hy2.example.com -y
+
+# 重新生成所有密钥并指定新 Reality 域名
+bash update-singbox-keys.sh -a --domain www.apple.com -y
 ```
 
 ---

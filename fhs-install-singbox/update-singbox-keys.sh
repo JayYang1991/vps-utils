@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2268
 #
-# sing-box Server Key Update Script
+# sing-box Server Key & Domain Update Script
 # Reference: https://sing-box.sagernet.org/
 #
 # Description:
-#   用于更新/重置 sing-box 服务端各项密钥与凭证：
+#   用于更新/重置 sing-box 服务端各项密钥与凭证及域名参数：
 #   - VLESS UUID
 #   - Reality Keypair (PrivateKey & PublicKey)
 #   - Reality Short ID
 #   - Hysteria2 Password
+#   - Reality SNI 伪装域名 (可选)
+#   - Hysteria2 TLS 域名 (可选)
 #
 # ===================== Color Output =====================
 if [[ -t 1 ]] && [[ -n "$TERM" ]] && [[ "$TERM" != "dumb" ]] && command -v tput > /dev/null 2>&1; then
@@ -33,9 +35,15 @@ UPDATE_UUID=false
 UPDATE_REALITY=false
 UPDATE_SHORT_ID=false
 UPDATE_HY2=false
+UPDATE_DOMAIN=false
+UPDATE_HY2_DOMAIN=false
+
 CUSTOM_UUID=""
 CUSTOM_SHORT_ID=""
 CUSTOM_HY2_PASS=""
+CUSTOM_DOMAIN=""
+CUSTOM_HY2_DOMAIN=""
+
 ASSUME_YES=false
 EXPLICIT_OPTION=false
 
@@ -49,11 +57,13 @@ show_help() {
   echo "用法: $0 [选项]"
   echo ""
   echo "选项:"
-  echo "  -a, --all                      更新所有密钥 (默认操作)"
+  echo "  -a, --all                      更新所有密钥 (默认操作，不含域名修改)"
   echo "  --uuid [UUID]                  更新 VLESS UUID (可选自定义 UUID，默认自动生成)"
   echo "  --reality-key, --private-key    重置 Reality 密钥对 (PrivateKey 与 PublicKey)"
   echo "  --short-id [SHORT_ID]          更新 Reality Short ID (可选自定义 8 位十六进制，默认自动生成)"
   echo "  --hy2-password [PASSWORD]      更新 Hysteria2 密码 (可选自定义密码，默认自动生成)"
+  echo "  --domain DOMAIN                更新 Reality SNI 伪装域名 (例如: www.cloudflare.com)"
+  echo "  --hy2-domain DOMAIN            更新 Hysteria2 TLS 证书域名并重新生成证书"
   echo "  -c, --config PATH              指定配置文件路径 (默认: /etc/sing-box/config.json)"
   echo "  -y, --yes                      跳过确认提示直接执行"
   echo "  -h, --help                     显示本帮助信息"
@@ -61,9 +71,9 @@ show_help() {
   echo "示例:"
   echo "  $0                            # 交互式重置所有密钥"
   echo "  $0 -y                         # 非交互式重新生成所有密钥"
-  echo "  $0 --uuid -y                  # 仅重新生成 UUID"
-  echo "  $0 --reality-key -y           # 仅重置 Reality 密钥对"
-  echo "  $0 --uuid auto --short-id -y  # 重新生成 UUID 和 Short ID"
+  echo "  $0 --domain www.google.com -y # 仅更新 Reality SNI 域名"
+  echo "  $0 --hy2-domain hy2.example.com -y # 仅更新 HY2 域名并更新自签证书"
+  echo "  $0 -a --domain www.apple.com -y  # 重新生成所有密钥并更新 Reality 域名"
 }
 
 check_if_running_as_root() {
@@ -138,6 +148,28 @@ generate_reality_keypair() {
   fi
 }
 
+regenerate_hy2_certificates() {
+  local domain="$1"
+  local cert_dir="/etc/cert"
+  local cert_path="/etc/cert/hy2_cert.pem"
+  local key_path="/etc/cert/hy2_key.pem"
+
+  echo "${aoi}info: 正在为域名 ${domain} 重新生成 Hysteria2 自签名证书...${reset}"
+  mkdir -p "$cert_dir" || true
+  if ! openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
+    -days 3650 \
+    -subj "/CN=${domain}" \
+    -addext "subjectAltName=DNS:${domain}" \
+    -keyout "$key_path" \
+    -out "$cert_path" > /dev/null 2>&1; then
+    echo "${red}error: 生成 Hysteria2 证书失败${reset}"
+    exit 1
+  fi
+  chmod 600 "$key_path" || true
+  chmod 644 "$cert_path" || true
+  echo "${green}info: Hysteria2 证书已重新生成: $cert_path${reset}"
+}
+
 parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -182,6 +214,28 @@ parse_arguments() {
           shift 2
         else
           shift 1
+        fi
+        ;;
+      --domain|--reality-domain)
+        UPDATE_DOMAIN=true
+        EXPLICIT_OPTION=true
+        if [[ -n "$2" && "$2" != -* ]]; then
+          CUSTOM_DOMAIN="$2"
+          shift 2
+        else
+          echo "${red}error: --domain 需要指定域名参数 (例如: --domain www.cloudflare.com)${reset}"
+          exit 1
+        fi
+        ;;
+      --hy2-domain)
+        UPDATE_HY2_DOMAIN=true
+        EXPLICIT_OPTION=true
+        if [[ -n "$2" && "$2" != -* ]]; then
+          CUSTOM_HY2_DOMAIN="$2"
+          shift 2
+        else
+          echo "${red}error: --hy2-domain 需要指定域名参数 (例如: --hy2-domain hy2.jayyang.cn)${reset}"
+          exit 1
         fi
         ;;
       -c|--config)
@@ -229,7 +283,7 @@ main() {
     exit 1
   fi
 
-  # 准备需要更新的新密钥
+  # 准备需要更新的新密钥与配置
   if [[ "$UPDATE_UUID" == "true" ]]; then
     if [[ -z "$CUSTOM_UUID" || "$CUSTOM_UUID" == "auto" ]]; then
       NEW_UUID=$(generate_uuid)
@@ -266,17 +320,19 @@ main() {
     fi
   fi
 
-  echo "${aoi}▶ 准备更新服务端 sing-box 密钥${reset}"
+  echo "${aoi}▶ 准备更新服务端 sing-box 配置${reset}"
   echo "配置文件: $CONFIG_PATH"
-  [[ "$UPDATE_UUID" == "true" ]] && echo "  - VLESS UUID: $NEW_UUID"
+  [[ "$UPDATE_UUID" == "true" ]] && echo "  - VLESS UUID        : $NEW_UUID"
   [[ "$UPDATE_REALITY" == "true" ]] && echo "  - Reality PrivateKey: $NEW_PRIVATE_KEY"
   [[ "$UPDATE_REALITY" == "true" ]] && echo "  - Reality PublicKey : $NEW_PUBLIC_KEY"
   [[ "$UPDATE_SHORT_ID" == "true" ]] && echo "  - Reality Short ID  : $NEW_SHORT_ID"
   [[ "$UPDATE_HY2" == "true" ]] && echo "  - Hysteria2 Password: $NEW_HY2_PASS"
+  [[ "$UPDATE_DOMAIN" == "true" ]] && echo "  - Reality SNI 域名  : $CUSTOM_DOMAIN"
+  [[ "$UPDATE_HY2_DOMAIN" == "true" ]] && echo "  - Hysteria2 TLS 域名 : $CUSTOM_HY2_DOMAIN"
   echo ""
 
   if [[ "$ASSUME_YES" == "false" ]] && [[ -t 0 ]]; then
-    read -r -p "是否确认更新上述密钥并重启 sing-box 服务？[y/N] " confirm
+    read -r -p "是否确认更新上述配置并重启 sing-box 服务？[y/N] " confirm
     case "$confirm" in
       [yY][eE][sS]|[yY])
         ;;
@@ -313,6 +369,11 @@ main() {
   fi
   echo "${green}info: 已备份当前配置至用户目录: $user_backup_path${reset}"
 
+  # 若更新 HY2 域名，重新生成证书
+  if [[ "$UPDATE_HY2_DOMAIN" == "true" ]]; then
+    regenerate_hy2_certificates "$CUSTOM_HY2_DOMAIN"
+  fi
+
   # 使用 Python 3 修改 JSON 配置
   echo "${aoi}info: 正在更新配置文件...${reset}"
   local py_output
@@ -320,7 +381,9 @@ main() {
     "$UPDATE_UUID" "$NEW_UUID" \
     "$UPDATE_REALITY" "$NEW_PRIVATE_KEY" \
     "$UPDATE_SHORT_ID" "$NEW_SHORT_ID" \
-    "$UPDATE_HY2" "$NEW_HY2_PASS" << 'EOF'
+    "$UPDATE_HY2" "$NEW_HY2_PASS" \
+    "$UPDATE_DOMAIN" "$CUSTOM_DOMAIN" \
+    "$UPDATE_HY2_DOMAIN" "$CUSTOM_HY2_DOMAIN" << 'EOF'
 import sys, json
 
 config_path = sys.argv[1]
@@ -332,6 +395,10 @@ up_short_id = sys.argv[6] == 'true'
 val_short_id = sys.argv[7]
 up_hy2 = sys.argv[8] == 'true'
 val_hy2_pass = sys.argv[9]
+up_domain = sys.argv[10] == 'true'
+val_domain = sys.argv[11]
+up_hy2_domain = sys.argv[12] == 'true'
+val_hy2_domain = sys.argv[13]
 
 with open(config_path, 'r', encoding='utf-8') as f:
     data = json.load(f)
@@ -340,6 +407,8 @@ cur_uuid = None
 cur_priv_key = None
 cur_short_id = None
 cur_hy2_pass = None
+cur_domain = None
+cur_hy2_domain = None
 
 for ib in data.get('inbounds', []):
     ib_type = ib.get('type')
@@ -359,11 +428,17 @@ for ib in data.get('inbounds', []):
             if not cur_short_id:
                 s_ids = reality.get('short_id', [])
                 cur_short_id = s_ids[0] if s_ids else None
+            if not cur_domain:
+                cur_domain = tls.get('server_name')
 
             if up_reality:
                 reality['private_key'] = val_priv_key
             if up_short_id:
                 reality['short_id'] = [val_short_id]
+            if up_domain:
+                tls['server_name'] = val_domain
+                if 'handshake' in reality:
+                    reality['handshake']['server'] = val_domain
 
     elif ib_type == 'hysteria2':
         if 'users' in ib and ib['users']:
@@ -372,6 +447,13 @@ for ib in data.get('inbounds', []):
             if up_hy2:
                 for u in ib['users']:
                     u['password'] = val_hy2_pass
+
+        tls = ib.get('tls', {})
+        if tls:
+            if not cur_hy2_domain:
+                cur_hy2_domain = tls.get('server_name')
+            if up_hy2_domain:
+                tls['server_name'] = val_hy2_domain
 
 with open(config_path, 'w', encoding='utf-8') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
@@ -384,7 +466,11 @@ res = {
     "short_id": val_short_id if up_short_id else (cur_short_id or "未设/未改变"),
     "short_id_updated": up_short_id,
     "hy2_password": val_hy2_pass if up_hy2 else (cur_hy2_pass or "未设/未改变"),
-    "hy2_password_updated": up_hy2
+    "hy2_password_updated": up_hy2,
+    "domain": val_domain if up_domain else (cur_domain or "未设/未改变"),
+    "domain_updated": up_domain,
+    "hy2_domain": val_hy2_domain if up_hy2_domain else (cur_hy2_domain or "未设/未改变"),
+    "hy2_domain_updated": up_hy2_domain
 }
 print(json.dumps(res))
 EOF
@@ -412,22 +498,24 @@ EOF
     echo "${green}info: sing-box 服务重启成功${reset}"
   fi
 
-  # 解析有效密钥
-  local eff_uuid eff_priv_key eff_short_id eff_hy2_pass
+  # 解析有效密钥与域名
+  local eff_uuid eff_priv_key eff_short_id eff_hy2_pass eff_domain eff_hy2_domain
   eff_uuid=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['uuid'])" "$py_output")
   eff_priv_key=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['private_key'])" "$py_output")
   eff_short_id=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['short_id'])" "$py_output")
   eff_hy2_pass=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['hy2_password'])" "$py_output")
+  eff_domain=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['domain'])" "$py_output")
+  eff_hy2_domain=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['hy2_domain'])" "$py_output")
 
   echo ""
   echo "${green}================================================================${reset}"
-  echo "${green}           sing-box 服务端密钥更新成功！${reset}"
+  echo "${green}           sing-box 服务端配置更新成功！${reset}"
   echo "${green}================================================================${reset}"
   echo " 配置文件: $CONFIG_PATH"
   echo " 系统备份: $backup_path"
   echo " 用户备份: $user_backup_path"
   echo ""
-  echo " 🔑 当前生效密钥与凭证信息:"
+  echo " 🔑 当前生效密钥与域名信息:"
   echo " --------------------------------------------------------------"
   if [[ "$UPDATE_UUID" == "true" ]]; then
     echo "  VLESS UUID         : ${green}${eff_uuid}${reset} (已更新)"
@@ -452,6 +540,18 @@ EOF
     echo "  Hysteria2 Password : ${green}${eff_hy2_pass}${reset} (已更新)"
   else
     echo "  Hysteria2 Password : ${eff_hy2_pass} (未变动)"
+  fi
+
+  if [[ "$UPDATE_DOMAIN" == "true" ]]; then
+    echo "  Reality SNI Domain : ${green}${eff_domain}${reset} (已更新)"
+  else
+    echo "  Reality SNI Domain : ${eff_domain} (未变动)"
+  fi
+
+  if [[ "$UPDATE_HY2_DOMAIN" == "true" ]]; then
+    echo "  Hysteria2 Domain   : ${green}${eff_hy2_domain}${reset} (已更新)"
+  else
+    echo "  Hysteria2 Domain   : ${eff_hy2_domain} (未变动)"
   fi
   echo "${green}================================================================${reset}"
 }

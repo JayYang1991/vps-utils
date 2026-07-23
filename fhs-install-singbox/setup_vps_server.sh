@@ -388,20 +388,24 @@ eof
 }
 
 update_singbox_keys() {
-  log "Starting remote key update for sing-box server on ${VPS_IP}..."
+  log "Starting remote key & domain update for sing-box server on ${VPS_IP}..."
+
+  local extra_flags=""
+  [[ -n "$SINGBOX_DOMAIN" ]] && extra_flags="${extra_flags} --domain '${SINGBOX_DOMAIN}'"
+  [[ -n "$SINGBOX_HY2_DOMAIN" ]] && extra_flags="${extra_flags} --hy2-domain '${SINGBOX_HY2_DOMAIN}'"
 
   ssh -t -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
     sudo dpkg --configure -a || true
     curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/update-singbox-keys.sh https://raw.githubusercontent.com/JayYang1991/vps-utils/${REPO_BRANCH}/fhs-install-singbox/update-singbox-keys.sh
-    sudo bash /tmp/update-singbox-keys.sh --yes
+    sudo bash /tmp/update-singbox-keys.sh --yes ${extra_flags}
 eof
   local ret_val=$?
 
   if [[ $ret_val -ne 0 ]]; then
-    warn "远端更新 sing-box 密钥失败"
+    warn "远端更新 sing-box 配置失败"
     return 1
   fi
-  log "远端 sing-box 密钥更新成功！"
+  log "远端 sing-box 配置更新成功！"
 }
 
 main() {
