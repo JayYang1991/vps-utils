@@ -291,8 +291,27 @@ main() {
   local timestamp
   timestamp=$(date +%Y%m%d%H%M%S)
   local backup_path="${CONFIG_PATH}.bak.${timestamp}"
-  echo "${aoi}info: 正在创建配置文件备份: $backup_path${reset}"
+  echo "${aoi}info: 正在创建系统配置文件备份: $backup_path${reset}"
   cp "$CONFIG_PATH" "$backup_path"
+
+  # 备份当前配置至用户家目录
+  local user_home="${HOME:-/root}"
+  if [[ -n "$SUDO_USER" && "$SUDO_USER" != "root" ]]; then
+    local sudo_user_home
+    sudo_user_home=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || echo "")
+    if [[ -n "$sudo_user_home" && -d "$sudo_user_home" ]]; then
+      user_home="$sudo_user_home"
+    fi
+  fi
+
+  local user_backup_dir="${user_home}/singbox-backups"
+  mkdir -p "$user_backup_dir" || true
+  local user_backup_path="${user_backup_dir}/config.json.bak.${timestamp}"
+  cp "$CONFIG_PATH" "$user_backup_path" || true
+  if [[ -n "$SUDO_USER" && "$SUDO_USER" != "root" ]]; then
+    chown -R "$SUDO_USER" "$user_backup_dir" 2>/dev/null || true
+  fi
+  echo "${green}info: 已备份当前配置至用户目录: $user_backup_path${reset}"
 
   # 使用 Python 3 修改 JSON 配置
   echo "${aoi}info: 正在更新配置文件...${reset}"
@@ -405,7 +424,8 @@ EOF
   echo "${green}           sing-box 服务端密钥更新成功！${reset}"
   echo "${green}================================================================${reset}"
   echo " 配置文件: $CONFIG_PATH"
-  echo " 备份文件: $backup_path"
+  echo " 系统备份: $backup_path"
+  echo " 用户备份: $user_backup_path"
   echo ""
   echo " 🔑 当前生效密钥与凭证信息:"
   echo " --------------------------------------------------------------"
