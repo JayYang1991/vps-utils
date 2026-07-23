@@ -26,6 +26,7 @@
 | 文件名 | 用途 |
 | --- | --- |
 | `install-singbox-server.sh` | sing-box 服务端一键安装/更新/重置脚本 |
+| `update-singbox-keys.sh` | sing-box 服务端各项密钥与凭证安全更新/重置脚本 |
 | `setup_vps_server.sh` | 通用 VPS 远程部署脚本（支持 IP 直接部署或 Vultr 自动创建） |
 | `remove_vultr_instance.sh` | Vultr 实例快速查询与交互式清理工具 |
 | `singbox_server_config.json` | sing-box 服务端配置模板（VLESS Reality + Hysteria2） |
@@ -79,7 +80,42 @@ bash install-singbox-server.sh --port 8443 --domain google.com --hy2-port 8444
 
 ---
 
-### 2. 远程 VPS 部署与 Vultr 自动化 (`setup_vps_server.sh`)
+### 2. 服务端密钥更新 (`update-singbox-keys.sh`)
+
+专门用于对已安装的 sing-box 服务端进行密钥与凭证更新（支持安全备份与自动语法校验）。
+
+在目标 Linux 服务器上以 `root` 权限直接运行：
+
+```bash
+# 一键自动重新生成所有密钥 (UUID, Reality 密钥对, Short ID, Hysteria2 密码)
+bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/fhs-install-singbox/update-singbox-keys.sh) -y
+```
+
+#### 参数说明
+
+| 参数选项 | 说明 |
+| --- | --- |
+| `-a`, `--all` | 更新所有密钥（默认操作） |
+| `--uuid [UUID]` | 更新 VLESS UUID（可选自定义 UUID，默认 `auto` 自动生成） |
+| `--reality-key` | 重置 Reality 密钥对 (PrivateKey 与 PublicKey) |
+| `--short-id [SHORT_ID]` | 更新 Reality Short ID（可选 8 位十六进制，默认 `auto` 自动生成） |
+| `--hy2-password [PASSWORD]` | 更新 Hysteria2 密码（可选自定义密码，默认 `auto` 自动生成） |
+| `-c`, `--config PATH` | 指定配置文件路径 (默认: `/etc/sing-box/config.json`) |
+| `-y`, `--yes` | 跳过确认提示直接执行 |
+
+#### 自定义密钥更新示例
+
+```bash
+# 仅更新 VLESS UUID 与 Reality 密钥对
+bash update-singbox-keys.sh --uuid --reality-key -y
+
+# 指定自定义 UUID 和 Hysteria2 密码
+bash update-singbox-keys.sh --uuid "b8ca3b83-3660-4966-990c-0d6617f7771e" --hy2-password "MySecretPass123" -y
+```
+
+---
+
+### 3. 远程 VPS 部署与 Vultr 自动化 (`setup_vps_server.sh`)
 
 `setup_vps_server.sh` 可以在控制端（本地机器）直接对远程 VPS 进行 SSH 一键部署，也可结合 Vultr API 自动创建 VPS 实例并一键完成部署。
 

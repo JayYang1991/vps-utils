@@ -28,6 +28,7 @@ FORCE_INSTALL=false
 INSTALL_SINGBOX=true
 INSTALL_SUBCONVERTER=true
 INSTALL_SINGBOX_SUB_CONVERTER=true
+UPDATE_SINGBOX_KEYS=false
 
 LOCAL_PUB_KEY=""
 LOCAL_KEY_PATH=""
@@ -44,6 +45,7 @@ show_help() {
   echo "  -u, --user USER                    Specify SSH username (default: root)"
   echo "  -p, --pass PASS                    Specify SSH password (optional for key injection)"
   echo "  -f, --force                        Force re-install (passed to installation scripts)"
+  echo "  --update-keys, --update-singbox-keys Update/Reset sing-box server keys remotely"
   echo "  -h, --help                         Show this help message"
   echo ""
   echo "Vultr Options:"
@@ -385,6 +387,23 @@ eof
   log "远端 singbox-sub-converter 安装成功！"
 }
 
+update_singbox_keys() {
+  log "Starting remote key update for sing-box server on ${VPS_IP}..."
+
+  ssh -t -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
+    sudo dpkg --configure -a || true
+    curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/update-singbox-keys.sh https://raw.githubusercontent.com/JayYang1991/vps-utils/${REPO_BRANCH}/fhs-install-singbox/update-singbox-keys.sh
+    sudo bash /tmp/update-singbox-keys.sh --yes
+eof
+  local ret_val=$?
+
+  if [[ $ret_val -ne 0 ]]; then
+    warn "远端更新 sing-box 密钥失败"
+    return 1
+  fi
+  log "远端 sing-box 密钥更新成功！"
+}
+
 main() {
   while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -393,6 +412,13 @@ main() {
       -p | --pass) SSH_PASS="$2"; shift 2 ;;
       -f | --force) FORCE_INSTALL=true; shift ;;
       --vultr) USE_VULTR=true; shift ;;
+      --update-keys | --update-singbox-keys)
+        UPDATE_SINGBOX_KEYS=true
+        INSTALL_SINGBOX=false
+        INSTALL_SUBCONVERTER=false
+        INSTALL_SINGBOX_SUB_CONVERTER=false
+        shift
+        ;;
       --no-singbox) INSTALL_SINGBOX=false; shift ;;
       --no-subconverter) INSTALL_SUBCONVERTER=false; shift ;;
       --no-singbox-sub-converter | --no-sub-converter) INSTALL_SINGBOX_SUB_CONVERTER=false; shift ;;
@@ -454,6 +480,10 @@ main() {
   fi
 
   check_ssh_until_success "$VPS_IP" "$SSH_USER" || exit 1
+
+  if [[ "$UPDATE_SINGBOX_KEYS" == "true" ]]; then
+    update_singbox_keys
+  fi
 
   if [[ "$INSTALL_SINGBOX" == "true" ]]; then
     install_singbox

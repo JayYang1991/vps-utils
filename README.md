@@ -24,6 +24,7 @@
 符合 [Filesystem Hierarchy Standard (FHS)](https://en.wikipedia.org/wiki/Filesystem_Hierarchy_Standard) 标准的 `sing-box` (VLESS + Reality + Hysteria2) 服务端部署与 VPS 远程自动化运维工具包。
 
 - **`install-singbox-server.sh`**：单机/本地一键安装、更新与配置 `sing-box` 服务端。
+- **`update-singbox-keys.sh`**：服务端各项密钥与凭证（UUID, Reality 密钥对, Short ID, Hysteria2 密码）安全更新/重置工具。
 - **`setup_vps_server.sh`**：远程 SSH 一键部署工具，支持直连 IP 部署或结合 Vultr API 自动创建 VPS 实例，自动注入公钥实现免密登录，默认一键安装全套组件。
 - **`remove_vultr_instance.sh`**：Vultr 实例交互式查询与快速清理工具。
 
