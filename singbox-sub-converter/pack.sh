@@ -20,12 +20,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 OUTPUT_NAME="singbox-sub-converter.tar.gz"
 OUTPUT_PATH="${SCRIPT_DIR}/${OUTPUT_NAME}"
+TMP_OUTPUT=$(mktemp /tmp/singbox-sub-converter.XXXXXX.tar.gz)
+
+cleanup() {
+  rm -f "${TMP_OUTPUT}" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 cd "${SCRIPT_DIR}"
 
 log "正在打包 singbox-sub-converter 项目..."
 
-# Perform tar packing with exclusions
+# 清理原有压缩文件
+rm -f "${OUTPUT_PATH}"
+
+# 先打包至 /tmp 临时文件，避免写当前目录引发 tar 警告/报错
 tar --exclude="./install.sh" \
     --exclude="./install*.sh" \
     --exclude="./${SCRIPT_NAME}" \
@@ -38,7 +47,12 @@ tar --exclude="./install.sh" \
     --exclude="./.DS_Store" \
     --exclude="./venv" \
     --exclude="./.venv" \
-    -czf "${OUTPUT_PATH}" .
+    --exclude="./data/app.log" \
+    --exclude="./data/users.json" \
+    --exclude="./*.log" \
+    -czf "${TMP_OUTPUT}" .
+
+mv "${TMP_OUTPUT}" "${OUTPUT_PATH}"
 
 if [[ -f "${OUTPUT_PATH}" ]]; then
   log "项目打包成功！产物绝对路径:"
