@@ -72,11 +72,6 @@ parsed_nodes_cache = []
 last_config_mtime = 0
 
 def get_effective_config_path():
-    if os.path.exists(SB_CONFIG_PATH):
-        return os.path.realpath(SB_CONFIG_PATH)
-    fallback = os.path.join(BASE_DIR, "..", "..", "config.json")
-    if os.path.exists(fallback):
-        return os.path.realpath(fallback)
     return os.path.realpath(SB_CONFIG_PATH)
 
 def refresh_nodes_cache():
