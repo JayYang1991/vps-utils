@@ -162,6 +162,7 @@ def main():
                         help="测速模式: speed (带宽模式, 默认), latency (延迟/httping模式)")
     parser.add_argument("--top", "-t", type=int, default=20, help="最终保留的最优 IP 数量 (默认: 20)")
     parser.add_argument("--min-speed", "-s", type=float, default=10.0, help="[带宽模式] 最小下载速度过滤 (MB/s, 默认: 10.0)")
+    parser.add_argument("--yes", "-y", action="store_true", help="跳过确认提示，自动推送到 Cloudflare Workers 订阅服务器")
     args = parser.parse_args()
 
     # 1. 下载最新文件 (直接调用二进制)
@@ -294,9 +295,11 @@ def main():
                     f.write(f"{item['full_line']}\n")
             
             unit = "MB/s" if args.mode == 'speed' else "ms"
-            print(f"\n✨ {args.mode} 模式测速完成！最优前 {len(top_results)} 个 IP 已保存至 {FINAL_TXT}")
+            print(f"\n✨ {args.mode} 模式测速完成！最优前 {len(top_results)} 个 IP 已保存至 {FINAL_TXT}：")
+            print("=" * 65)
             for i, item in enumerate(top_results):
-                print(f"  [{i+1:>2}] {item['full_line']:<30} - {item['val']:.2f} {unit}")
+                print(f"  [{i+1:>2}] {item['full_line']:<35} - {item['val']:.2f} {unit}")
+            print("=" * 65)
     finally:
         #run_command("sudo systemctl start sing-box.service", "正在恢复 sing-box 代理")
         # 全局兜底清理残留的测速相关文件
@@ -306,9 +309,23 @@ def main():
             except:
                 pass
 
-    # 6. 上传结果
+    # 6. 确认并上传结果
     if top_results:
-        upload_results(FINAL_TXT)
+        token = os.environ.get("CF_SUB_TOKEN")
+        if not token:
+            print(f"\n⚠️ 提示: 未配置环境变量 CF_SUB_TOKEN，跳过推送操作。优选 IP 结果已保存至 {FINAL_TXT}")
+        else:
+            if not args.yes:
+                try:
+                    user_input = input(f"\n👉 是否确认将以上 {len(top_results)} 个优选 IP 推送到 Cloudflare Workers 订阅服务器？ [Y/n]: ").strip().lower()
+                    if user_input not in ('', 'y', 'yes'):
+                        print(f"⏸️ 已取消推送操作。优选 IP 结果已保留在 {FINAL_TXT}")
+                        return
+                except (KeyboardInterrupt, EOFError):
+                    print(f"\n⏸️ 用户取消推送操作。优选 IP 结果已保留在 {FINAL_TXT}")
+                    return
+            
+            upload_results(FINAL_TXT)
     else:
         print(f"\n未能在任何端口测得有效结果。")
 

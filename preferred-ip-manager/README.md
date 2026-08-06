@@ -85,20 +85,24 @@ export CF_SUB_TOKEN="你的_WORKER_UPDATE_TOKEN"
 
 ### 1. 自动化 IP 测速与同步工具 (`process_ips.py`)
 
-`process_ips.py` 是全流程集成脚本，一键完成“下载 IP 列表 -> 合并已有订阅 IP -> 暂停代理 -> cfst 测速 -> 筛选最优 IP -> 上传至订阅服务器 -> 恢复代理”。
+`process_ips.py` 是全流程集成脚本，一键完成“下载 IP 列表 -> 合并已有订阅 IP -> 暂停代理 -> cfst 测速 -> 筛选最优 IP -> 呈现结果并确认 -> 上传至订阅服务器 -> 恢复代理”。
 
 ```bash
-# 1. 默认带宽模式测速 (测试下载速度，保留速度 >= 10 MB/s 的前 20 个 IP 并上传)
-python process_ips.py --mode speed --top 20 --min-speed 10.0
+# 1. 默认带宽模式测速 (测试下载速度，保留速度 >= 10 MB/s 的前 20 个 IP，呈现结果后提示确认推送)
+python3 process_ips.py --mode speed --top 20 --min-speed 10.0
 
-# 2. 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP 并上传)
-python process_ips.py --mode latency --top 15
+# 2. 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
+python3 process_ips.py --mode latency --top 15
+
+# 3. 自动确认模式 (无需手动输入 confirmation，直接上传，适用于 Cron 定时任务)
+python3 process_ips.py --yes
 ```
 
 #### 参数说明
 - `--mode`, `-m`：测速模式。`speed`（带宽模式，默认）或 `latency`（延迟模式）。
 - `--top`, `-t`：最终保留并同步的最优 IP 数量（默认：`20`）。
 - `--min-speed`, `-s`：[仅带宽模式] 最小下载速度过滤阈值（MB/s，默认：`10.0`）。
+- `--yes`, `-y`：跳过确认提示，自动推送优选结果到 Cloudflare Workers 订阅服务器（适合自动化或定时任务脚本）。
 
 ---
 
