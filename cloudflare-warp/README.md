@@ -174,12 +174,11 @@ sudo bash setup-cloudflare-one.sh --unset
    - 检查 Cloudflare Dashboard 的 **Split Tunnels** 设置，确认客户端访问的目标 IP 在路由包含范围内。
    - 在 VPS 上运行 `sudo bash setup-cloudflare-one.sh --status`，确认内核参数 `net.ipv4.ip_forward = 1` 以及 POSTROUTING MASQUERADE 规则生效。
 
-3. **系统重启后 NAT 转发规则失效？**
-   - 运行 `sudo bash setup-cloudflare-one.sh --setup` 会自动尝试通过 `netfilter-persistent` 或 `/etc/iptables/rules.v4` 保存规则。
-   - 在 Debian/Ubuntu 上建议确保已安装 `iptables-persistent`：
-     ```bash
-     sudo apt-get install -y iptables-persistent
-     ```
+3. **系统重启后 NAT 转发规则是否会失效？**
+   - 不会。运行 `sudo bash setup-cloudflare-one.sh --setup` 具备**多重双重开机持久化保障**：
+     - **Systemd 自启服务保障**：脚本会自动注册并启用 `cloudflare-one-nat.service` 服务，系统重启开机后会自动重新加载 IP 转发与 `iptables` 规则。
+     - **防火墙规则持久化**：自动保存规则文件（Debian/Ubuntu 自动配置 `netfilter-persistent` / `/etc/iptables/rules.v4`，RHEL/CentOS 自动配置 `iptables-services`）。
+     - **内核参数持久化**：内核转发参数自动写入 `/etc/sysctl.d/99-cloudflare-one-nat.conf`，重启自动生效。
 
 4. **如何彻底取消并还原 NAT 配置？**
    - 运行 `sudo bash setup-cloudflare-one.sh --unset` 即可自动清理内核转发配置文件与 `iptables` 相关规则。

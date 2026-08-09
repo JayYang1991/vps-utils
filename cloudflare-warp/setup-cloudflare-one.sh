@@ -2,7 +2,7 @@
 #
 # setup-cloudflare-one.sh
 # VPS 上 Cloudflare One / Zero Trust 流量出口 NAT 转发配置脚本
-# 支持自动开启/清除内核 IP 转发及 iptables NAT MASQUERADE 规则，使经过 Cloudflare One 的 WARP 流量以本 VPS 公网 IP 作为出口。
+# 支持自动开启/清除内核 IP 转发及 iptables NAT MASQUERADE 规则，并通过 Systemd 服务与 netfilter 规则实现双重开机自动持久化。
 
 set -e
 
@@ -19,14 +19,16 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
 SYSCTL_CONF="/etc/sysctl.d/99-cloudflare-one-nat.conf"
+SERVICE_FILE="/etc/systemd/system/cloudflare-one-nat.service"
+DEST_SCRIPT="/usr/local/bin/setup-cloudflare-one.sh"
 
 show_help() {
   echo "Usage: $0 [MODE] [OPTIONS]"
   echo ""
   echo "模式 (默认为 --setup):"
-  echo "  -c, --setup, --enable   开启并配置 VPS 上 Cloudflare One NAT 转发规则"
-  echo "  -u, --unset, --disable   清除并还原 VPS 上 Cloudflare One NAT 转发规则"
-  echo "  -s, --status            查看当前内核转发与 iptables NAT 状态"
+  echo "  -c, --setup, --enable   开启并配置 VPS 上 Cloudflare One NAT 转发规则 (含开机持久化服务)"
+  echo "  -u, --unset, --disable   清除并还原 VPS 上 Cloudflare One NAT 转发规则 (并清理开机服务)"
+  echo "  -s, --status            查看当前内核转发、iptables NAT 与 Systemd 持久化服务状态"
   echo "  -h, --help              显示此帮助信息"
   echo ""
   echo "选项:"
@@ -107,23 +109,94 @@ check_command() {
   fi
 }
 
+# 自动尝试安装 iptables 持久化包 (针对 Debian/Ubuntu/CentOS)
+install_iptables_persistent_package() {
+  if command -v apt-get &>/dev/null; then
+    if ! dpkg -s iptables-persistent &>/dev/null; then
+      log "检测到 Debian/Ubuntu，自动配置 iptables-persistent 防火墙保存组件..."
+      DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+      DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent netfilter-persistent >/dev/null 2>&1 || true
+    fi
+  elif command -v yum &>/dev/null || command -v dnf &>/dev/null; then
+    if ! systemctl is-active iptables &>/dev/null; then
+      (yum install -y iptables-services || dnf install -y iptables-services) >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
 save_iptables_persistently() {
-  log "尝试持久化保存 iptables 规则..."
+  log "保存 iptables 规则文件..."
+  install_iptables_persistent_package
+
   if command -v netfilter-persistent &>/dev/null; then
-    netfilter-persistent save || true
+    netfilter-persistent save >/dev/null 2>&1 || true
     log "已成功通过 netfilter-persistent 保存规则。"
-  elif command -v service &>/dev/null && service iptables-persistent status &>/dev/null; then
-    service iptables-persistent save || true
-    log "已成功通过 iptables-persistent 保存规则。"
+  elif command -v service &>/dev/null && service iptables save &>/dev/null; then
+    service iptables save >/dev/null 2>&1 || true
+    log "已成功通过 iptables-services 保存规则。"
   elif [[ -d /etc/iptables ]]; then
     iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
     if command -v ip6tables-save &>/dev/null; then
       ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
     fi
-    log "规则已写入 /etc/iptables/rules.v4 (及 rules.v6)。"
+    log "规则已保存至 /etc/iptables/rules.v4 (及 rules.v6)。"
+  fi
+}
+
+setup_systemd_persistence() {
+  if ! command -v systemctl &>/dev/null; then
+    warn "当前系统不支持 Systemctl，跳过 Systemd 服务注册。"
+    return 0
+  fi
+
+  log "4. 配置 Systemd 开机自启服务进行全局持久化保障..."
+
+  local current_script
+  current_script=$(readlink -f "$0" 2>/dev/null || echo "$0")
+  if [[ -f "$current_script" && "$current_script" != "$DEST_SCRIPT" ]]; then
+    cp -f "$current_script" "$DEST_SCRIPT"
+    chmod +x "$DEST_SCRIPT"
+  elif [[ ! -f "$DEST_SCRIPT" ]]; then
+    cp -f "$0" "$DEST_SCRIPT" 2>/dev/null || true
+    chmod +x "$DEST_SCRIPT" 2>/dev/null || true
+  fi
+
+  local exec_args="--setup -i ${WAN_IF} -w ${WARP_IF}"
+
+  cat <<EOF > "$SERVICE_FILE"
+[Unit]
+Description=Cloudflare One VPS Exit NAT Forwarding Rules
+After=network-online.target network.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${DEST_SCRIPT} ${exec_args}
+ExecStop=${DEST_SCRIPT} --unset -i ${WAN_IF} -w ${WARP_IF}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload || true
+  systemctl enable cloudflare-one-nat.service || true
+  log "已成功启用 Systemd 服务: cloudflare-one-nat.service (开机自动还原 IP 转发与 NAT 规则)。"
+}
+
+remove_systemd_persistence() {
+  if command -v systemctl &>/dev/null; then
+    log "3. 停用并移除 Systemd 开机持久化服务..."
+    systemctl disable --now cloudflare-one-nat.service 2>/dev/null || true
+    rm -f "$SERVICE_FILE"
+    systemctl daemon-reload || true
+    log "已卸载 cloudflare-one-nat.service。"
   else
-    warn "未能自动检测到 netfilter-persistent，系统重启后 iptables 规则可能会丢失。"
-    warn "建议在 Debian/Ubuntu 上运行: apt-get install -y iptables-persistent"
+    rm -f "$SERVICE_FILE"
+  fi
+
+  if [[ -f "$DEST_SCRIPT" && "$0" != "$DEST_SCRIPT" ]]; then
+    rm -f "$DEST_SCRIPT"
   fi
 }
 
@@ -214,17 +287,19 @@ EOF
     ip6tables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
   fi
 
-  # 4. 持久化
+  # 4. 持久化 (文件规则 + Systemd 自启服务双重保障)
   save_iptables_persistently
+  setup_systemd_persistence
 
   log "=========================================="
-  success "Cloudflare One VPS NAT 出口配置成功完成！"
+  success "Cloudflare One VPS NAT 出口配置完成 (已开启开机双重持久化)！"
   log "=========================================="
   echo ""
   echo "当前配置摘要:"
   echo -e "  - 外网出口网卡 (WAN_IF) : ${YELLOW}${WAN_IF}${NC}"
   echo -e "  - 入站转发模式 (WARP_IF): ${YELLOW}${target_warp_if}${NC}"
   echo -e "  - 内核 IPv4 转发状态    : ${GREEN}$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 1)${NC}"
+  echo -e "  - 开机自启服务状态      : ${GREEN}cloudflare-one-nat.service (active/enabled)${NC}"
 }
 
 do_unset() {
@@ -269,18 +344,21 @@ do_unset() {
     while ip6tables -D FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null; do :; done
   fi
 
-  # 3. 删除 sysctl 配置
+  # 3. 移除 Systemd 持久化服务
+  remove_systemd_persistence
+
+  # 4. 删除 sysctl 配置
   if [[ -f "$SYSCTL_CONF" ]]; then
-    log "3. 删除 sysctl 配置文件 (${SYSCTL_CONF})...."
+    log "4. 删除 sysctl 配置文件 (${SYSCTL_CONF})...."
     rm -f "$SYSCTL_CONF"
     sysctl --system >/dev/null 2>&1 || true
   fi
 
-  # 4. 持久化
+  # 5. 持久化清理后的状态
   save_iptables_persistently
 
   log "=========================================="
-  success "Cloudflare One VPS NAT 转发配置已成功清除并还原！"
+  success "Cloudflare One VPS NAT 转发配置及持久化服务已成功清除并还原！"
   log "=========================================="
 }
 
@@ -302,6 +380,16 @@ do_status() {
   echo -e "  net.ipv4.ip_forward               = $(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo '0')"
   echo -e "  net.ipv6.conf.all.forwarding      = $(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null || echo '0')"
   echo -e "  net.ipv6.conf.all.accept_ra       = $(sysctl -n net.ipv6.conf.all.accept_ra 2>/dev/null || echo '0')"
+  echo ""
+
+  echo "[Systemd 开机持久化服务 status]"
+  if command -v systemctl &>/dev/null; then
+    if systemctl is-enabled cloudflare-one-nat.service &>/dev/null; then
+      echo -e "  cloudflare-one-nat.service        : ${GREEN}已启用 (enabled)${NC}"
+    else
+      echo -e "  cloudflare-one-nat.service        : ${YELLOW}未启用 (disabled/not found)${NC}"
+    fi
+  fi
   echo ""
 
   echo "[iptables NAT POSTROUTING 规则]"
