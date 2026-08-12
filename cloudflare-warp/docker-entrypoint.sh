@@ -144,8 +144,7 @@ if [ -n "$SOCKS_USER" ] && [ -n "$SOCKS_PASS" ]; then
           "username": "${SOCKS_USER}",
           "password": "${SOCKS_PASS}"
         }
-      ],
-      "sniff": true
+      ]
     }
   ],
   "outbounds": [
@@ -168,8 +167,7 @@ else
       "type": "socks",
       "tag": "socks-in",
       "listen": "::",
-      "listen_port": ${SOCKS_PORT},
-      "sniff": true
+      "listen_port": ${SOCKS_PORT}
     }
   ],
   "outbounds": [
@@ -196,7 +194,13 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM
 
-# 7. Start sing-box process
+# 7. Validate and start sing-box process
+log "Validating sing-box configuration..."
+if ! sing-box check -c "$CONFIG_FILE"; then
+    error "sing-box configuration check failed!"
+    exit 1
+fi
+
 log "Starting sing-box SOCKS5 proxy..."
 sing-box run -c "$CONFIG_FILE" &
 SINGBOX_PID=$!
