@@ -96,7 +96,24 @@ sudo bash docker-run.sh --stop
 
 ---
 
-### 3. 本地 Linux 原生直接部署 (无 Docker)
+### 🔄 3. 开机自动运行说明 (Boot Autostart)
+
+容器与服务已具备完整的开机自动运行支持，宿主机重启后无需人工干预：
+
+1. **容器级开机自启**：容器使用了 `--restart unless-stopped` 重启策略，一旦宿主机重启或 Docker 服务启动，容器将自动运行并恢复 WARP 连通与 SOCKS5 代理。
+2. **宿主机 Docker 开机自启**：`docker-run.sh` 脚本在启动容器时会自动运行 `systemctl enable docker`，开启宿主机 systemd Docker 服务的开机自启。
+3. **内核 TUN 模块加载**：脚本会自动检查并加载 `tun` 内核模块，确保重启后 TUN 虚拟设备可用。
+
+**手动检查或开启 Docker 开机自启命令**：
+```bash
+sudo systemctl is-enabled docker
+# 若显示 disabled，可手动启用：
+sudo systemctl enable --now docker
+```
+
+---
+
+### 4. 本地 Linux 原生直接部署 (无 Docker)
 
 若在本地 Linux 主机（如 Ubuntu/Debian）上直接运行，不使用 Docker：
 

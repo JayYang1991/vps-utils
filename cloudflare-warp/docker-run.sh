@@ -218,12 +218,21 @@ do_run() {
     docker rm "$CONTAINER_NAME" 2>/dev/null || true
   fi
 
-  # Check /dev/net/tun on host
+  # Ensure /dev/net/tun exists and tun module is loaded on host boot
   if [[ ! -c /dev/net/tun ]]; then
-    warn "宿主机 /dev/net/tun 不存在，正在自动创建..."
+    warn "宿主机 /dev/net/tun 不存在，正在自动加载 tun 模块并创建节点..."
+    modprobe tun 2>/dev/null || true
     mkdir -p /dev/net
     mknod /dev/net/tun c 10 200 2>/dev/null || true
     chmod 600 /dev/net/tun 2>/dev/null || true
+  fi
+
+  # Enable system-level Docker autostart if systemctl is available
+  if command -v systemctl &>/dev/null; then
+    if ! systemctl is-enabled docker &>/dev/null; then
+      log "设置 Docker 宿主机服务开机自启 (systemctl enable docker)..."
+      systemctl enable docker 2>/dev/null || true
+    fi
   fi
 
   DOCKER_ENV_ARGS=()
@@ -278,6 +287,7 @@ do_run() {
     echo -e "  - 代理认证 : ${GREEN}无需认证 (匿名 SOCKS5)${NC}"
   fi
   echo -e "  - 流量出口 : ${GREEN}Cloudflare WARP / Zero Trust 节点流量${NC}"
+  echo -e "  - 开机自启 : ${GREEN}已开启 (--restart unless-stopped)${NC}"
   echo "=========================================================="
 }
 
