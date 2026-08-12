@@ -27,6 +27,7 @@
 | --- | --- |
 | `install-singbox-server.sh` | sing-box 服务端一键安装/更新/重置脚本 |
 | `update-singbox-keys.sh` | sing-box 服务端各项密钥与凭证安全更新/重置脚本 |
+| `update-singbox-sub.sh` | 通过指定订阅链接更新 sing-box 配置并重启服务（支持自动备份与回退） |
 | `setup_vps_server.sh` | 通用 VPS 远程部署脚本（支持 IP 直接部署或 Vultr 自动创建） |
 | `remove_vultr_instance.sh` | Vultr 实例快速查询与交互式清理工具 |
 | `singbox_server_config.json` | sing-box 服务端配置模板（VLESS Reality + Hysteria2） |
@@ -120,7 +121,38 @@ bash update-singbox-keys.sh -a --domain www.apple.com -y
 
 ---
 
-### 3. 远程 VPS 部署与 Vultr 自动化 (`setup_vps_server.sh`)
+### 3. 订阅链接配置更新 (`update-singbox-sub.sh`)
+
+专门用于通过订阅链接下载更新 sing-box 服务端/客户端配置文件，并重启服务。内置全流程安全保障：自动备份旧配置至 `/tmp` 目录、语法校验（`sing-box check`）、服务运行状态监控，以及失败自动回退机制。
+
+在目标 Linux 服务器上以 `root` 权限运行：
+
+```bash
+# 1. 兼容 singbox-sub-converter 自适应订阅链接 (/sub)
+bash update-singbox-sub.sh http://154.12.34.56:8000/sub?token=your_sub_token
+
+# 2. 兼容 singbox-sub-converter 专用 singbox 订阅链接 (/singbox)
+bash update-singbox-sub.sh http://154.12.34.56:8000/singbox?token=your_sub_token
+
+# 3. 非交互模式下更新指定订阅链接
+bash update-singbox-sub.sh -u "http://154.12.34.56:8000/sub?target=singbox&token=your_sub_token" -y
+```
+
+#### 参数说明
+
+| 参数选项 | 说明 |
+| --- | --- |
+| `-u, --url URL` | 指定订阅链接 URL（必须） |
+| `-c, --config PATH` | 指定配置文件路径（默认: `/etc/sing-box/config.json`） |
+| `-b, --backup-dir DIR` | 指定备份目录（默认: `/tmp`） |
+| `-A, --user-agent AGENT` | 指定 HTTP 请求 User-Agent（默认: `sing-box`） |
+| `-t, --timeout SECONDS` | 指定下载超时秒数（默认: `30`） |
+| `-y, --yes` | 跳过确认提示直接执行 |
+| `-h, --help` | 显示帮助信息 |
+
+---
+
+### 4. 远程 VPS 部署与 Vultr 自动化 (`setup_vps_server.sh`)
 
 `setup_vps_server.sh` 可以在控制端（本地机器）直接对远程 VPS 进行 SSH 一键部署，也可结合 Vultr API 自动创建 VPS 实例并一键完成部署。
 
@@ -227,7 +259,7 @@ VULTR_REGION="nrt" VULTR_PLAN="vc2-1c-1gb" SINGBOX_PORT=8443 bash setup_vps_serv
 
 ---
 
-### 3. Vultr 实例删除 (`remove_vultr_instance.sh`)
+### 5. Vultr 实例删除 (`remove_vultr_instance.sh`)
 
 用于快速查找并交互式删除指定标签的 Vultr 实例：
 

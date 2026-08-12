@@ -430,16 +430,35 @@ def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list) -> str:
         
     return cleaned_yaml
 
+def ensure_reality_utls_in_singbox_dict(data: dict) -> bool:
+    """Ensure all vless reality outbounds in sing-box config have utls enabled."""
+    modified = False
+    outbounds = data.get("outbounds", [])
+    if isinstance(outbounds, list):
+        for ob in outbounds:
+            if isinstance(ob, dict) and ob.get("type") == "vless":
+                tls = ob.get("tls")
+                if isinstance(tls, dict) and tls.get("enabled"):
+                    reality = tls.get("reality")
+                    if isinstance(reality, dict) and reality.get("enabled"):
+                        utls = tls.get("utls")
+                        if not isinstance(utls, dict) or not utls.get("enabled"):
+                            tls["utls"] = {"enabled": True, "fingerprint": "chrome"}
+                            modified = True
+    return modified
+
 def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list) -> str:
-    """Ensure local Socks5 and missing extra nodes are present in sing-box JSON configuration."""
-    extra_nodes = [n for n in nodes if n.get("type") in ["socks", "socks5"]]
-    if not json_content or not extra_nodes:
+    """Ensure local Socks5 and missing extra nodes are present in sing-box JSON configuration, and fix reality utls."""
+    if not json_content:
         return json_content
     try:
         data = json.loads(json_content)
         if not isinstance(data, dict):
             return json_content
             
+        modified = ensure_reality_utls_in_singbox_dict(data)
+
+        extra_nodes = [n for n in nodes if n.get("type") in ["socks", "socks5"]] if nodes else []
         outbounds = data.get("outbounds", [])
         if not isinstance(outbounds, list):
             outbounds = []
@@ -474,9 +493,12 @@ def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list) -> str:
                             if at not in ob_list:
                                 ob_list.append(at)
             data["outbounds"] = outbounds
+            modified = True
+
+        if modified:
             return json.dumps(data, indent=2, ensure_ascii=False)
     except Exception as e:
-        logger.error(f"Error merging extra nodes into sing-box JSON: {e}")
+        logger.error(f"Error processing sing-box JSON: {e}")
         
     return json_content
 
@@ -704,6 +726,10 @@ def generate_singbox_json(nodes: list) -> str:
                 "tls": {
                     "enabled": True,
                     "server_name": n["sni"],
+                    "utls": {
+                        "enabled": True,
+                        "fingerprint": "chrome"
+                    },
                     "reality": {
                         "enabled": True,
                         "public_key": n["public_key"],
