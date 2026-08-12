@@ -11,13 +11,19 @@ log() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 1. Ensure TUN device exists
+# 1. Ensure TUN device exists & Disable IPv6 in container
 mkdir -p /dev/net
 if [ ! -c /dev/net/tun ]; then
     log "Creating /dev/net/tun node..."
     mknod /dev/net/tun c 10 200
     chmod 600 /dev/net/tun
 fi
+
+# Disable IPv6 stack inside container to prevent WARP IPv6 Happy Eyeballs timeout
+log "Disabling IPv6 stack inside container..."
+sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
+sysctl -w net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
+sysctl -w net.ipv6.conf.lo.disable_ipv6=1 2>/dev/null || true
 
 # 2. Extract and configure Zero Trust Service Token if provided
 TEAM_NAME="${WARP_TEAM:-${ZERO_TRUST_TEAM:-$WARP_ORGANIZATION}}"
@@ -103,37 +109,24 @@ WARP_MODE="${WARP_MODE:-warp}"
 log "Setting WARP mode to ${WARP_MODE}..."
 warp-cli --accept-tos mode "$WARP_MODE" 2>/dev/null || true
 
-ENDPOINTS=("162.159.192.1:2408" "162.159.193.1:2408" "162.159.195.1:2408" "188.114.96.1:2408" "162.159.192.1:500" "162.159.192.1:4500")
-
 if [ -n "$WARP_ENDPOINT" ]; then
     log "Setting user-defined WARP tunnel endpoint: ${WARP_ENDPOINT}..."
     warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
 else
-    log "Setting default IPv4 WARP tunnel endpoint: ${ENDPOINTS[0]}..."
-    warp-cli --accept-tos tunnel endpoint set "${ENDPOINTS[0]}" 2>/dev/null || true
+    log "Using WARP native default Endpoint (resetting endpoint override if any)..."
+    warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
 fi
 
 log "Connecting to Cloudflare WARP..."
 warp-cli --accept-tos connect 2>/dev/null || true
 
-# Wait for WARP connection with fallback rotation if stuck in Connecting
-EP_INDEX=0
+# Wait for WARP connection
 for i in $(seq 1 30); do
     STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
     if echo "$STATUS" | grep -q "Connected"; then
         log "Cloudflare WARP connected successfully!"
         break
     fi
-
-    # If stuck in Connecting and user didn't lock a specific endpoint, try fallback endpoints every 8 seconds
-    if [ -z "$WARP_ENDPOINT" ] && [ $((i % 8)) -eq 0 ]; then
-        EP_INDEX=$(( (EP_INDEX + 1) % ${#ENDPOINTS[@]} ))
-        NEW_EP="${ENDPOINTS[$EP_INDEX]}"
-        log "WARP still negotiating, trying endpoint ${NEW_EP}..."
-        warp-cli --accept-tos tunnel endpoint set "$NEW_EP" 2>/dev/null || true
-        warp-cli --accept-tos connect 2>/dev/null || true
-    fi
-
     log "Waiting for WARP connection... ($i/30)"
     sleep 1
 done
