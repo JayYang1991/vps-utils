@@ -21,8 +21,21 @@ RUN apt-get update && apt-get install -y \
 COPY install.sh /tmp/install.sh
 RUN chmod +x /tmp/install.sh && /tmp/install.sh && rm -f /tmp/install.sh
 
-# Install sing-box
-RUN curl -fsSL https://sing-box.app/install.sh | sh
+# Download and install sing-box binary with fallback mirrors
+RUN ARCH=$(dpkg --print-architecture) \
+    && case "$ARCH" in \
+         amd64) SINGBOX_ARCH="amd64" ;; \
+         arm64|aarch64) SINGBOX_ARCH="arm64" ;; \
+         *) SINGBOX_ARCH="amd64" ;; \
+       esac \
+    && SINGBOX_VER="1.9.3" \
+    && (curl -fsSL -o /tmp/sing-box.tar.gz "https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${SINGBOX_ARCH}.tar.gz" || \
+        curl -fsSL -o /tmp/sing-box.tar.gz "https://ghproxy.net/https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${SINGBOX_ARCH}.tar.gz" || \
+        curl -fsSL -o /tmp/sing-box.tar.gz "https://mirror.ghproxy.com/https://github.com/SagerNet/sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${SINGBOX_ARCH}.tar.gz") \
+    && tar -xzf /tmp/sing-box.tar.gz -C /tmp \
+    && cp /tmp/sing-box-${SINGBOX_VER}-linux-${SINGBOX_ARCH}/sing-box /usr/bin/sing-box \
+    && chmod +x /usr/bin/sing-box \
+    && rm -rf /tmp/sing-box*
 
 # Create configuration directory for sing-box
 RUN mkdir -p /etc/sing-box

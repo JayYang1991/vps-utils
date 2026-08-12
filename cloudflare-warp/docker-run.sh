@@ -144,8 +144,8 @@ done
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")
 
 check_root() {
-  if [[ $EUID -ne 0 ]]; then
-    error "此脚本必须以 root 权限运行，请使用 'sudo bash $0 ...'"
+  if ! docker ps &>/dev/null && [[ $EUID -ne 0 ]]; then
+    error "当前用户无法连接 Docker Daemon，请使用 'sudo bash $0 ...' 或运行 'sudo usermod -aG docker $USER'。"
     exit 1
   fi
 }
