@@ -1,15 +1,14 @@
-# Cloudflare WARP & Zero Trust 本地代理客户端部署指南 (SOCKS5 Proxy)
+# Cloudflare WARP & Zero Trust 部署指南 (本地代理客户端 & VPS 出口转发)
 
-本目录提供基于 Docker 容器或本地 Linux 环境的 **Cloudflare WARP 代理客户端** 自动化部署方案。
-
-通过在本地部署运行 `cloudflare-warp`（结合 Cloudflare Zero Trust 团队接入 / Service Token 自动认证），并集成 `sing-box`（直连出站），在本地提供对外监听的 **SOCKS5 代理**。本地应用或局域网设备只需连接该 SOCKS5 代理，流量即可通过 Cloudflare Zero Trust 安全网络加密出站。
-
-> 📌 **架构定位说明**：
-> 本项目定位为**本地代理客户端 (Client Side SOCKS5 Proxy)**，运行于本地机器或本地 Docker 容器中。无需在远程 VPS 上部署本客户端。
+本目录提供 Cloudflare WARP 相关的两套自动化部署方案：
+1. **本地 SOCKS5 代理客户端 (Docker / Linux)**：在本地机器运行 `cloudflare-warp` 客户端并结合 `sing-box` (直连出站)，对外提供 **SOCKS5 代理**。
+2. **VPS 侧 Zero Trust 出口 NAT 转发 (`setup-cloudflare-one.sh`)**：在远程 VPS 宿主机上开启 IP 转发与 NAT MASQUERADE，将 VPS 配置为 Cloudflare Zero Trust 的指定流量出口节点 (Exit Node)。
 
 ---
 
-## 🌐 架构与数据流示意图
+## 🌐 架构示意图
+
+### 模式一：本地 SOCKS5 代理客户端 (本地机器 / 本地 Docker 部署)
 
 ```text
 [ 本地应用 / 局域网设备 ] 
@@ -18,7 +17,7 @@
 [ sing-box (直连出站) ]
          │
          ▼ (系统 TUN 虚拟网卡接口)
-[ Cloudflare WARP Daemon (Zero Trust 团队接入) ]
+[ Cloudflare WARP Daemon (Zero Trust 团队 / Service Token) ]
          │
          ▼ (加密隧道)
 [ Cloudflare 全球 Zero Trust 网络 ] ──> [ 目标网站 / 互联网 ]
@@ -26,23 +25,31 @@
 
 ---
 
-## 📁 脚本与文件清单
+### 模式二：VPS 侧 Zero Trust 出口 NAT 转发 (VPS 宿主机部署)
 
-| 脚本 / 文件 | 核心功能 | 应用场景 |
-| --- | --- | --- |
-| **`docker-run.sh`** | 本地容器一键构建与运行管理脚本 | 提供一键启动、停止、日志查看、状态检测及构建功能 |
-| **`Dockerfile`** | 基于 `ubuntu:latest` 镜像构建包含 WARP 与 sing-box 的容器镜像 | 本地 Docker 容器化部署 |
-| **`docker-entrypoint.sh`** | 容器入口脚本，自动初始化 `/dev/net/tun`、启动 WARP、配置 Service Token 并运行 sing-box | 容器内部进程与连通自动化管理 |
-| **`install.sh`** | 自动配置官方 Apt/Yum 软件源并安装 `cloudflare-warp` 客户端 | 在原生 Linux 本地主机直接安装 WARP 客户端 |
-| **`setup-cloudflare-one.sh`** | (可选) VPS 出口 NAT 转发配置脚本 | 仅在需要将特定 VPS 配置为 Zero Trust 出口节点时备用 |
+```text
+[ 客户端设备 (WARP / Connector) ] ──(Zero Trust 隧道)──> [ VPS (warp0 网卡) ] ──(iptables NAT)──> [ 目标网站 / Internet (显示 VPS 公网 IP) ]
+```
 
 ---
 
-## 🚀 快速开始：本地 Docker 容器化部署 (推荐)
+## 📁 脚本与文件清单
 
-使用 Docker 部署是在本地运行 WARP + sing-box SOCKS5 代理最推荐的方式，环境隔离且支持 Zero Trust **Service Token 无人值守自动登录**。
+| 脚本 / 文件 | 核心功能 | 部署位置与场景 |
+| --- | --- | --- |
+| **`docker-run.sh`** | 本地容器一键构建与运行管理脚本 | **本地部署**：一键启动/停止本地 WARP + sing-box 容器 |
+| **`Dockerfile`** | 基于 `ubuntu:latest` 镜像构建包含 WARP 与 sing-box 的镜像 | **本地部署**：本地 Docker 镜像构建 |
+| **`docker-entrypoint.sh`** | 容器入口脚本，自动初始化 `/dev/net/tun`、启动 WARP、配置 Service Token 并运行 sing-box | **本地部署**：容器自动连通与生命周期管理 |
+| **`install.sh`** | 自动配置官方 Apt/Yum 软件源并安装 `cloudflare-warp` 客户端 | **本地 / VPS 部署**：原生 Linux 环境安装官方 WARP 客户端 |
+| **`setup-cloudflare-one.sh`** | VPS 出口 NAT 转发与开机双重持久化配置脚本 | **VPS 宿主机部署**：将 VPS 配置为 Cloudflare Zero Trust 出口节点 (NAT Gateway) |
 
-### 1. 一键启动容器
+---
+
+## 🚀 一、本地 SOCKS5 代理客户端部署 (推荐 Docker)
+
+在本地机器上运行 WARP + sing-box SOCKS5 代理，支持 Zero Trust **Service Token 无人值守自动登录**。
+
+### 1. 一键启动本地容器
 
 ```bash
 cd cloudflare-warp
@@ -50,10 +57,10 @@ cd cloudflare-warp
 # 使用 Zero Trust 团队名与 Service Token 启动 SOCKS5 代理 (监听本地 1080 端口)
 bash docker-run.sh -t <YOUR_TEAM_NAME> -i <CLIENT_ID> -s <CLIENT_SECRET> -p 1080
 
-# 或使用 ID:SECRET 合并字符串格式传入 Service Token:
+# 或使用 ID:SECRET 合并格式传入 Service Token:
 bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
 
-# 可选：配置带用户名和密码身份验证的 SOCKS5 代理
+# 可选：配置带用户名和密码认证的 SOCKS5 代理
 bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080 -u myuser -w mypass
 ```
 
@@ -74,10 +81,10 @@ bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRE
 
 ---
 
-### 2. 容器管理快捷命令
+### 2. 本地容器快捷管理指令
 
 ```bash
-# 查看容器运行日志 (含 WARP 建立与 sing-box 启动日志)
+# 查看容器运行日志
 bash docker-run.sh --logs
 
 # 查看 WARP 连通状态与 SOCKS5 端口监听状态
@@ -85,37 +92,11 @@ bash docker-run.sh --status
 
 # 停止并删除本地容器
 bash docker-run.sh --stop
-
-# 重新构建镜像并启动
-bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080 --build
 ```
 
 ---
 
-### 3. 原生 Docker 命令运行示例
-
-如果习惯直接使用 `docker` 命令：
-
-```bash
-# 1. 构建镜像
-docker build -t cloudflare-warp-socks5:latest .
-
-# 2. 启动容器 (必须包含 --cap-add=NET_ADMIN 与 --device /dev/net/tun)
-docker run -d \
-  --name cloudflare-warp-socks5 \
-  --cap-add=NET_ADMIN \
-  --device /dev/net/tun \
-  -p 1080:1080 \
-  -e WARP_TEAM="your-zero-trust-team" \
-  -e WARP_SERVICE_TOKEN_ID="your-client-id.access" \
-  -e WARP_SERVICE_TOKEN_SECRET="your-client-secret" \
-  --restart unless-stopped \
-  cloudflare-warp-socks5:latest
-```
-
----
-
-## 💻 本地 Linux 主机直接部署 (无 Docker 环境)
+### 3. 本地 Linux 原生直接部署 (无 Docker)
 
 若在本地 Linux 主机（如 Ubuntu/Debian）上直接运行，不使用 Docker：
 
@@ -126,25 +107,69 @@ docker run -d \
 
 2. **连接 Zero Trust 团队**：
    ```bash
-   # 绑定团队名称
    warp-cli registration organization <YOUR_TEAM_NAME>
-
-   # 切换为全局 WARP 模式并连接
    warp-cli mode warp
    warp-cli connect
    ```
 
-3. **测试连通性**：
-   ```bash
-   warp-cli status
-   curl https://www.cloudflare.com/cdn-cgi/trace
-   ```
+---
+
+## 🖥️ 二、VPS 侧 Zero Trust 出口 NAT 转发配置 (`setup-cloudflare-one.sh`)
+
+如果需要将 **VPS 配置为 Cloudflare Zero Trust 的指定出口节点 (Exit Node / NAT Gateway)**，使得客户端经过 Cloudflare 网络的流量由该 VPS 的公网 IP 访问目标网站，请在 **VPS 宿主机** 上运行此脚本。
+
+### 核心功能
+- 自动开启 Linux 内核 IP 转发 (`net.ipv4.ip_forward = 1`)。
+- 自动配置 `iptables` NAT MASQUERADE 转发规则（智能支持 `warp0` 隧道隔离转发或通用转发）。
+- 自动启用 Systemd 开机服务 (`cloudflare-one-nat.service`) 与 netfilter 防火墙规则持久化。
 
 ---
 
-## 🌐 Cloudflare Zero Trust 控制台配置指南
+### 在 VPS 上的部署与运行命令
 
-在本地启动客户端前，需在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) 完成团队配置与 Service Token 创建。
+在 VPS 宿主机上以 `root` 权限（或 `sudo`）运行：
+
+```bash
+# 1. 自动检测外网网卡并一键开启 VPS 出口 NAT 转发 (远程一键运行)
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/cloudflare-warp/setup-cloudflare-one.sh) --setup
+
+# 或在 VPS 本地运行
+sudo bash setup-cloudflare-one.sh --setup
+
+# 2. VPS 已安装 cloudflare-warp 时，指定外网网卡 eth0 与 WARP 网卡 warp0 隔离转发
+sudo bash setup-cloudflare-one.sh --setup -i eth0 -w warp0
+
+# 3. 未安装 cloudflare-warp 客户端时 (如使用 cloudflared Connector)，强制使用通用转发
+sudo bash setup-cloudflare-one.sh --setup -w any
+
+# 4. 查看当前 VPS 内核转发、Systemd 服务及 iptables 规则状态
+sudo bash setup-cloudflare-one.sh --status
+
+# 5. 清除并还原 VPS 上的 NAT 转发规则与开机持久化服务
+sudo bash setup-cloudflare-one.sh --unset
+```
+
+#### 🛠️ `setup-cloudflare-one.sh` 参数说明
+
+```text
+Usage: setup-cloudflare-one.sh [MODE] [OPTIONS]
+
+模式 (默认为 --setup):
+  -c, --setup, --enable   开启并配置 VPS 上 Cloudflare One NAT 转发规则 (含开机双重持久化)
+  -u, --unset, --disable   清除并还原 VPS 上 Cloudflare One NAT 转发规则 (并清理开机服务)
+  -s, --status            查看当前内核转发、iptables NAT 与 Systemd 持久化服务状态
+  -h, --help              显示帮助信息
+
+选项:
+  -i, --interface <IF>    指定 VPS 外网网卡名称 (默认自动检测，如 eth0, ens3)
+  -w, --warp-if <IF>      指定入站隧道网卡名称 (默认: auto。若存在 warp0 则自动绑定 warp0，否则使用 any 通用转发)
+```
+
+---
+
+## 🌐 三、Cloudflare Zero Trust 控制台配置指南
+
+无论是在本地运行客户端还是在 VPS 上配置出口，均需在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) 完成对应配置。
 
 ### 第一步：获取团队名称 (Team Name)
 
@@ -194,11 +219,23 @@ Service Token 用于本地容器免浏览器人工点击的自动鉴权登录：
 
 ---
 
-## 🧪 代理效果验证与使用方法
+### 第五步：配置网络路由与出口节点 (Networks Routes / Exit Nodes)
 
-容器启动完成后，即可在本地应用中使用该 SOCKS5 代理：
+若需指定特定流量由在 VPS 上运行了 `setup-cloudflare-one.sh` 的节点出口：
 
-### 1. 终端 curl 验证 SOCKS5 代理
+1. 点击 **Networks** -> **Routes**。
+2. 点击 **Create Route** 按钮：
+   - **CIDR**：填入目标 IP 网段（例如 `0.0.0.0/0`）
+   - **Tunnel / Destination**：选择绑定的 VPS WARP 节点设备或 WARP Connector 实例
+3. 点击 **Save** 保存使路由生效。
+
+---
+
+## 🧪 四、本地代理效果验证与使用方法
+
+本地 SOCKS5 容器启动完成后，即可在本地应用中使用该代理：
+
+### 终端 curl 验证 SOCKS5 代理
 
 ```bash
 # 测试经由 WARP SOCKS5 代理访问 Cloudflare Trace 节点
@@ -214,23 +251,16 @@ warp=on
 gateway=on (若配置了 Gateway 策略)
 ```
 
-### 2. 在浏览器或客户端软件中使用
-
-- **代理协议**：`SOCKS5`
-- **代理服务器/IP**：`127.0.0.1` (或本地局域网 IP)
-- **端口**：`1080` (或自定义 `-p` 端口)
-- **认证方式**：根据启动时是否指定 `-u / -w` 配置
-
 ---
 
-## 🔍 故障排查
+## 🔍 五、常见问题与故障排查
 
-1. **容器日志提示 `Timed out waiting for warp-svc socket`？**
+1. **`setup-cloudflare-one.sh` 应该部署在本地还是 VPS？**
+   - `setup-cloudflare-one.sh` 只能部署在**远程 VPS 宿主机**上，作用是开启 Linux 内核 IP 转发与 NAT 转发，使 VPS 能够充当出口网关。本地机器仅需运行 `docker-run.sh` / `install.sh` 即可。
+
+2. **本地容器日志提示 `Timed out waiting for warp-svc socket`？**
    - 检查宿主机是否已加载 `tun` 模块。可尝试在宿主机运行 `sudo modprobe tun`。
 
-2. **WARP 状态显示 `Registration Missing` 或无法连接？**
+3. **WARP 状态显示 `Registration Missing` 或无法连接？**
    - 检查 Zero Trust 控制台中的 **Device enrollment rules** 是否已正确将 Service Token 加入允许列表中。
    - 确认输入的 `-t` (Team Name)、`-i` (Client ID) 与 `-s` (Client Secret) 拼写无误。
-
-3. **端口冲突报错 `address already in use`？**
-   - 说明本地 1080 端口已被其他服务占用。运行时指定新的本地端口即可，如 `bash docker-run.sh ... -p 10800`。
