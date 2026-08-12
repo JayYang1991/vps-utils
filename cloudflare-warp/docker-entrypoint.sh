@@ -98,22 +98,42 @@ else
     log "WARP account is already registered."
 fi
 
-# 5. Set custom tunnel endpoint if provided
+# 5. Set WARP mode & Tunnel Endpoint
+WARP_MODE="${WARP_MODE:-warp}"
+log "Setting WARP mode to ${WARP_MODE}..."
+warp-cli --accept-tos mode "$WARP_MODE" 2>/dev/null || true
+
+ENDPOINTS=("162.159.192.1:2408" "162.159.193.1:2408" "162.159.195.1:2408" "188.114.96.1:2408" "162.159.192.1:500" "162.159.192.1:4500")
+
 if [ -n "$WARP_ENDPOINT" ]; then
-    log "Setting custom WARP tunnel endpoint: ${WARP_ENDPOINT}..."
+    log "Setting user-defined WARP tunnel endpoint: ${WARP_ENDPOINT}..."
     warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
+else
+    log "Setting default IPv4 WARP tunnel endpoint: ${ENDPOINTS[0]}..."
+    warp-cli --accept-tos tunnel endpoint set "${ENDPOINTS[0]}" 2>/dev/null || true
 fi
 
 log "Connecting to Cloudflare WARP..."
-warp-cli --accept-tos connect || warp-cli connect || true
+warp-cli --accept-tos connect 2>/dev/null || true
 
-# Wait up to 30 seconds for connection status
+# Wait for WARP connection with fallback rotation if stuck in Connecting
+EP_INDEX=0
 for i in $(seq 1 30); do
-    STATUS=$(warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || echo "")
+    STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
     if echo "$STATUS" | grep -q "Connected"; then
         log "Cloudflare WARP connected successfully!"
         break
     fi
+
+    # If stuck in Connecting and user didn't lock a specific endpoint, try fallback endpoints every 8 seconds
+    if [ -z "$WARP_ENDPOINT" ] && [ $((i % 8)) -eq 0 ]; then
+        EP_INDEX=$(( (EP_INDEX + 1) % ${#ENDPOINTS[@]} ))
+        NEW_EP="${ENDPOINTS[$EP_INDEX]}"
+        log "WARP still negotiating, trying endpoint ${NEW_EP}..."
+        warp-cli --accept-tos tunnel endpoint set "$NEW_EP" 2>/dev/null || true
+        warp-cli --accept-tos connect 2>/dev/null || true
+    fi
+
     log "Waiting for WARP connection... ($i/30)"
     sleep 1
 done
