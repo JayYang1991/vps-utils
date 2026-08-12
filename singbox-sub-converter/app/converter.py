@@ -520,8 +520,8 @@ def patch_singbox_direct_tag(data: dict) -> bool:
         servers = dns.get("servers", [])
         if isinstance(servers, list):
             for srv in servers:
-                if isinstance(srv, dict) and srv.get("detour") == "DIRECT":
-                    srv["detour"] = "direct"
+                if isinstance(srv, dict) and srv.get("detour") in ["direct", "DIRECT"]:
+                    del srv["detour"]
                     modified = True
 
     return modified
