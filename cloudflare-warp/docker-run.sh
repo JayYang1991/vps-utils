@@ -53,15 +53,15 @@ show_help() {
   echo ""
   echo "示例:"
   echo "  # 使用 Zero Trust 团队及 Service Token 启动容器"
-  echo "  bash $0 -t my-team -i xxxx.access -s yyyyy -p 1080"
+  echo "  sudo bash $0 -t my-team -i xxxx.access -s yyyyy -p 1080"
   echo "  # 或使用 ID:SECRET 合并参数:"
-  echo "  bash $0 -t my-team --service-token xxxx.access:yyyyy -p 1080"
+  echo "  sudo bash $0 -t my-team --service-token xxxx.access:yyyyy -p 1080"
   echo ""
   echo "  # 查看容器日志"
-  echo "  bash $0 --logs"
+  echo "  sudo bash $0 --logs"
   echo ""
   echo "  # 停止并清理容器"
-  echo "  bash $0 --stop"
+  echo "  sudo bash $0 --stop"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -137,7 +137,15 @@ done
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")
 
+check_root() {
+  if [[ $EUID -ne 0 ]]; then
+    error "此脚本必须以 root 权限运行，请使用 'sudo bash $0 ...'"
+    exit 1
+  fi
+}
+
 check_docker() {
+  check_root
   if ! command -v docker &>/dev/null; then
     error "未找到 Docker 命令，请先安装 Docker 环境。"
     exit 1

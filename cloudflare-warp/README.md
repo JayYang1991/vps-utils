@@ -55,13 +55,13 @@
 cd cloudflare-warp
 
 # 使用 Zero Trust 团队名与 Service Token 启动 SOCKS5 代理 (监听本地 1080 端口)
-bash docker-run.sh -t <YOUR_TEAM_NAME> -i <CLIENT_ID> -s <CLIENT_SECRET> -p 1080
+sudo bash docker-run.sh -t <YOUR_TEAM_NAME> -i <CLIENT_ID> -s <CLIENT_SECRET> -p 1080
 
 # 或使用 ID:SECRET 合并格式传入 Service Token:
-bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
+sudo bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
 
 # 可选：配置带用户名和密码认证的 SOCKS5 代理
-bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080 -u myuser -w mypass
+sudo bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080 -u myuser -w mypass
 ```
 
 #### 🛠️ `docker-run.sh` 参数说明
@@ -85,13 +85,13 @@ bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRE
 
 ```bash
 # 查看容器运行日志
-bash docker-run.sh --logs
+sudo bash docker-run.sh --logs
 
 # 查看 WARP 连通状态与 SOCKS5 端口监听状态
-bash docker-run.sh --status
+sudo bash docker-run.sh --status
 
 # 停止并删除本地容器
-bash docker-run.sh --stop
+sudo bash docker-run.sh --stop
 ```
 
 ---
