@@ -175,6 +175,18 @@ def main():
         return
     print(f"识别到原始文件: {latest_file}")
 
+    # 从 Telegram 下载完 IP 列表后提示用户断掉代理
+    if not args.yes:
+        print("\n" + "=" * 65)
+        print("📢 提示: 从 Telegram 下载 IP 列表已完成！")
+        print("⚡ 请【断开/关闭】您的代理服务（如 v2ray / sing-box / Clash 等），以确保后续测速准确。")
+        print("=" * 65)
+        try:
+            input("👉 断开代理后，请按回车键 (Enter) 继续后续流程: ")
+        except (KeyboardInterrupt, EOFError):
+            print("\n⏸️ 用户取消操作，流程终止。")
+            return
+
     # 2. 解析文件并合并订阅列表与历史 IP
     groups = parse_source_file(latest_file)
     

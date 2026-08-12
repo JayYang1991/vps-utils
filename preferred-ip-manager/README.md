@@ -26,10 +26,11 @@
 - 📥 **Telegram 极速下载器 (`telegram_tool.py`)**：基于 Telethon / MTProto 协议，支持多连接并发加速下载、断点续传及资源列表预览。
 - ⚡ **自动化测速与同步全流程 (`process_ips.py`)**：
   - **自动拉取**：自动从指定的 Telegram 频道/群组下载最新的中转 IP 列表。
+  - **提示断网/断代理**：下载完 Telegram IP 列表后提示用户断掉代理，待用户确认断开后再继续后续流程。
   - **智能合并**：解析本地 IP:Port 列表，并自动抓取现有订阅服务器中的已有 IP 进行合并去重。
-  - **无干扰测速**：测速期间自动挂起本地代理服务（如 `sing-box`），调用 `cfst` 工具进行带宽模式（下载速度）或延迟模式（HTTPing）测试。
+  - **无干扰测速**：调用 `cfst` 工具进行带宽模式（下载速度）或延迟模式（HTTPing）测试。
   - **自动同步**：挑选测速表现最优的 Top N 个 IP，自动生成结果文件并通过 HTTP PUT 同步更新至订阅 Worker 服务器。
-  - **现场恢复**：测速完毕后自动恢复代理服务，并彻底清理所有临时测速文件。
+  - **清理遗留**：测速完毕后彻底清理所有临时测速文件。
 
 ---
 
@@ -85,7 +86,7 @@ export CF_SUB_TOKEN="你的_WORKER_UPDATE_TOKEN"
 
 ### 1. 自动化 IP 测速与同步工具 (`process_ips.py`)
 
-`process_ips.py` 是全流程集成脚本，一键完成“下载 IP 列表 -> 合并已有订阅 IP -> 暂停代理 -> cfst 测速 -> 筛选最优 IP -> 呈现结果并确认 -> 上传至订阅服务器 -> 恢复代理”。
+`process_ips.py` 是全流程集成脚本，一键完成“下载 IP 列表 -> 提示断开代理 -> 合并已有订阅 IP -> cfst 测速 -> 筛选最优 IP -> 呈现结果并确认 -> 上传至订阅服务器”。
 
 ```bash
 # 1. 默认带宽模式测速 (测试下载速度，保留速度 >= 10 MB/s 的前 20 个 IP，呈现结果后提示确认推送)
@@ -216,7 +217,7 @@ curl -X PUT "https://<your-worker-domain>/api/update?token=YOUR_TOKEN&type=ips&m
 ## 🔐 安全规范与注意事项
 
 1. **凭证安全**：妥善保管 `ADMIN` 密码、`TOKEN` 以及 `TG_API_ID` / `TG_API_HASH`，切勿泄露或提交至公开仓库。
-2. **权限说明**：`process_ips.py` 脚本在测速前后会执行 `sudo systemctl stop/start sing-box.service` 操作，以确保测速不受本地代理干扰。运行用户需具备相应的 `sudo` 权限。
+2. **代理干扰说明**：`process_ips.py` 脚本在从 Telegram 下载完 IP 列表后，会交互式提示用户手动断开/关闭代理，用户确认后再开始 `cfst` 测速，以确保测速结果不受代理节点中转影响。
 
 ---
 
