@@ -104,33 +104,6 @@ else
     log "WARP account is already registered."
 fi
 
-# 5. Set WARP mode & Tunnel Endpoint
-WARP_MODE="${WARP_MODE:-warp}"
-log "Setting WARP mode to ${WARP_MODE}..."
-warp-cli --accept-tos mode "$WARP_MODE" 2>/dev/null || true
-
-if [ -n "$WARP_ENDPOINT" ]; then
-    log "Setting user-defined WARP tunnel endpoint: ${WARP_ENDPOINT}..."
-    warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
-else
-    log "Using WARP native default Endpoint (resetting endpoint override if any)..."
-    warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
-fi
-
-log "Connecting to Cloudflare WARP..."
-warp-cli --accept-tos connect 2>/dev/null || true
-
-# Wait for WARP connection
-for i in $(seq 1 30); do
-    STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
-    if echo "$STATUS" | grep -q "Connected"; then
-        log "Cloudflare WARP connected successfully!"
-        break
-    fi
-    log "Waiting for WARP connection... ($i/30)"
-    sleep 1
-done
-
 # 5. Generate sing-box configuration (SOCKS5 inbound, direct outbound)
 SOCKS_PORT="${SOCKS_PORT:-1080}"
 CONFIG_FILE="/etc/sing-box/config.json"
@@ -193,7 +166,47 @@ else
 EOF
 fi
 
-# 6. Graceful shutdown signal handler
+# 6. Validate and start sing-box process immediately
+log "Validating sing-box configuration..."
+if ! sing-box check -c "$CONFIG_FILE"; then
+    error "sing-box configuration check failed!"
+    exit 1
+fi
+
+log "Starting sing-box SOCKS5 proxy..."
+sing-box run -c "$CONFIG_FILE" &
+SINGBOX_PID=$!
+
+# 7. Set WARP mode, Tunnel Endpoint & Connect
+WARP_MODE="${WARP_MODE:-warp}"
+log "Setting WARP mode to ${WARP_MODE}..."
+warp-cli --accept-tos mode "$WARP_MODE" 2>/dev/null || true
+
+if [ -n "$WARP_ENDPOINT" ]; then
+    log "Setting user-defined WARP tunnel endpoint: ${WARP_ENDPOINT}..."
+    warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
+else
+    log "Using WARP native default Endpoint..."
+    warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
+fi
+
+log "Connecting to Cloudflare WARP..."
+warp-cli --accept-tos connect 2>/dev/null || true
+
+# Check WARP connection status in background loop
+(
+    for i in $(seq 1 30); do
+        STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
+        if echo "$STATUS" | grep -q "Connected"; then
+            log "Cloudflare WARP connected successfully!"
+            break
+        fi
+        log "Waiting for WARP connection... ($i/30)"
+        sleep 1
+    done
+) &
+
+# 8. Graceful shutdown signal handler
 cleanup() {
     log "Shutting down services..."
     if [ -n "$SINGBOX_PID" ]; then
@@ -207,20 +220,8 @@ cleanup() {
 
 trap cleanup SIGINT SIGTERM
 
-# 7. Validate and start sing-box process
-log "Validating sing-box configuration..."
-if ! sing-box check -c "$CONFIG_FILE"; then
-    error "sing-box configuration check failed!"
-    exit 1
-fi
-
-log "Starting sing-box SOCKS5 proxy..."
-sing-box run -c "$CONFIG_FILE" &
-SINGBOX_PID=$!
-
 log "=========================================================="
 log "Container initialized and services are running!"
-log "WARP Status  : $(warp-cli --accept-tos status 2>/dev/null | grep -i "Status" || echo "Running")"
 log "SOCKS5 Proxy : Listening on port ${SOCKS_PORT} (Direct outbound via WARP)"
 log "=========================================================="
 
