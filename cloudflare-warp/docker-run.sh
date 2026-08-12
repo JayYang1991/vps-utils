@@ -175,13 +175,26 @@ do_logs() {
 do_status() {
   check_docker
   if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    log "容器 ${CONTAINER_NAME} 正在运行:"
+    log "容器 ${CONTAINER_NAME} 运行状态:"
     docker ps --filter "name=${CONTAINER_NAME}"
     echo ""
     log "容器内 Cloudflare WARP 连通状态:"
     docker exec "$CONTAINER_NAME" warp-cli --accept-tos status 2>/dev/null || docker exec "$CONTAINER_NAME" warp-cli status 2>/dev/null || true
     echo ""
-    log "容器内 SOCKS5 端口监听状态:"
+    log "容器内 sing-box 服务状态:"
+    if docker exec "$CONTAINER_NAME" pgrep -x sing-box &>/dev/null; then
+      SINGBOX_VER=$(docker exec "$CONTAINER_NAME" sing-box version 2>/dev/null | head -n 1 || echo "Running")
+      success "sing-box 进程状态 : 已启动 (${SINGBOX_VER})"
+    else
+      error "sing-box 进程状态 : 未运行 (进程可能已崩溃或未启动)"
+    fi
+    if docker exec "$CONTAINER_NAME" sing-box check -c /etc/sing-box/config.json &>/dev/null; then
+      success "sing-box 配置状态 : 校验通过 (/etc/sing-box/config.json)"
+    else
+      warn "sing-box 配置状态 : 校验失败"
+    fi
+    echo ""
+    log "容器内 SOCKS5 端口监听状态 (ss -tlpn):"
     docker exec "$CONTAINER_NAME" ss -tlpn 2>/dev/null || true
   else
     warn "容器 ${CONTAINER_NAME} 未运行。"
