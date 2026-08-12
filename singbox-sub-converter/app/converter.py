@@ -154,8 +154,16 @@ def fetch_preferred_nodes(vless_grpc_inbound: dict) -> list:
 
 def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") -> list:
     """Parse sing-box server config. Non-preferred nodes use default_server_host as connection target."""
+    local_socks_node = {
+        "type": "socks5",
+        "name": "本地Socks5节点",
+        "server": "127.0.0.1",
+        "port": 1080
+    }
+    nodes = [local_socks_node]
+    
     if not os.path.exists(sb_config_path):
-        return []
+        return nodes
         
     with open(sb_config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
@@ -175,7 +183,7 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
         else:
             other_ibs.append(ib)
             
-    nodes = fetch_preferred_nodes(vless_grpc_ib)
+    nodes.extend(fetch_preferred_nodes(vless_grpc_ib))
     server_host = default_server_host or "127.0.0.1"
     
     for ib in other_ibs:
@@ -480,6 +488,14 @@ def generate_clash_yaml(nodes: list) -> str:
                 "skip-cert-verify": True,
                 "udp": True
             })
+        elif n["type"] in ["socks", "socks5"]:
+            proxies.append({
+                "name": name,
+                "type": "socks5",
+                "server": n["server"],
+                "port": n["port"],
+                "udp": True
+            })
             
     proxy_groups = [
         {
@@ -646,6 +662,13 @@ def generate_singbox_json(nodes: list) -> str:
                     "server_name": n["sni"]
                 }
             })
+        elif n["type"] in ["socks", "socks5"]:
+            outbounds.append({
+                "type": "socks",
+                "tag": name,
+                "server": n["server"],
+                "server_port": n["port"]
+            })
             
     outbounds.append({
         "type": "direct",
@@ -692,6 +715,9 @@ def generate_base64_v2ray(nodes: list) -> str:
             links.append(link)
         elif n["type"] == "hysteria2":
             link = f"hysteria2://{n['password']}@{n['server']}:{n['port']}?sni={n['sni']}&insecure=0#{encoded_name}"
+            links.append(link)
+        elif n["type"] in ["socks", "socks5"]:
+            link = f"socks5://{n['server']}:{n['port']}#{encoded_name}"
             links.append(link)
             
     raw_text = "\n".join(links)

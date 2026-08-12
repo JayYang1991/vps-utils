@@ -4,6 +4,9 @@
 
 ## 核心功能与转换规则
 
+0. **固定本地 Socks5 节点**:
+   - 订阅转换前固定增加 1 个本地 Socks5 节点（`127.0.0.1:1080`，无用户名密码，节点备注为 `（本地Socks5节点）`）。
+
 1. **优选 IP 节点转换**:
    - 自动读取 `sing-box` 服务端配置中 `tag` 为 `vless-grpc` 的 inbound 参数（`host` 与 `uuid`）。
    - 使用请求接口 `https://sub.19910417.xyz/sub?host={host}&uuid={uuid}` 并带有 `User-Agent: v2rayN/edgetunnel (https://github.com/cmliu/edgetunnel)` 动态拉取 Cloudflare 优选 IP 节点。
