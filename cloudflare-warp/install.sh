@@ -191,7 +191,7 @@ esac
 
 log "启动并启用 Systemd 服务 warp-svc..."
 systemctl daemon-reload || true
-systemctl enable --now warp-svc
+systemctl enable --now warp-svc 2>/dev/null || true
 systemctl restart warp-svc || true
 
 log "等待 warp-svc 后台服务建立 Socket 端口..."

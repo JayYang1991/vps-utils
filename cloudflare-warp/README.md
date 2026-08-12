@@ -8,10 +8,13 @@
 
 ## 📁 脚本清单与功能说明
 
-| 脚本名称 | 核心功能 | 常用应用场景 |
+| 脚本 / 文件 | 核心功能 | 常用应用场景 |
 | --- | --- | --- |
 | **`install.sh`** | 自动配置官方 Apt/Yum 软件源并安装 `cloudflare-warp` 软件包与 `warp-svc` 服务 | 新增或重新安装 Cloudflare WARP 客户端 (用于 VPS 本地接入 WARP 网络) |
 | **`setup-cloudflare-one.sh`** | 自动开启 Linux 内核 IP 转发 (`ip_forward`) 并配置 `iptables` NAT MASQUERADE 规则，智能支持 `warp0` 接口隔离或纯 NAT 通用转发模式 | 将 VPS 配置为 Cloudflare One WARP 流量的指定出口节点 (Exit Node / NAT Gateway)，无论 VPS 是否安装 `cloudflare-warp` 均可适用 |
+| **`Dockerfile`** | 基于 `ubuntu:latest` 基础镜像，使用 `install.sh` 安装 Cloudflare WARP 与 sing-box | 容器化部署 WARP + sing-box SOCKS5 代理 |
+| **`docker-entrypoint.sh`** | 容器入口脚本，自动初始化 `/dev/net/tun`、启动 `warp-svc`、注册 Zero Trust 团队、连接 WARP 并启动 sing-box | 容器自动运维与生命周期管理 |
+| **`docker-run.sh`** | 容器化一键构建与运行管理脚本 | 提供命令行构建、启动、日志查看、状态检测与清理功能 |
 
 ---
 
@@ -86,31 +89,140 @@ sudo bash setup-cloudflare-one.sh --unset
 
 ---
 
-## 🌐 Cloudflare One (Zero Trust) 完整配置步骤指南
+### 3. 容器化一键部署 Cloudflare WARP + Sing-box SOCKS5 代理 (`docker-run.sh` / `Dockerfile`)
 
-为了使客户端流量通过 Cloudflare 后成功指定本 VPS 为出口，需完成以下三大部分的配置：
+如果希望在 Docker 隔离容器中运行 Cloudflare WARP（已配置 Zero Trust 团队）并通过 `sing-box` (直连出站) 对外提供 SOCKS5 代理，可直接使用容器部署方案：
 
-```text
-[ 客户端 WARP Client ] ──(加密隧道)──> [ Cloudflare Zero Trust ] ──(网络路由)──> [ VPS (warp0 或 Connector) ] ──(iptables NAT)──> [ 目标网站/Internet ]
+#### 🛠️ 一键构建与运行容器
+
+```bash
+# 进入目录
+cd cloudflare-warp
+
+# 1. 使用 Zero Trust 团队名及 Service Token 自动认证并启动容器 (推荐无人值守部署)
+bash docker-run.sh -t <YOUR_ZERO_TRUST_TEAM> -i <CLIENT_ID> -s <CLIENT_SECRET> -p 1080
+
+# 或使用 ID:SECRET 合并参数传入 Service Token:
+bash docker-run.sh -t <YOUR_ZERO_TRUST_TEAM> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
+
+# 2. 可选：同时设置带用户名和密码验证的 SOCKS5 代理
+bash docker-run.sh -t <YOUR_ZERO_TRUST_TEAM> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080 -u myuser -w mypassword
 ```
 
-### 阶段一：在 Cloudflare Zero Trust 控制台初始化配置
+#### 📋 容器管理命令参考
 
-1. **登录控制台**：
-   访问 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/)。若未开启，请先绑定组织团队名称（Team Name）。
+```bash
+# 查看容器运行日志 (含 WARP 连接与 sing-box 启动日志)
+bash docker-run.sh --logs
 
-2. **配置客户端注册规则 (Device Enrollment)**：
-   - 导航至 **Settings** -> **WARP Client** -> **Device enrollment** -> **Rules**。
-   - 添加规则（例如根据邮箱后缀 `Allow` 允许团队成员加入），以便客户端和 VPS 可以注册到该 Team。
+# 查看容器运行状态与 WARP 连通状态
+bash docker-run.sh --status
 
-3. **配置 Split Tunnels (流量切分规则)**：
-   - 导航至 **Settings** -> **WARP Client** -> **Profile settings** -> 点击对应 Profile 的 **Edit** -> **Split Tunnels**。
-   - 将模式切换为 **Include IPs and domains**（推荐，仅将特定流量路由至 Zero Trust），并添加你需要通过该 VPS 出口的目标 IP/CIDR 范围（例如 `0.0.0.0/0` 表示全部 IPv4 流量出口，或指定特定的 IP 段/域名）。
-   - 或者在 **Exclude** 模式下，将你需要通过 VPS 出口的 IP 范围从排除列表中移除。
+# 停止并删除容器
+bash docker-run.sh --stop
 
-4. **配置网络路由 (Networks Routes)**：
-   - 导航至 **Networks** -> **Routes** (或 WARP Connector / Mesh)。
-   - 添加目标 CIDR（例如 `0.0.0.0/0` 或私有 IP 段），并将 Destination 绑定为你部署在此 VPS 上的 WARP 节点/Tunnel。
+# 强行重新构建 Docker 镜像并运行
+bash docker-run.sh -t <YOUR_ZERO_TRUST_TEAM> -i <CLIENT_ID> -s <CLIENT_SECRET> -p 1080 --build
+```
+
+#### 🐳 原生 Docker 命令运行示例
+
+如果你习惯直接使用 `docker` 命令行，可以使用环境变量传入 Service Token：
+
+```bash
+# 1. 构建镜像
+docker build -t cloudflare-warp-socks5:latest .
+
+# 2. 运行容器 (必须包含 --cap-add=NET_ADMIN 和 --device /dev/net/tun)
+docker run -d \
+  --name cloudflare-warp-socks5 \
+  --cap-add=NET_ADMIN \
+  --device /dev/net/tun \
+  -p 1080:1080 \
+  -e WARP_TEAM="your-zero-trust-team" \
+  -e WARP_SERVICE_TOKEN_ID="your-client-id.access" \
+  -e WARP_SERVICE_TOKEN_SECRET="your-client-secret" \
+  --restart unless-stopped \
+  cloudflare-warp-socks5:latest
+```
+
+---
+
+## 🌐 Cloudflare Zero Trust 控制台完整配置指南
+
+在部署 VPS 脚本或容器前，需在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) 完成团队初始化、Service Token 创建、设备注册规则与 Split Tunnels 路由配置。以下为详细控制台操作步骤：
+
+```text
+[ 客户端 / SOCKS5 代理 ] ──(加密隧道)──> [ Cloudflare Zero Trust ] ──(网络路由)──> [ VPS 出口 / Internet ]
+```
+
+---
+
+### 第一步：获取 Zero Trust 团队名称 (Team Name)
+
+1. 打开浏览器登录 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/)。
+2. 若属于首次设置，根据页面引导配置团队域名（Team Domain），格式为 `<your-team-name>.cloudflareaccess.com`。
+3. 其中的 **`your-team-name`** 即为容器与脚本参数中的 **`WARP_TEAM` / Team Name**（例如 `my-company`）。
+4. **验证方式**：在控制台左侧导航栏选择 **Settings** -> **Account**，或者查看控制台左上角展示的组织团队名称。
+
+---
+
+### 第二步：创建 Service Token (服务令牌)
+
+Service Token 用于 Docker 容器或 headless 服务器免浏览器交互的无人值守设备注册：
+
+1. 在左侧导航栏，点击 **Access** -> **Service Tokens**。
+2. 点击右上角 **Create Service Token** 按钮。
+3. 填写令牌参数：
+   - **Service Token Name**：输入令牌标识名称（例如 `vps-warp-socks5`）
+   - **Service Token Duration**：选择凭据有效期（建议选择 `Non-expiring` 永久有效或 `1 Year`）
+4. 点击右下角 **Save** 保存。
+5. **保存重要凭据**：页面将弹窗一次性展示该 Service Token 的钥匙信息：
+   - **Client ID**：对应脚本中的 `-i / --token-id` 参数（格式如 `xxxxxx.access`）
+   - **Client Secret**：对应脚本中的 `-s / --token-secret` 参数（格式如 64 位随机字符）
+   - ⚠️ **请务必复制并妥善保存 Client Secret**，该密钥离开当前弹窗后将无法再次提取！
+
+---
+
+### 第三步：配置设备注册策略 (Device Enrollment Rules)
+
+配置许可该 Service Token 进行 WARP 设备的自动注册与接入：
+
+1. 在左侧导航栏，点击 **Settings** -> **WARP Client**。
+2. 在 **Device enrollment**（设备注册）卡片中，点击 **Manage** 按钮。
+3. 切换至 **Rules** 选项卡，点击 **Add a rule** 按钮：
+   - **Rule name**：填入规则名称（如 `Allow-Service-Token-Enroll`）
+   - **Rule action**：选择 `Service Token`
+   - **Selector**：在下拉列表中选择 `Service Token`
+   - **Value**：选择第二步中创建的 Service Token 名称（如 `vps-warp-socks5`）
+4. 点击 **Save rule** 保存规则。
+
+---
+
+### 第四步：配置 Split Tunnels (流量切分与包含路由)
+
+指定哪些网络流量需要被接管并送入 Zero Trust 隧道：
+
+1. 在左侧导航栏，点击 **Settings** -> **WARP Client**。
+2. 在 **Profile settings** 卡片中，选择目标 Profile（默认即为 `Default`），点击右侧的 **Edit** 按钮。
+3. 切换至 **Split Tunnels** 选项卡：
+   - **模式选择**：推荐切换为 **Include IPs and domains**（仅包含模式，仅指定的 IP/域名进入 WARP 隧道），或保留 **Exclude IPs and domains**（排除模式）。
+4. 若选择 **Include** 模式，点击 **Manage** -> **Add IP or domain**：
+   - **Selector**：选择 `IP Address`
+   - **Value**：填入 `0.0.0.0/0`（接管所有 IPv4 流量），或填入特定 CIDR 网段（如 `1.1.1.1/32`）
+5. 点击 **Save destination** 保存规则。
+
+---
+
+### 第五步：配置网络路由 (Networks Routes / Exit Nodes, 可选)
+
+若需将经过 Zero Trust 网络的客户端流量指定由该 VPS 公网 IP 出口（Exit Node / Gateway）：
+
+1. 在左侧导航栏，点击 **Networks** -> **Routes**。
+2. 点击 **Create Route** 按钮：
+   - **CIDR**：填入目标 IP 网段（例如 `0.0.0.0/0` 表示全部出口流量）
+   - **Tunnel / Destination**：选择本 VPS 上注册的 WARP 节点设备或 WARP Connector 实例
+3. 点击 **Save** 保存使路由生效。
 
 ---
 
