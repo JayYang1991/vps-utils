@@ -24,6 +24,7 @@ HOST_PORT="1080"
 WARP_TEAM=""
 WARP_SERVICE_TOKEN_ID=""
 WARP_SERVICE_TOKEN_SECRET=""
+WARP_ENDPOINT=""
 WARP_LICENSE_KEY=""
 WARP_AUTH_TOKEN=""
 SOCKS_USER=""
@@ -40,6 +41,7 @@ show_help() {
   echo "  -i, --token-id <CLIENT_ID>       指定 Cloudflare Access Service Token Client ID"
   echo "  -s, --token-secret <SECRET>      指定 Cloudflare Access Service Token Client Secret"
   echo "      --service-token <ID:SECRET>  使用 ID:SECRET 格式合并指定 Service Token"
+  echo "  -e, --endpoint <IP:PORT>         指定自定义 WARP 节点接入点 (例如: 162.159.192.1:2408)"
   echo "  -k, --license <KEY>              指定 Cloudflare WARP+ 许可证密钥 (License Key)"
   echo "  -p, --port <PORT>                指定宿主机对外映射的 SOCKS5 代理端口 (默认: 1080)"
   echo "  -u, --user <USER>                指定 SOCKS5 代理验证用户名 (可选)"
@@ -85,6 +87,10 @@ while [[ $# -gt 0 ]]; do
       else
         WARP_SERVICE_TOKEN_ID="$2"
       fi
+      shift 2
+      ;;
+    -e | --endpoint)
+      WARP_ENDPOINT="$2"
       shift 2
       ;;
     -k | --license)
@@ -176,7 +182,7 @@ do_status() {
     docker exec "$CONTAINER_NAME" warp-cli --accept-tos status 2>/dev/null || docker exec "$CONTAINER_NAME" warp-cli status 2>/dev/null || true
     echo ""
     log "容器内 SOCKS5 端口监听状态:"
-    docker exec "$CONTAINER_NAME" netstat -tlpn 2>/dev/null || docker exec "$CONTAINER_NAME" ss -tlpn 2>/dev/null || true
+    docker exec "$CONTAINER_NAME" ss -tlpn 2>/dev/null || true
   else
     warn "容器 ${CONTAINER_NAME} 未运行。"
   fi
@@ -216,6 +222,9 @@ do_run() {
   fi
   if [[ -n "$WARP_SERVICE_TOKEN_SECRET" ]]; then
     DOCKER_ENV_ARGS+=("-e" "WARP_SERVICE_TOKEN_SECRET=${WARP_SERVICE_TOKEN_SECRET}")
+  fi
+  if [[ -n "$WARP_ENDPOINT" ]]; then
+    DOCKER_ENV_ARGS+=("-e" "WARP_ENDPOINT=${WARP_ENDPOINT}")
   fi
   if [[ -n "$WARP_LICENSE_KEY" ]]; then
     DOCKER_ENV_ARGS+=("-e" "WARP_LICENSE_KEY=${WARP_LICENSE_KEY}")

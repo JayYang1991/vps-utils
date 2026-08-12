@@ -98,22 +98,23 @@ else
     log "WARP account is already registered."
 fi
 
-# 4. Set WARP mode and connect
-WARP_MODE="${WARP_MODE:-warp}"
-log "Setting WARP mode to ${WARP_MODE}..."
-warp-cli --accept-tos mode "$WARP_MODE" || warp-cli mode "$WARP_MODE" || true
+# 5. Set custom tunnel endpoint if provided
+if [ -n "$WARP_ENDPOINT" ]; then
+    log "Setting custom WARP tunnel endpoint: ${WARP_ENDPOINT}..."
+    warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
+fi
 
 log "Connecting to Cloudflare WARP..."
 warp-cli --accept-tos connect || warp-cli connect || true
 
-# Wait up to 15 seconds for connection status
-for i in $(seq 1 15); do
+# Wait up to 30 seconds for connection status
+for i in $(seq 1 30); do
     STATUS=$(warp-cli --accept-tos status 2>/dev/null || warp-cli status 2>/dev/null || echo "")
     if echo "$STATUS" | grep -q "Connected"; then
         log "Cloudflare WARP connected successfully!"
         break
     fi
-    log "Waiting for WARP connection... ($i/15)"
+    log "Waiting for WARP connection... ($i/30)"
     sleep 1
 done
 
