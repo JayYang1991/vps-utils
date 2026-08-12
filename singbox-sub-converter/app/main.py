@@ -23,6 +23,8 @@ from app.converter import (
     ensure_reality_in_clash_yaml,
     ensure_extra_nodes_in_singbox_json,
     fetch_subconfigs,
+    get_server_config_url,
+    set_server_config_url,
     logger,
     DATA_DIR
 )
@@ -254,6 +256,19 @@ async def refresh_ip(request: Request, current_user: str = Depends(get_current_u
 
     return StreamingResponse(generate(), media_type="text/plain")
 
+@app.post("/api/settings")
+async def update_settings(request: Request, current_user: str = Depends(get_current_user)):
+    """Save active conversion config_url setting to server."""
+    data = await request.json()
+    config_url = data.get("config_url")
+    if not config_url:
+        raise HTTPException(status_code=400, detail="Missing config_url")
+    if set_server_config_url(config_url):
+        logger.info(f"✅ 服务端转换规则配置已更新保存为: {config_url}")
+        return {"status": "success", "config_url": config_url}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save settings")
+
 @app.get("/config/info")
 async def get_config_info(request: Request, current_user: str = Depends(get_current_user)):
     base = get_base_url(request)
@@ -262,6 +277,7 @@ async def get_config_info(request: Request, current_user: str = Depends(get_curr
     return {
         "token": SUB_TOKEN,
         "external_url": base,
+        "current_config_url": get_server_config_url(),
         "sub_url": f"{base}/sub?token={SUB_TOKEN}" if SUB_TOKEN else f"{base}/sub",
         "clash_url": f"{base}/clash?token={SUB_TOKEN}" if SUB_TOKEN else f"{base}/clash",
         "singbox_url": f"{base}/singbox?token={SUB_TOKEN}" if SUB_TOKEN else f"{base}/singbox",
@@ -283,10 +299,15 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
     ua = request.headers.get("user-agent", "").lower()
     tgt = (target or flag).lower()
     
-    is_clash = "clash" in tgt or "mihomo" in tgt or "stash" in tgt or any(k in ua for k in ["clash", "stash", "mihomo", "shadowrocket", "verge"])
     is_singbox = "singbox" in tgt or "sing-box" in tgt or any(k in ua for k in ["sing-box", "singbox", "box"])
+    is_clash = not is_singbox and ("clash" in tgt or "mihomo" in tgt or "stash" in tgt or any(k in ua for k in ["clash", "stash", "mihomo", "shadowrocket", "verge"]))
     
-    if is_clash:
+    if is_singbox:
+        content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox") or cached_singbox_config
+        if content:
+            content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
+        return Response(content=content, media_type="application/json; charset=utf-8")
+    elif is_clash:
         content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "clash", config_url=config)
         if content:
             content = ensure_reality_in_clash_yaml(content, parsed_nodes_cache)
@@ -299,11 +320,6 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
             "connection": "close"
         }
         return Response(content=content, media_type="text/yaml; charset=utf-8", headers=clash_headers)
-    elif is_singbox:
-        content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox", config_url=config) or cached_singbox_config
-        if content:
-            content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
-        return Response(content=content, media_type="application/json; charset=utf-8")
     else:
         return Response(content=cached_base64_config, media_type="text/plain; charset=utf-8")
 
@@ -330,7 +346,7 @@ async def get_clash_sub(request: Request, token: str = "", config: str = ""):
     return Response(content=content, media_type="text/yaml; charset=utf-8", headers=clash_headers)
 
 @app.get("/singbox")
-async def get_singbox_sub(request: Request, token: str = "", config: str = ""):
+async def get_singbox_sub(request: Request, token: str = ""):
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /singbox")
         return Response(content="# Error: Invalid Token", media_type="application/json", status_code=403)
@@ -338,7 +354,7 @@ async def get_singbox_sub(request: Request, token: str = "", config: str = ""):
     ensure_fresh_nodes()
     
     v2ray_url = f"{base_url}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base_url}/v2ray"
-    content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox", config_url=config) or cached_singbox_config
+    content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox") or cached_singbox_config
     if content:
         content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
     return Response(content=content, media_type="application/json; charset=utf-8")

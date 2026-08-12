@@ -94,9 +94,9 @@
                     <label class="text-xs font-semibold text-indigo-300 flex items-center gap-1.5">
                         <span>🎯 转换规则配置文件 (SUBCONFIG)</span>
                     </label>
-                    <span class="text-[11px] text-emerald-400">已默认预设 Online_Full_CF 规则</span>
+                    <span id="configStatusTip" class="text-[11px] text-emerald-400">已保存至服务端</span>
                 </div>
-                <select id="subConfigSelect" onchange="updateSubUrls()" class="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700/90 text-slate-200 text-xs rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition cursor-pointer">
+                <select id="subConfigSelect" onchange="handleConfigChange()" class="w-full px-3.5 py-2.5 bg-slate-950/90 border border-slate-700/90 text-slate-200 text-xs rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 transition cursor-pointer">
                     <option value="https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini">🔥 默认规则: 识别多地区、CloudFlareCDN 负载均衡 CF节点专用 Online_Full_MultiMode_CF</option>
                 </select>
             </div>
@@ -222,7 +222,7 @@
                     <p class="text-[11px] text-slate-400 leading-relaxed">
                         • 规则 1：读取服务端 <code>vless-grpc</code> 的 host 与 uuid，通过 edgetunnel 获取 Cloudflare 优选 IP 节点并替换配置。<br>
                         • 规则 2：解析服务端 Reality 及 Hysteria2 等协议节点，自动衍生 Public Key，追加在优选节点之后。<br>
-                        • 规则 3：默认预设 `ACL4SSR_Online_Full_CF` 规则，支持在线 `subapi.19910417.xyz` 转换。
+                        • 规则 3：默认预设 `ACL4SSR_Online_Full_CF` Clash 规则及 sing-box 固定模板，支持在线 `subapi.19910417.xyz` 转换。
                     </p>
                 </div>
             </div>
@@ -300,6 +300,7 @@
         let subUrl = "";
         let qrCodeObj = null;
         let activeQRUrl = "";
+        let currentConfigUrl = DEFAULT_CONFIG_URL;
 
         async function checkAuth() {
             try {
@@ -332,7 +333,7 @@
             subConfigSelect.innerHTML = "";
             if (!Array.isArray(groups)) return;
 
-            let hasDefaultSelected = false;
+            let hasSelected = false;
 
             groups.forEach(g => {
                 const optgroup = document.createElement('optgroup');
@@ -342,9 +343,9 @@
                         const option = document.createElement('option');
                         option.value = opt.value;
                         option.textContent = opt.label;
-                        if (opt.value === DEFAULT_CONFIG_URL) {
+                        if (opt.value === currentConfigUrl) {
                             option.selected = true;
-                            hasDefaultSelected = true;
+                            hasSelected = true;
                         }
                         optgroup.appendChild(option);
                     });
@@ -352,10 +353,10 @@
                 subConfigSelect.appendChild(optgroup);
             });
 
-            if (!hasDefaultSelected) {
+            if (!hasSelected) {
                 const defaultOpt = document.createElement('option');
-                defaultOpt.value = DEFAULT_CONFIG_URL;
-                defaultOpt.textContent = "🔥 默认规则: 识别多地区、CloudFlareCDN 负载均衡 CF节点专用 Online_Full_MultiMode_CF";
+                defaultOpt.value = currentConfigUrl || DEFAULT_CONFIG_URL;
+                defaultOpt.textContent = "🔥 当前生效规则配置";
                 defaultOpt.selected = true;
                 subConfigSelect.insertBefore(defaultOpt, subConfigSelect.firstChild);
             }
@@ -363,15 +364,41 @@
             updateSubUrls();
         }
 
-        function updateSubUrls() {
-            const selectedConfig = subConfigSelect.value || DEFAULT_CONFIG_URL;
-            const configParam = selectedConfig ? `&config=${encodeURIComponent(selectedConfig)}` : "";
+        async function handleConfigChange() {
+            const selectedConfig = subConfigSelect.value;
+            const statusTip = document.getElementById('configStatusTip');
+            if (statusTip) statusTip.textContent = '⌛ 正在保存配置至服务端...';
 
-            subUrl = rawBaseData.sub_url + configParam;
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ config_url: selectedConfig })
+                });
+
+                if (res.ok) {
+                    currentConfigUrl = selectedConfig;
+                    if (statusTip) {
+                        statusTip.textContent = '✅ 已成功保存至服务端';
+                        setTimeout(() => { statusTip.textContent = '已保存至服务端'; }, 3000);
+                    }
+                } else {
+                    alert('保存配置至服务端失败！');
+                    if (statusTip) statusTip.textContent = '❌ 保存失败';
+                }
+            } catch (e) {
+                console.error("Error saving server config:", e);
+                alert('请求保存服务端配置发生错误: ' + e.message);
+                if (statusTip) statusTip.textContent = '❌ 保存错误';
+            }
+        }
+
+        function updateSubUrls() {
+            subUrl = rawBaseData.sub_url;
             subUrlInput.value = subUrl;
-            clashUrlInput.value = rawBaseData.clash_url + configParam;
-            singboxUrlInput.value = rawBaseData.singbox_url + configParam;
-            v2rayUrlInput.value = rawBaseData.v2ray_url; // v2ray base64 does not use config param
+            clashUrlInput.value = rawBaseData.clash_url;
+            singboxUrlInput.value = rawBaseData.singbox_url;
+            v2rayUrlInput.value = rawBaseData.v2ray_url;
         }
 
         async function handleLogin() {
@@ -441,6 +468,10 @@
             loginSection.classList.add('hidden');
             mainSection.classList.remove('hidden');
             
+            if (data.current_config_url) {
+                currentConfigUrl = data.current_config_url;
+            }
+
             rawBaseData = {
                 sub_url: data.sub_url,
                 clash_url: data.clash_url,

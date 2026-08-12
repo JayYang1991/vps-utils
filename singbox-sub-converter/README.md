@@ -27,8 +27,9 @@
      - `/singbox`: 强制输出 sing-box 格式
      - `/v2ray` / `/base64`: 强制输出 Base64 格式
 
-4. **远程规则配置与在线 API 转换**:
-   - 支持读取 `SUBCONFIG.json` 规则列表，前端下拉选单提供多组预设，默认启用 `ACL4SSR_Online_Full_CF.ini`。
+4. **服务端规则持久化与离线/在线 API 转换**:
+   - 转换规则配置在服务端持久化存储（`data/settings.json`），自适应及专属订阅链接保持纯净简洁（不体现 `config` 参数路径）。
+   - 前端切换下拉规则时自动将选择保存至服务端，针对 sing-box 客户端获取配置时固定使用 `singbox-template.json` 模板。
    - 通过 `https://subapi.19910417.xyz/` 进行高级订阅转换，本地离线引擎自动兜底保障高可用。
 
 5. **订阅 Token / UUID 动态安全重置**:

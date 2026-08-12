@@ -15,13 +15,41 @@ EDGETUNNEL_SUB_URL = "https://sub.19910417.xyz/sub?host={host}&uuid={uuid}"
 SUBAPI_CONVERT_URL = "https://subapi.19910417.xyz/sub?target={target}&url={url}&filter_local=false"
 REMOTE_SUBCONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/edgetunnel/main/SUBCONFIG.json"
 DEFAULT_CONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini"
+DEFAULT_SINGBOX_CONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/sing-box/singbox-template.ini"
 USER_AGENT = "v2rayN/edgetunnel (https://github.com/cmliu/edgetunnel)"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "..", "data")
 LOG_FILE = os.path.join(DATA_DIR, "app.log")
+SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
+
+def get_server_config_url() -> str:
+    """Get active default Clash config_url from settings.json or fallback to DEFAULT_CONFIG_URL."""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("config_url") or DEFAULT_CONFIG_URL
+        except Exception as e:
+            logger.error(f"Error reading settings.json: {e}")
+    return DEFAULT_CONFIG_URL
+
+def set_server_config_url(config_url: str) -> bool:
+    """Save active Clash config_url to settings.json."""
+    try:
+        data = {}
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        data["config_url"] = config_url
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        logger.error(f"Error writing settings.json: {e}")
+        return False
 
 # Configure Logger
 logger = logging.getLogger("subconverter")
@@ -277,7 +305,10 @@ def convert_via_subapi(sub_url: str, target: str, config_url: str = "", max_retr
     subapi_target = "clash" if "clash" in target.lower() else "singbox"
     encoded_url = urllib.parse.quote(sub_url, safe="")
     
-    cfg = config_url or DEFAULT_CONFIG_URL
+    if subapi_target == "singbox":
+        cfg = DEFAULT_SINGBOX_CONFIG_URL
+    else:
+        cfg = config_url or get_server_config_url()
     api_url = f"{SUBAPI_CONVERT_URL.format(target=subapi_target, url=encoded_url)}&config={urllib.parse.quote(cfg, safe='')}"
     curl_cmd = f"curl -s -L -A \"Mozilla/5.0\" \"{api_url}\""
     
@@ -674,30 +705,37 @@ def generate_clash_yaml(nodes: list) -> str:
     
     return yaml.dump(clash_config, allow_unicode=True, sort_keys=False)
 
+_cached_singbox_template = ""
+_cached_singbox_template_time = 0
+TEMPLATE_CACHE_TTL = 600
+
+def fetch_singbox_template() -> str:
+    global _cached_singbox_template, _cached_singbox_template_time
+    now = time.time()
+    if _cached_singbox_template and (now - _cached_singbox_template_time < TEMPLATE_CACHE_TTL):
+        return _cached_singbox_template
+        
+    req = urllib.request.Request(DEFAULT_SINGBOX_CONFIG_URL, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            if resp.status == 200:
+                content = resp.read().decode("utf-8")
+                json.loads(content)
+                _cached_singbox_template = content
+                _cached_singbox_template_time = now
+                return content
+    except Exception as e:
+        logger.error(f"Error fetching singbox template: {e}")
+        
+    return _cached_singbox_template
+
 def generate_singbox_json(nodes: list) -> str:
-    """Local fallback: Generate sing-box client JSON configuration."""
-    outbounds = []
-    node_tags = [n["name"] for n in nodes]
-    
-    outbounds.append({
-        "type": "selector",
-        "tag": "select",
-        "outbounds": ["auto", "direct"] + node_tags,
-        "default": "auto"
-    })
-    
-    outbounds.append({
-        "type": "urltest",
-        "tag": "auto",
-        "outbounds": node_tags,
-        "url": "https://www.gstatic.com/generate_204",
-        "interval": "3m"
-    })
-    
+    """Generate sing-box JSON configuration using DEFAULT_SINGBOX_CONFIG_URL template with injected outbounds."""
+    node_outbounds = []
     for n in nodes:
         name = n["name"]
         if n["type"] == "vless-ws":
-            outbounds.append({
+            node_outbounds.append({
                 "type": "vless",
                 "tag": name,
                 "server": n["server"],
@@ -739,9 +777,9 @@ def generate_singbox_json(nodes: list) -> str:
             }
             if n.get("flow"):
                 item["flow"] = n["flow"]
-            outbounds.append(item)
+            node_outbounds.append(item)
         elif n["type"] == "hysteria2":
-            outbounds.append({
+            node_outbounds.append({
                 "type": "hysteria2",
                 "tag": name,
                 "server": n["server"],
@@ -753,38 +791,62 @@ def generate_singbox_json(nodes: list) -> str:
                 }
             })
         elif n["type"] in ["socks", "socks5"]:
-            outbounds.append({
+            item = {
                 "type": "socks",
                 "tag": name,
                 "server": n["server"],
                 "server_port": n["port"]
-            })
+            }
+            if n.get("user") and n.get("pass"):
+                item["username"] = n["user"]
+                item["password"] = n["pass"]
+            node_outbounds.append(item)
+
+    node_tags = [ob["tag"] for ob in node_outbounds]
+    template_str = fetch_singbox_template()
+    
+    if template_str:
+        try:
+            template = json.loads(template_str)
+            existing_outbounds = template.get("outbounds", [])
             
-    outbounds.append({
+            for ob in existing_outbounds:
+                if ob.get("type") in ["urltest", "selector"]:
+                    ob_list = ob.get("outbounds", [])
+                    filtered = [t for t in ob_list if t != "direct"]
+                    ob["outbounds"] = node_tags + filtered
+
+            template["outbounds"] = existing_outbounds + node_outbounds
+            return json.dumps(template, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.error(f"Error building singbox config from template: {e}")
+
+    # Local fallback
+    fallback_outbounds = []
+    fallback_outbounds.append({
+        "type": "selector",
+        "tag": "select",
+        "outbounds": ["auto", "direct"] + node_tags,
+        "default": "auto"
+    })
+    fallback_outbounds.append({
+        "type": "urltest",
+        "tag": "auto",
+        "outbounds": node_tags,
+        "url": "https://www.gstatic.com/generate_204",
+        "interval": "3m"
+    })
+    fallback_outbounds.extend(node_outbounds)
+    fallback_outbounds.append({
         "type": "direct",
         "tag": "direct"
     })
-    
     config = {
-        "log": {
-            "level": "info",
-            "timestamp": True
-        },
-        "inbounds": [
-            {
-                "type": "mixed",
-                "tag": "mixed-in",
-                "listen": "127.0.0.1",
-                "listen_port": 7890
-            }
-        ],
-        "outbounds": outbounds,
-        "route": {
-            "auto_detect_interface": True,
-            "final": "select"
-        }
+        "log": {"level": "info", "timestamp": True},
+        "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 7890}],
+        "outbounds": fallback_outbounds,
+        "route": {"auto_detect_interface": True, "final": "select"}
     }
-    
     return json.dumps(config, indent=2, ensure_ascii=False)
 
 def generate_base64_v2ray(nodes: list) -> str:

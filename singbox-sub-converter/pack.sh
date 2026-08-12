@@ -50,6 +50,7 @@ tar --exclude="./install.sh" \
     --exclude="./data/app.log" \
     --exclude="./data/users.json" \
     --exclude="./*.log" \
+    --exclude="./*.ini" \
     -czf "${TMP_OUTPUT}" .
 
 mv "${TMP_OUTPUT}" "${OUTPUT_PATH}"
