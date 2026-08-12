@@ -237,12 +237,17 @@ Service Token 用于本地容器免浏览器人工点击的自动鉴权登录：
 
 ### 终端 curl 验证 SOCKS5 代理
 
-```bash
-# 测试经由 WARP SOCKS5 代理访问 Cloudflare Trace 节点
-curl -x socks5://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace
+> 💡 **提示**：建议使用 `socks5h://`（带 `h` 表示 DNS 域名解析在代理服务端 / WARP 内部完成，可有效防止本地 DNS 污染导致连接重置）。
 
-# 若设置了用户名和密码:
-curl -x socks5://myuser:mypass@127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace
+```bash
+# 1. 测试经由 WARP SOCKS5 代理访问 Cloudflare Trace 节点
+curl -x socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace
+
+# 2. 测试访问外网
+curl -x socks5h://127.0.0.1:1080 https://www.google.com
+
+# 3. 若设置了代理用户名和密码:
+curl -x socks5h://myuser:mypass@127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
 **预期输出**中应包含：
