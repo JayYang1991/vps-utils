@@ -305,10 +305,14 @@ def convert_via_subapi(sub_url: str, target: str, config_url: str = "", max_retr
     subapi_target = "clash" if "clash" in target.lower() else "singbox"
     encoded_url = urllib.parse.quote(sub_url, safe="")
     
-    if subapi_target == "singbox":
-        cfg = DEFAULT_SINGBOX_CONFIG_URL
+    if not config_url:
+        if subapi_target == "singbox":
+            cfg = DEFAULT_SINGBOX_CONFIG_URL
+        else:
+            cfg = get_server_config_url()
     else:
-        cfg = config_url or get_server_config_url()
+        cfg = config_url
+
     api_url = f"{SUBAPI_CONVERT_URL.format(target=subapi_target, url=encoded_url)}&config={urllib.parse.quote(cfg, safe='')}"
     curl_cmd = f"curl -s -L -A \"Mozilla/5.0\" \"{api_url}\""
     
@@ -319,7 +323,8 @@ def convert_via_subapi(sub_url: str, target: str, config_url: str = "", max_retr
             with urllib.request.urlopen(req, timeout=current_timeout) as resp:
                 status_code = resp.status
                 content = resp.read().decode("utf-8")
-                if status_code == 200 and len(content) > 100 and ("proxies:" in content or "outbounds:" in content or "port:" in content):
+                is_valid_content = any(k in content for k in ["proxies", "outbounds", "outbound", "port", "inbounds"])
+                if status_code == 200 and len(content) > 100 and is_valid_content:
                     logger.info(f"✅ Subapi 订阅转换成功! [目标: {target}, 策略规则: {cfg}, 响应大小: {len(content)} 字节, 第 {attempt} 次尝试]")
                     return content
                 else:
@@ -478,8 +483,51 @@ def ensure_reality_utls_in_singbox_dict(data: dict) -> bool:
                             modified = True
     return modified
 
+def patch_singbox_direct_tag(data: dict) -> bool:
+    """Patch sing-box JSON dict: if outbounds contains a node with tag 'DIRECT', change its tag to 'direct'.
+    Also update any references in selector/urltest outbounds list, route rules, or dns servers from 'DIRECT' to 'direct'.
+    """
+    modified = False
+    outbounds = data.get("outbounds", [])
+    if isinstance(outbounds, list):
+        for ob in outbounds:
+            if isinstance(ob, dict):
+                if ob.get("tag") == "DIRECT":
+                    ob["tag"] = "direct"
+                    modified = True
+                
+                ob_list = ob.get("outbounds")
+                if isinstance(ob_list, list):
+                    for idx, item in enumerate(ob_list):
+                        if item == "DIRECT":
+                            ob_list[idx] = "direct"
+                            modified = True
+
+    route = data.get("route", {})
+    if isinstance(route, dict):
+        if route.get("final") == "DIRECT":
+            route["final"] = "direct"
+            modified = True
+        rules = route.get("rules", [])
+        if isinstance(rules, list):
+            for rule in rules:
+                if isinstance(rule, dict) and rule.get("outbound") == "DIRECT":
+                    rule["outbound"] = "direct"
+                    modified = True
+
+    dns = data.get("dns", {})
+    if isinstance(dns, dict):
+        servers = dns.get("servers", [])
+        if isinstance(servers, list):
+            for srv in servers:
+                if isinstance(srv, dict) and srv.get("detour") == "DIRECT":
+                    srv["detour"] = "direct"
+                    modified = True
+
+    return modified
+
 def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list) -> str:
-    """Ensure local Socks5 and missing extra nodes are present in sing-box JSON configuration, and fix reality utls."""
+    """Ensure local Socks5 and missing extra nodes are present in sing-box JSON configuration, fix reality utls and patch DIRECT tags."""
     if not json_content:
         return json_content
     try:
@@ -487,9 +535,11 @@ def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list) -> str:
         if not isinstance(data, dict):
             return json_content
             
-        modified = ensure_reality_utls_in_singbox_dict(data)
+        modified_utls = ensure_reality_utls_in_singbox_dict(data)
+        modified_direct = patch_singbox_direct_tag(data)
+        modified = modified_utls or modified_direct
 
-        extra_nodes = [n for n in nodes if n.get("type") in ["socks", "socks5"]] if nodes else []
+        extra_nodes = [n for n in nodes if n.get("type") in ["vless-reality", "hysteria2", "socks", "socks5"]] if nodes else []
         outbounds = data.get("outbounds", [])
         if not isinstance(outbounds, list):
             outbounds = []
@@ -502,7 +552,46 @@ def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list) -> str:
             if not tag or tag in existing_tags:
                 continue
                 
-            if n.get("type") in ["socks", "socks5"]:
+            if n.get("type") == "vless-reality":
+                ob_item = {
+                    "type": "vless",
+                    "tag": tag,
+                    "server": n["server"],
+                    "server_port": n["port"],
+                    "uuid": n["uuid"],
+                    "tls": {
+                        "enabled": True,
+                        "server_name": n["sni"],
+                        "utls": {
+                            "enabled": True,
+                            "fingerprint": "chrome"
+                        },
+                        "reality": {
+                            "enabled": True,
+                            "public_key": n["public_key"],
+                            "short_id": n.get("short_id", "")
+                        }
+                    }
+                }
+                if n.get("flow"):
+                    ob_item["flow"] = n["flow"]
+                outbounds.append(ob_item)
+                added_tags.append(tag)
+            elif n.get("type") == "hysteria2":
+                ob_item = {
+                    "type": "hysteria2",
+                    "tag": tag,
+                    "server": n["server"],
+                    "server_port": n["port"],
+                    "password": n["password"],
+                    "tls": {
+                        "enabled": True,
+                        "server_name": n["sni"]
+                    }
+                }
+                outbounds.append(ob_item)
+                added_tags.append(tag)
+            elif n.get("type") in ["socks", "socks5"]:
                 ob_item = {
                     "type": "socks",
                     "tag": tag,
@@ -720,12 +809,13 @@ def fetch_singbox_template() -> str:
         with urllib.request.urlopen(req, timeout=6) as resp:
             if resp.status == 200:
                 content = resp.read().decode("utf-8")
-                json.loads(content)
-                _cached_singbox_template = content
-                _cached_singbox_template_time = now
-                return content
+                data = json.loads(content)
+                if isinstance(data, dict) and "outbounds" in data:
+                    _cached_singbox_template = content
+                    _cached_singbox_template_time = now
+                    return content
     except Exception as e:
-        logger.error(f"Error fetching singbox template: {e}")
+        logger.debug(f"Notice: singbox config URL ({DEFAULT_SINGBOX_CONFIG_URL}) is not a JSON template or fetch failed: {e}")
         
     return _cached_singbox_template
 
@@ -817,6 +907,7 @@ def generate_singbox_json(nodes: list) -> str:
                     ob["outbounds"] = node_tags + filtered
 
             template["outbounds"] = existing_outbounds + node_outbounds
+            patch_singbox_direct_tag(template)
             return json.dumps(template, indent=2, ensure_ascii=False)
         except Exception as e:
             logger.error(f"Error building singbox config from template: {e}")
@@ -884,13 +975,17 @@ def generate_subscription(sb_config_path: str, target: str = "clash", server_hos
         return generate_base64_v2ray(nodes)
         
     if sub_url:
-        converted = convert_via_subapi(sub_url, target, config_url or DEFAULT_CONFIG_URL)
+        default_cfg = DEFAULT_SINGBOX_CONFIG_URL if ("singbox" in target or "sing-box" in target) else get_server_config_url()
+        converted = convert_via_subapi(sub_url, target, config_url or default_cfg)
         if converted:
             if "clash" in target:
                 converted = ensure_reality_in_clash_yaml(converted, nodes)
             elif "singbox" in target or "sing-box" in target:
                 converted = ensure_extra_nodes_in_singbox_json(converted, nodes)
             return converted
+        else:
+            logger.error(f"❌ 订阅生成失败: subapi 转换失败 (target={target})，拒绝本地配置兜底")
+            return ""
             
     if "singbox" in target or "sing-box" in target:
         return generate_singbox_json(nodes)

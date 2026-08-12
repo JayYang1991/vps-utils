@@ -303,16 +303,19 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
     is_clash = not is_singbox and ("clash" in tgt or "mihomo" in tgt or "stash" in tgt or any(k in ua for k in ["clash", "stash", "mihomo", "shadowrocket", "verge"]))
     
     if is_singbox:
-        content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox") or cached_singbox_config
-        if content:
-            content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
+        content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox")
+        if not content:
+            logger.error("❌ singbox 订阅获取失败: subapi 在线转换失败，拒绝使用非预期本地配置兜底")
+            err_json = json.dumps({"error": "Subscription conversion failed from subapi"}, ensure_ascii=False)
+            return Response(content=err_json, media_type="application/json; charset=utf-8", status_code=502)
+        content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
         return Response(content=content, media_type="application/json; charset=utf-8")
     elif is_clash:
         content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "clash", config_url=config)
-        if content:
-            content = ensure_reality_in_clash_yaml(content, parsed_nodes_cache)
-        else:
-            content = cached_clash_config
+        if not content:
+            logger.error("❌ clash 订阅获取失败: subapi 在线转换失败，拒绝使用非预期本地配置兜底")
+            return Response(content="# Error: Subscription conversion failed from subapi", media_type="text/plain; charset=utf-8", status_code=502)
+        content = ensure_reality_in_clash_yaml(content, parsed_nodes_cache)
         clash_headers = {
             "profile-update-interval": "24",
             "subscription-userinfo": "upload=0; download=0; total=1073741824000; expire=0",
@@ -333,10 +336,10 @@ async def get_clash_sub(request: Request, token: str = "", config: str = ""):
     
     v2ray_url = f"{base_url}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base_url}/v2ray"
     content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "clash", config_url=config)
-    if content:
-        content = ensure_reality_in_clash_yaml(content, parsed_nodes_cache)
-    else:
-        content = cached_clash_config
+    if not content:
+        logger.error("❌ /clash 订阅获取失败: subapi 在线转换失败，拒绝使用非预期本地配置兜底")
+        return Response(content="# Error: Subscription conversion failed from subapi", media_type="text/plain; charset=utf-8", status_code=502)
+    content = ensure_reality_in_clash_yaml(content, parsed_nodes_cache)
     clash_headers = {
         "profile-update-interval": "24",
         "subscription-userinfo": "upload=0; download=0; total=1073741824000; expire=0",
@@ -354,9 +357,12 @@ async def get_singbox_sub(request: Request, token: str = ""):
     ensure_fresh_nodes()
     
     v2ray_url = f"{base_url}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base_url}/v2ray"
-    content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox") or cached_singbox_config
-    if content:
-        content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
+    content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox")
+    if not content:
+        logger.error("❌ /singbox 订阅获取失败: subapi 在线转换失败，拒绝使用非预期本地配置兜底")
+        err_json = json.dumps({"error": "Subscription conversion failed from subapi"}, ensure_ascii=False)
+        return Response(content=err_json, media_type="application/json; charset=utf-8", status_code=502)
+    content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
     return Response(content=content, media_type="application/json; charset=utf-8")
 
 @app.get("/v2ray")
