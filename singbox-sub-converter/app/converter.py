@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives import serialization
 
 EDGETUNNEL_SUB_URL = "https://sub.19910417.xyz/sub?host={host}&uuid={uuid}"
-SUBAPI_CONVERT_URL = "https://subapi.19910417.xyz/sub?target={target}&url={url}"
+SUBAPI_CONVERT_URL = "https://subapi.19910417.xyz/sub?target={target}&url={url}&filter_local=false"
 REMOTE_SUBCONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/edgetunnel/main/SUBCONFIG.json"
 DEFAULT_CONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini"
 USER_AGENT = "v2rayN/edgetunnel (https://github.com/cmliu/edgetunnel)"
@@ -356,10 +356,10 @@ def clean_clash_proxies(yaml_content: str) -> str:
     return yaml_content
 
 def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list) -> str:
-    """Ensure VLESS Reality nodes are present in Clash YAML with valid RawURLEncoding public-key, and clean non-standard fields."""
-    reality_nodes = [n for n in nodes if n.get("type") == "vless-reality"]
+    """Ensure VLESS Reality nodes and local Socks5 nodes are present in Clash YAML, and clean non-standard fields."""
+    extra_nodes = [n for n in nodes if n.get("type") in ["vless-reality", "socks", "socks5"]]
     cleaned_yaml = clean_clash_proxies(yaml_content)
-    if not reality_nodes or not cleaned_yaml:
+    if not extra_nodes or not cleaned_yaml:
         return cleaned_yaml
         
     try:
@@ -374,29 +374,43 @@ def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list) -> str:
         existing_names = {p.get("name") for p in existing_proxies if isinstance(p, dict)}
         
         added_names = []
-        for n in reality_nodes:
+        for n in extra_nodes:
             name = n["name"]
             if name not in existing_names:
-                pub_key = n["public_key"].replace('+', '-').replace('/', '_').rstrip('=')
-                item = {
-                    "name": name,
-                    "type": "vless",
-                    "server": n["server"],
-                    "port": n["port"],
-                    "uuid": n["uuid"],
-                    "udp": True,
-                    "tls": True,
-                    "servername": n["sni"],
-                    "client-fingerprint": "chrome",
-                    "reality-opts": {
-                        "public-key": pub_key,
-                        "short-id": n["short_id"]
+                if n.get("type") == "vless-reality":
+                    pub_key = n["public_key"].replace('+', '-').replace('/', '_').rstrip('=')
+                    item = {
+                        "name": name,
+                        "type": "vless",
+                        "server": n["server"],
+                        "port": n["port"],
+                        "uuid": n["uuid"],
+                        "udp": True,
+                        "tls": True,
+                        "servername": n["sni"],
+                        "client-fingerprint": "chrome",
+                        "reality-opts": {
+                            "public-key": pub_key,
+                            "short-id": n["short_id"]
+                        }
                     }
-                }
-                if n.get("flow"):
-                    item["flow"] = n["flow"]
-                existing_proxies.append(item)
-                added_names.append(name)
+                    if n.get("flow"):
+                        item["flow"] = n["flow"]
+                    existing_proxies.append(item)
+                    added_names.append(name)
+                elif n.get("type") in ["socks", "socks5"]:
+                    item = {
+                        "name": name,
+                        "type": "socks5",
+                        "server": n["server"],
+                        "port": n["port"],
+                        "udp": True
+                    }
+                    if n.get("user") and n.get("pass"):
+                        item["username"] = n["user"]
+                        item["password"] = n["pass"]
+                    existing_proxies.append(item)
+                    added_names.append(name)
                 
         if added_names:
             groups = data.get("proxy-groups", [])
@@ -405,16 +419,66 @@ def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list) -> str:
                     g_proxies = g["proxies"]
                     if isinstance(g_proxies, list):
                         g_name = g.get("name", "")
-                        if g_name in ["🚀 节点选择", "⚡ 自动选择", "🎯 全球直连"] or "节点" in g_name or "自用" in g_name or "VPS" in g_name:
+                        if g_name in ["🚀 节点选择", "⚡ 自动选择", "🎯 全球直连"] or "节点" in g_name or "自用" in g_name or "VPS" in g_name or "本地" in g_name:
                             for an in added_names:
                                 if an not in g_proxies:
                                     g_proxies.append(an)
             data["proxies"] = existing_proxies
             return yaml.dump(data, allow_unicode=True, sort_keys=False)
     except Exception as e:
-        logger.error(f"Error merging reality nodes into Clash YAML: {e}")
+        logger.error(f"Error merging extra nodes into Clash YAML: {e}")
         
     return cleaned_yaml
+
+def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list) -> str:
+    """Ensure local Socks5 and missing extra nodes are present in sing-box JSON configuration."""
+    extra_nodes = [n for n in nodes if n.get("type") in ["socks", "socks5"]]
+    if not json_content or not extra_nodes:
+        return json_content
+    try:
+        data = json.loads(json_content)
+        if not isinstance(data, dict):
+            return json_content
+            
+        outbounds = data.get("outbounds", [])
+        if not isinstance(outbounds, list):
+            outbounds = []
+            
+        existing_tags = {ob.get("tag") for ob in outbounds if isinstance(ob, dict)}
+        
+        added_tags = []
+        for n in extra_nodes:
+            tag = n.get("name") or n.get("tag")
+            if not tag or tag in existing_tags:
+                continue
+                
+            if n.get("type") in ["socks", "socks5"]:
+                ob_item = {
+                    "type": "socks",
+                    "tag": tag,
+                    "server": n["server"],
+                    "server_port": n["port"]
+                }
+                if n.get("user") and n.get("pass"):
+                    ob_item["username"] = n["user"]
+                    ob_item["password"] = n["pass"]
+                outbounds.append(ob_item)
+                added_tags.append(tag)
+                
+        if added_tags:
+            for ob in outbounds:
+                if isinstance(ob, dict) and ob.get("type") in ["selector", "urltest"]:
+                    ob_list = ob.get("outbounds")
+                    if isinstance(ob_list, list):
+                        for at in added_tags:
+                            if at not in ob_list:
+                                ob_list.append(at)
+            data["outbounds"] = outbounds
+            return json.dumps(data, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error merging extra nodes into sing-box JSON: {e}")
+        
+    return json_content
 
 def generate_clash_yaml(nodes: list) -> str:
     """Local fallback engine: Generate valid Clash Meta / Mihomo YAML configuration."""
@@ -736,6 +800,8 @@ def generate_subscription(sb_config_path: str, target: str = "clash", server_hos
         if converted:
             if "clash" in target:
                 converted = ensure_reality_in_clash_yaml(converted, nodes)
+            elif "singbox" in target or "sing-box" in target:
+                converted = ensure_extra_nodes_in_singbox_json(converted, nodes)
             return converted
             
     if "singbox" in target or "sing-box" in target:

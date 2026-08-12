@@ -21,6 +21,7 @@ from app.converter import (
     generate_base64_v2ray,
     convert_via_subapi,
     ensure_reality_in_clash_yaml,
+    ensure_extra_nodes_in_singbox_json,
     fetch_subconfigs,
     logger,
     DATA_DIR
@@ -300,6 +301,8 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
         return Response(content=content, media_type="text/yaml; charset=utf-8", headers=clash_headers)
     elif is_singbox:
         content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox", config_url=config) or cached_singbox_config
+        if content:
+            content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
         return Response(content=content, media_type="application/json; charset=utf-8")
     else:
         return Response(content=cached_base64_config, media_type="text/plain; charset=utf-8")
@@ -336,6 +339,8 @@ async def get_singbox_sub(request: Request, token: str = "", config: str = ""):
     
     v2ray_url = f"{base_url}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base_url}/v2ray"
     content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox", config_url=config) or cached_singbox_config
+    if content:
+        content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
     return Response(content=content, media_type="application/json; charset=utf-8")
 
 @app.get("/v2ray")
