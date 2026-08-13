@@ -7,6 +7,7 @@ import hashlib
 import secrets
 import asyncio
 import logging
+import urllib.parse
 from fastapi import FastAPI, Response, Request, HTTPException, Depends, Cookie
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
@@ -23,6 +24,7 @@ from app.converter import (
     patch_clash_sniffer,
     ensure_reality_in_clash_yaml,
     ensure_extra_nodes_in_singbox_json,
+    filter_nodes_by_type,
     fetch_subconfigs,
     get_server_config_url,
     set_server_config_url,
@@ -285,9 +287,37 @@ async def get_config_info(request: Request, current_user: str = Depends(get_curr
         "v2ray_url": f"{base}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base}/v2ray"
     }
 
+def resolve_node_type_param(request: Request, node_type: str = "", category: str = "", node: str = "", type: str = "") -> str:
+    """Extract and resolve effective node_type filter string from endpoint query parameters."""
+    if node_type:
+        return node_type
+    if category:
+        return category
+    if node:
+        return node
+    if type:
+        t = type.strip().lower()
+        if t in ["preferred", "preferred_ip", "cf", "cdn", "优选", "优选ip", "vps", "vps自用", "自用", "local", "socks", "socks5", "本地", "1", "2", "3"]:
+            return type
+    params = request.query_params
+    for key in ["node_type", "nodeType", "category", "node", "group", "filter"]:
+        val = params.get(key)
+        if val:
+            return val
+    return ""
+
+def build_v2ray_url(base_url: str, eff_node_type: str = "") -> str:
+    v2ray_params = f"token={SUB_TOKEN}" if SUB_TOKEN else ""
+    if eff_node_type:
+        if v2ray_params:
+            v2ray_params += f"&node_type={urllib.parse.quote(eff_node_type)}"
+        else:
+            v2ray_params = f"node_type={urllib.parse.quote(eff_node_type)}"
+    return f"{base_url}/v2ray?{v2ray_params}" if v2ray_params else f"{base_url}/v2ray"
+
 # Subscription Endpoints with non-blocking async execution and reality merge
 @app.get("/sub")
-async def get_adaptive_sub(request: Request, token: str = "", target: str = "", flag: str = "", config: str = ""):
+async def get_adaptive_sub(request: Request, token: str = "", target: str = "", flag: str = "", config: str = "", node_type: str = "", category: str = "", node: str = ""):
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /sub")
         return Response(content="# Error: Invalid Token", media_type="text/plain", status_code=403)
@@ -295,7 +325,9 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
     base_url = get_base_url(request)
     ensure_fresh_nodes()
     
-    v2ray_url = f"{base_url}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base_url}/v2ray"
+    eff_node_type = resolve_node_type_param(request, node_type, category, node)
+    filtered_nodes = filter_nodes_by_type(parsed_nodes_cache, eff_node_type) if eff_node_type else parsed_nodes_cache
+    v2ray_url = build_v2ray_url(base_url, eff_node_type)
     
     ua = request.headers.get("user-agent", "").lower()
     tgt = (target or flag).lower()
@@ -309,14 +341,14 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
             logger.error("❌ singbox 订阅获取失败: subapi 在线转换失败，拒绝使用非预期本地配置兜底")
             err_json = json.dumps({"error": "Subscription conversion failed from subapi"}, ensure_ascii=False)
             return Response(content=err_json, media_type="application/json; charset=utf-8", status_code=502)
-        content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
+        content = ensure_extra_nodes_in_singbox_json(content, filtered_nodes)
         return Response(content=content, media_type="application/json; charset=utf-8")
     elif is_clash:
         content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "clash", config_url=config)
         if not content:
             logger.error("❌ clash 订阅获取失败: subapi 在线转换失败，拒绝使用非预期本地配置兜底")
             return Response(content="# Error: Subscription conversion failed from subapi", media_type="text/plain; charset=utf-8", status_code=502)
-        content = ensure_reality_in_clash_yaml(content, parsed_nodes_cache)
+        content = ensure_reality_in_clash_yaml(content, filtered_nodes)
         clash_headers = {
             "profile-update-interval": "24",
             "subscription-userinfo": "upload=0; download=0; total=1073741824000; expire=0",
@@ -325,22 +357,26 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
         }
         return Response(content=content, media_type="text/yaml; charset=utf-8", headers=clash_headers)
     else:
-        return Response(content=cached_base64_config, media_type="text/plain; charset=utf-8")
+        b64_content = generate_base64_v2ray(filtered_nodes) if eff_node_type else cached_base64_config
+        return Response(content=b64_content, media_type="text/plain; charset=utf-8")
 
 @app.get("/clash")
-async def get_clash_sub(request: Request, token: str = "", config: str = ""):
+async def get_clash_sub(request: Request, token: str = "", config: str = "", node_type: str = "", category: str = "", node: str = ""):
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /clash")
         return Response(content="# Error: Invalid Token", media_type="text/plain", status_code=403)
     base_url = get_base_url(request)
     ensure_fresh_nodes()
     
-    v2ray_url = f"{base_url}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base_url}/v2ray"
+    eff_node_type = resolve_node_type_param(request, node_type, category, node)
+    filtered_nodes = filter_nodes_by_type(parsed_nodes_cache, eff_node_type) if eff_node_type else parsed_nodes_cache
+    v2ray_url = build_v2ray_url(base_url, eff_node_type)
+
     content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "clash", config_url=config)
     if not content:
         logger.error("❌ /clash 订阅获取失败: subapi 在线转换失败，拒绝使用非预期本地配置兜底")
         return Response(content="# Error: Subscription conversion failed from subapi", media_type="text/plain; charset=utf-8", status_code=502)
-    content = ensure_reality_in_clash_yaml(content, parsed_nodes_cache)
+    content = ensure_reality_in_clash_yaml(content, filtered_nodes)
     clash_headers = {
         "profile-update-interval": "24",
         "subscription-userinfo": "upload=0; download=0; total=1073741824000; expire=0",
@@ -350,31 +386,42 @@ async def get_clash_sub(request: Request, token: str = "", config: str = ""):
     return Response(content=content, media_type="text/yaml; charset=utf-8", headers=clash_headers)
 
 @app.get("/singbox")
-async def get_singbox_sub(request: Request, token: str = ""):
+async def get_singbox_sub(request: Request, token: str = "", node_type: str = "", category: str = "", node: str = ""):
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /singbox")
         return Response(content="# Error: Invalid Token", media_type="application/json", status_code=403)
     base_url = get_base_url(request)
     ensure_fresh_nodes()
     
-    v2ray_url = f"{base_url}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base_url}/v2ray"
+    eff_node_type = resolve_node_type_param(request, node_type, category, node)
+    filtered_nodes = filter_nodes_by_type(parsed_nodes_cache, eff_node_type) if eff_node_type else parsed_nodes_cache
+    v2ray_url = build_v2ray_url(base_url, eff_node_type)
+
     content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox")
     if not content:
         logger.error("❌ /singbox 订阅获取失败: subapi 在线转换失败，拒绝使用非预期本地配置兜底")
         err_json = json.dumps({"error": "Subscription conversion failed from subapi"}, ensure_ascii=False)
         return Response(content=err_json, media_type="application/json; charset=utf-8", status_code=502)
-    content = ensure_extra_nodes_in_singbox_json(content, parsed_nodes_cache)
+    content = ensure_extra_nodes_in_singbox_json(content, filtered_nodes)
     return Response(content=content, media_type="application/json; charset=utf-8")
 
 @app.get("/v2ray")
 @app.get("/base64")
-async def get_v2ray_sub(request: Request, token: str = ""):
-    """Instant 0ms response for /v2ray: returns pre-computed cached_base64_config without blocking event loop."""
+async def get_v2ray_sub(request: Request, token: str = "", node_type: str = "", category: str = "", node: str = "", type: str = ""):
+    """Instant 0ms response for /v2ray: returns pre-computed cached_base64_config or filtered base64 configuration."""
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /v2ray")
         return Response(content="# Error: Invalid Token", media_type="text/plain", status_code=403)
     ensure_fresh_nodes()
-    return Response(content=cached_base64_config, media_type="text/plain; charset=utf-8")
+    
+    eff_node_type = resolve_node_type_param(request, node_type, category, node, type)
+    if eff_node_type:
+        filtered_nodes = filter_nodes_by_type(parsed_nodes_cache, eff_node_type)
+        b64_content = generate_base64_v2ray(filtered_nodes)
+    else:
+        b64_content = cached_base64_config
+        
+    return Response(content=b64_content, media_type="text/plain; charset=utf-8")
 
 @app.get("/", response_class=HTMLResponse)
 async def index():

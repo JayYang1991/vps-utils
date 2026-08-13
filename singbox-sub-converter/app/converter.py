@@ -167,7 +167,8 @@ def fetch_preferred_nodes(vless_grpc_inbound: dict) -> list:
                     "path": path,
                     "host": host,
                     "sni": host,
-                    "tls": True
+                    "tls": True,
+                    "category": "preferred"
                 })
                 idx += 1
         if nodes:
@@ -181,17 +182,17 @@ def fetch_preferred_nodes(vless_grpc_inbound: dict) -> list:
     return nodes
 
 def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") -> list:
-    """Parse sing-box server config. Non-preferred nodes use default_server_host as connection target."""
+    """Parse sing-box server config into nodes ordered by: Preferred IP nodes -> VPS nodes -> Local Socks5 node."""
     local_socks_node = {
         "type": "socks5",
         "name": "本地Socks5节点",
         "server": "127.0.0.1",
-        "port": 1080
+        "port": 1080,
+        "category": "local"
     }
-    nodes = [local_socks_node]
     
     if not os.path.exists(sb_config_path):
-        return nodes
+        return [local_socks_node]
         
     with open(sb_config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
@@ -211,7 +212,11 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
         else:
             other_ibs.append(ib)
             
-    nodes.extend(fetch_preferred_nodes(vless_grpc_ib))
+    preferred_nodes = fetch_preferred_nodes(vless_grpc_ib)
+    for n in preferred_nodes:
+        n["category"] = "preferred"
+
+    vps_nodes = []
     server_host = default_server_host or "127.0.0.1"
     
     for ib in other_ibs:
@@ -237,7 +242,7 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
             pub_key = raw_pub.replace('+', '-').replace('/', '_').rstrip('=')
             short_id = reality.get("short_id", [""])[0] if reality.get("short_id") else ""
             
-            nodes.append({
+            vps_nodes.append({
                 "type": "vless-reality",
                 "name": node_name,
                 "server": server_host,
@@ -247,7 +252,8 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
                 "sni": sni,
                 "public_key": pub_key,
                 "short_id": short_id,
-                "tls": True
+                "tls": True,
+                "category": "vps"
             })
         elif ib_type == "hysteria2":
             user = ib.get("users", [{}])[0]
@@ -255,14 +261,15 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
             tls = ib.get("tls", {})
             sni = tls.get("server_name", "") or server_host
             
-            nodes.append({
+            vps_nodes.append({
                 "type": "hysteria2",
                 "name": node_name,
                 "server": server_host,
                 "port": int(port),
                 "password": password,
                 "sni": sni,
-                "tls": True
+                "tls": True,
+                "category": "vps"
             })
         else:
             tls = ib.get("tls", {})
@@ -270,17 +277,56 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
             user = ib.get("users", [{}])[0] if ib.get("users") else {}
             uuid = user.get("uuid", "") or user.get("password", "")
             if port and uuid:
-                nodes.append({
+                vps_nodes.append({
                     "type": ib_type,
                     "name": node_name,
                     "server": server_host,
                     "port": int(port),
                     "uuid": uuid,
                     "sni": sni,
-                    "tls": bool(tls.get("enabled", True))
+                    "tls": bool(tls.get("enabled", True)),
+                    "category": "vps"
                 })
             
+    nodes = preferred_nodes + vps_nodes + [local_socks_node]
     return nodes
+
+def get_node_category(node: dict) -> str:
+    """Determine category ('preferred', 'vps', 'local') of a node dict."""
+    cat = node.get("category")
+    if cat in ["preferred", "vps", "local"]:
+        return cat
+    
+    name = str(node.get("name", ""))
+    server = str(node.get("server", ""))
+    n_type = str(node.get("type", ""))
+    
+    if n_type == "socks5" or "本地" in name or server == "127.0.0.1":
+        return "local"
+    elif "CF-" in name or n_type == "vless-ws":
+        return "preferred"
+    else:
+        return "vps"
+
+def filter_nodes_by_type(nodes: list, node_type: str = "") -> list:
+    """Filter nodes by category ('preferred', 'vps', 'local'). Default (empty or 'all') returns all nodes."""
+    if not node_type or not isinstance(node_type, str):
+        return nodes
+    
+    t = node_type.strip().lower()
+    if t in ["", "all", "full", "全部", "所有", "0"]:
+        return nodes
+
+    if t in ["preferred", "preferred_ip", "cf", "cdn", "优选", "优选ip", "1"]:
+        target_cat = "preferred"
+    elif t in ["vps", "vps自用", "自用", "server", "2"]:
+        target_cat = "vps"
+    elif t in ["local", "socks", "socks5", "本地", "3"]:
+        target_cat = "local"
+    else:
+        return nodes
+
+    return [n for n in nodes if get_node_category(n) == target_cat]
 
 def fetch_subconfigs() -> list:
     """Fetch rule configuration list from REMOTE_SUBCONFIG_URL."""
@@ -1068,9 +1114,10 @@ def generate_base64_v2ray(nodes: list) -> str:
     raw_text = "\n".join(links)
     return base64.b64encode(raw_text.encode("utf-8")).decode("utf-8")
 
-def generate_subscription(sb_config_path: str, target: str = "clash", server_host: str = "", sub_url: str = "", config_url: str = ""):
-    """Adaptive subscription generator with https://subapi.19910417.xyz/ support, custom config_url, and local fallback."""
+def generate_subscription(sb_config_path: str, target: str = "clash", server_host: str = "", sub_url: str = "", config_url: str = "", node_type: str = ""):
+    """Adaptive subscription generator with https://subapi.19910417.xyz/ support, custom config_url, node_type filter, and local fallback."""
     nodes = parse_server_inbounds(sb_config_path, server_host)
+    nodes = filter_nodes_by_type(nodes, node_type)
     target = target.lower()
     
     if "base64" in target or "v2ray" in target or "shadowrocket" in target:

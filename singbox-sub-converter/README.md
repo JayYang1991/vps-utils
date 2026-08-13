@@ -4,8 +4,13 @@
 
 ## 核心功能与转换规则
 
-0. **固定本地 Socks5 节点**:
-   - 订阅转换前固定增加 1 个本地 Socks5 节点（`127.0.0.1:1080`，无用户名密码，节点备注为 `（本地Socks5节点）`）。
+0. **订阅节点分类排序与指定提取**:
+   - 订阅节点内部按固定顺序排列：**优选 IP 节点** -> **VPS 自用节点** -> **本地 Socks5 节点**。
+   - 支持在所有订阅链接（`/sub`、`/clash`、`/singbox`、`/v2ray` / `/base64`）上附加 `node_type`（或 `category` / `node`）参数提取指定分类节点：
+     - `node_type=preferred`（或 `cf` / `优选`）：仅获取优选 IP 节点
+     - `node_type=vps`（或 `自用`）：仅获取 VPS 自用节点
+     - `node_type=local`（或 `socks` / `本地`）：仅获取本地 Socks5 节点
+     - 不带 `node_type` 参数（或 `node_type=all`）：默认获取所有节点
 
 1. **优选 IP 节点转换**:
    - 自动读取 `sing-box` 服务端配置中 `tag` 为 `vless-grpc` 的 inbound 参数（`host` 与 `uuid`）。
