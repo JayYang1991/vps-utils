@@ -391,10 +391,90 @@ def clean_clash_proxies(yaml_content: str) -> str:
         logger.error(f"Error cleaning Clash proxies: {e}")
     return yaml_content
 
+def patch_clash_sniffer(yaml_content: str) -> str:
+    """Patch Clash YAML config to insert/update sniffer configuration for FakeIP domain mapping and pure IP direct routing."""
+    if not yaml_content:
+        return yaml_content
+    try:
+        data = yaml.safe_load(yaml_content)
+        if not isinstance(data, dict):
+            return yaml_content
+
+        default_sniff = {
+            "HTTP": {
+                "ports": [80, "8080-8880"],
+                "override-destination": True
+            },
+            "TLS": {
+                "ports": [443, 8443]
+            },
+            "QUIC": {
+                "ports": [443, 8443]
+            }
+        }
+
+        default_skip_domains = [
+            "MJP.Mihomo.DEV",
+            "+.push.apple.com"
+        ]
+
+        sniffer = data.get("sniffer")
+        if not isinstance(sniffer, dict):
+            data["sniffer"] = {
+                "enable": True,
+                "force-dns-mapping": True,
+                "parse-pure-ip": True,
+                "override-destination": True,
+                "sniff": default_sniff,
+                "skip-domain": default_skip_domains
+            }
+        else:
+            sniffer["enable"] = True
+            sniffer["force-dns-mapping"] = True
+            sniffer["parse-pure-ip"] = True
+            sniffer["override-destination"] = True
+
+            sniff = sniffer.get("sniff")
+            if not isinstance(sniff, dict):
+                sniffer["sniff"] = default_sniff
+            else:
+                if "HTTP" not in sniff or not isinstance(sniff["HTTP"], dict):
+                    sniff["HTTP"] = default_sniff["HTTP"]
+                else:
+                    sniff["HTTP"]["override-destination"] = True
+                    if "ports" not in sniff["HTTP"]:
+                        sniff["HTTP"]["ports"] = [80, "8080-8880"]
+
+                if "TLS" not in sniff or not isinstance(sniff["TLS"], dict):
+                    sniff["TLS"] = default_sniff["TLS"]
+                else:
+                    if "ports" not in sniff["TLS"]:
+                        sniff["TLS"]["ports"] = [443, 8443]
+
+                if "QUIC" not in sniff or not isinstance(sniff["QUIC"], dict):
+                    sniff["QUIC"] = default_sniff["QUIC"]
+                else:
+                    if "ports" not in sniff["QUIC"]:
+                        sniff["QUIC"]["ports"] = [443, 8443]
+
+            skip_domain = sniffer.get("skip-domain")
+            if not isinstance(skip_domain, list):
+                sniffer["skip-domain"] = default_skip_domains
+            else:
+                for domain in default_skip_domains:
+                    if domain not in skip_domain:
+                        skip_domain.append(domain)
+
+        return yaml.dump(data, allow_unicode=True, sort_keys=False)
+    except Exception as e:
+        logger.error(f"Error patching Clash sniffer: {e}")
+        return yaml_content
+
 def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list) -> str:
-    """Ensure VLESS Reality nodes and local Socks5 nodes are present in Clash YAML, and clean non-standard fields."""
-    extra_nodes = [n for n in nodes if n.get("type") in ["vless-reality", "socks", "socks5"]]
+    """Ensure VLESS Reality nodes and local Socks5 nodes are present in Clash YAML, clean non-standard fields, and patch sniffer config."""
+    extra_nodes = [n for n in nodes if n.get("type") in ["vless-reality", "socks", "socks5"]] if nodes else []
     cleaned_yaml = clean_clash_proxies(yaml_content)
+    cleaned_yaml = patch_clash_sniffer(cleaned_yaml)
     if not extra_nodes or not cleaned_yaml:
         return cleaned_yaml
         
@@ -787,6 +867,28 @@ def generate_clash_yaml(nodes: list) -> str:
         "mode": "rule",
         "log-level": "info",
         "external-controller": "0.0.0.0:9090",
+        "sniffer": {
+            "enable": True,
+            "force-dns-mapping": True,
+            "parse-pure-ip": True,
+            "override-destination": True,
+            "sniff": {
+                "HTTP": {
+                    "ports": [80, "8080-8880"],
+                    "override-destination": True
+                },
+                "TLS": {
+                    "ports": [443, 8443]
+                },
+                "QUIC": {
+                    "ports": [443, 8443]
+                }
+            },
+            "skip-domain": [
+                "MJP.Mihomo.DEV",
+                "+.push.apple.com"
+            ]
+        },
         "proxies": proxies,
         "proxy-groups": proxy_groups,
         "rules": rules

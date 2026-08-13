@@ -27,10 +27,11 @@
      - `/singbox`: 强制输出 sing-box 格式
      - `/v2ray` / `/base64`: 强制输出 Base64 格式
 
-4. **服务端规则持久化与离线/在线 API 转换**:
+4. **服务端规则持久化与离线/在线 API 转换及 Sniffer 补丁**:
    - 转换规则配置在服务端持久化存储（`data/settings.json`），自适应及专属订阅链接保持纯净简洁（不体现 `config` 参数路径）。
    - 前端切换下拉规则时自动将选择保存至服务端，针对 sing-box 客户端获取配置时固定使用 `singbox-template.ini` 模板。
-   - 通过 `https://subapi.19910417.xyz/` 进行高级订阅转换；当 subapi 转换失败时直接向客户端响应 HTTP 错误，禁止本地兜底以防使用非预期的缺失规则配置。
+   - 通过 `https://subapi.19910417.xyz/` 进行高级订阅转换；当从 subapi 获取 Clash 配置后自动通过 `patch_clash_sniffer` 插入完整 Sniffer 嗅探配置（`enable`, `force-dns-mapping`, `parse-pure-ip`, `override-destination`, `HTTP/TLS/QUIC` 嗅探端口等），完美解决 Clash 客户端开启 FakeIP 场景下的域名映射失效与纯 IP 直连路由异常问题。
+   - 当 subapi 转换失败时直接向客户端响应 HTTP 错误，禁止本地兜底以防使用非预期的缺失规则配置。
 
 5. **订阅 Token / UUID 动态安全重置**:
    - 前端管理界面提供 **「🔑 更换订阅 Token / UUID」** 功能，一键生成新 Token 并更新服务与订阅链接，使旧链接立即失效。

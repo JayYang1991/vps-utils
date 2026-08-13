@@ -20,6 +20,7 @@ from app.converter import (
     generate_singbox_json,
     generate_base64_v2ray,
     convert_via_subapi,
+    patch_clash_sniffer,
     ensure_reality_in_clash_yaml,
     ensure_extra_nodes_in_singbox_json,
     fetch_subconfigs,
