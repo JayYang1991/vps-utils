@@ -52,33 +52,120 @@
 
 ## 🚀 一、本地 SOCKS5 代理客户端部署 (推荐 Systemd 服务封装)
 
-使用 `docker-run.sh` 脚本可将 WARP + sing-box 容器打包为 Systemd 系统服务，享受开机自启、日志统一收集与策略路由自动生命周期管理。
+使用 `docker-run.sh` 脚本可将 WARP + sing-box 容器打包为 Systemd 系统服务，享受开机自启、日志统一收集、状态持久化与策略路由自动生命周期管理。
 
-### 1. 一键安装并启动为 Systemd 系统服务 (推荐)
+---
+
+### 1. 常用命令速查 (Cheat Sheet)
 
 ```bash
-cd cloudflare-warp
+# ------------------ Systemd 服务管理 (推荐) ------------------
+# 一键安装为 Systemd 服务 (Zero Trust Token)
+sudo bash docker-run.sh --install-service -t <TEAM> --service-token <ID>:<SECRET> -p 1080
 
-# 使用 Zero Trust 团队名与 Service Token 安装为 Systemd 服务 (监听本地 1080 端口)
-sudo bash docker-run.sh --install-service -t <YOUR_TEAM_NAME> -i <CLIENT_ID> -s <CLIENT_SECRET> -p 1080
+# 重新编译镜像并一键重建服务 (用于代码更新/升级组件)
+sudo bash docker-run.sh --install-service --rebuild -t <TEAM> --service-token <ID>:<SECRET> -p 1080
 
-# 或使用 ID:SECRET 合并格式传入 Service Token:
-sudo bash docker-run.sh --install-service -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
+# 查看完整运行状态 (Systemd / 策略路由 / 容器 / WARP 连通性)
+sudo bash docker-run.sh --status
 
-# 可选：设置 SOCKS5 鉴权用户名与密码:
-sudo bash docker-run.sh --install-service -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080 -u myuser -w mypass
+# 快速测试 SOCKS5 代理有效性 (自动请求 Cloudflare Trace)
+sudo bash docker-run.sh --test
+
+# 查看实时运行日志 (追踪 journalctl)
+sudo bash docker-run.sh --logs
+# 或直接: journalctl -u cloudflare-warp-socks5 -f
+
+# 平滑重启服务 (保留容器已有状态，秒级启动不重注 WARP)
+sudo bash docker-run.sh --restart
+# 或直接: sudo systemctl restart cloudflare-warp-socks5
+
+# 停止服务 (保留容器数据，自动清理策略路由)
+sudo bash docker-run.sh --stop
+# 或直接: sudo systemctl stop cloudflare-warp-socks5
+
+# 卸载 Systemd 服务 (彻底清理配置、删除容器与策略路由)
+sudo bash docker-run.sh --uninstall-service
+
+# ------------------ 独立 Docker 容器模式 ------------------
+# 启动独立容器 (若已有容器则直接启动保留状态)
+sudo bash docker-run.sh -t <TEAM> --service-token <ID>:<SECRET> -p 1080
+
+# 重新编译并重建独立容器
+sudo bash docker-run.sh --rebuild -t <TEAM> --service-token <ID>:<SECRET> -p 1080
+
+# 仅重新编译 Docker 镜像 (不运行容器)
+bash docker-run.sh --rebuild
+bash docker-run.sh --rebuild --no-cache
 ```
 
 ---
 
-### 2. 🔐 敏感凭据安全隔离机制
+### 2. 核心场景与详细用法
+
+#### 场景 A：使用 Zero Trust Service Token 安装为系统服务 (最常用)
+```bash
+sudo bash docker-run.sh --install-service \
+  -t <YOUR_TEAM_NAME> \
+  --service-token <CLIENT_ID>:<CLIENT_SECRET> \
+  -p 1080
+```
+
+#### 场景 B：启用 SOCKS5 用户名与密码鉴权
+```bash
+sudo bash docker-run.sh --install-service \
+  -t <YOUR_TEAM_NAME> \
+  --service-token <CLIENT_ID>:<CLIENT_SECRET> \
+  -p 1080 \
+  -u myusername \
+  -w mypassword
+```
+
+#### 场景 C：使用 Cloudflare WARP+ 许可证密钥 (License Key)
+```bash
+sudo bash docker-run.sh --install-service \
+  -k <YOUR_WARP_PLUS_LICENSE_KEY> \
+  -p 1080
+```
+
+#### 场景 D：指定自定义 WARP 优选接入点 (Endpoint)
+```bash
+sudo bash docker-run.sh --install-service \
+  -t <YOUR_TEAM_NAME> \
+  --service-token <CLIENT_ID>:<CLIENT_SECRET> \
+  -e 162.159.192.1:2408 \
+  -p 1080
+```
+
+#### 场景 E：更新脚本或 entrypoint 后重新编译并重建服务
+```bash
+# --rebuild 会自动重新构建镜像并重建容器以应用最新代码
+sudo bash docker-run.sh --install-service --rebuild \
+  -t <YOUR_TEAM_NAME> \
+  --service-token <CLIENT_ID>:<CLIENT_SECRET> \
+  -p 1080
+```
+
+#### 场景 F：自定义策略路由网段与优先级
+```bash
+sudo bash docker-run.sh --install-service \
+  -t <YOUR_TEAM_NAME> \
+  --service-token <CLIENT_ID>:<CLIENT_SECRET> \
+  --route-src 172.18.0.0/16 \
+  --route-prio 8888 \
+  -p 1080
+```
+
+---
+
+### 3. 🔐 敏感凭据安全隔离机制
 
 * **完全脱离 Systemd 单元文件**：Service Token、Secret、SOCKS5 密码等敏感认证信息**不会**写入 `/etc/systemd/system/*.service` 文件，防止被 `systemctl show` 或非特权服务审查泄漏。
 * **独立加密存储**：所有环境变量独立保存在宿主机的 `/etc/cloudflare-warp/warp.env` 文件中，文件权限严格设置为 `0600`（仅 `root` 可读写），并通过 Docker 引擎的 `--env-file` 原生挂载至容器中。
 
 ---
 
-### 3. 策略路由（Policy Routing）自动管理说明
+### 4. 策略路由（Policy Routing）自动管理说明
 
 当使用 `--install-service` 安装为 Systemd 服务后：
 1. **服务启动时（`ExecStartPost`）**：
@@ -95,72 +182,34 @@ sudo bash docker-run.sh --install-service -t <YOUR_TEAM_NAME> --service-token <C
 
 ---
 
-### 4. 服务状态、测试与运维指令
+### 5. 🛠️ `docker-run.sh` 完整参数对照表
 
-```bash
-# 1. 查看服务运行状态、策略路由规则与 WARP 连通状态
-sudo bash docker-run.sh --status
-
-# 2. 快速测试 SOCKS5 代理连通性 (自动调用 curl 请求 Cloudflare Trace)
-sudo bash docker-run.sh --test
-
-# 3. 查看实时运行日志 (优先使用 journalctl)
-sudo bash docker-run.sh --logs
-# 或直接使用:
-journalctl -u cloudflare-warp-socks5 -f
-
-# 4. 重启服务 (保留容器已有状态，不重新注册) / 停止服务
-sudo systemctl restart cloudflare-warp-socks5
-# 或使用脚本重启:
-sudo bash docker-run.sh --restart
-sudo bash docker-run.sh --stop
-
-# 5. 卸载 Systemd 服务与规则 (彻底清理环境与容器)
-sudo bash docker-run.sh --uninstall-service
-```
-
----
-
-### 5. 也可以直接以 Docker 独立容器模式运行
-
-如果不想注册 Systemd 服务，也可以直接前台/后台运行容器（首次创建后，后续启动/重启自动保留容器状态）：
-
-```bash
-# 启动独立容器 (脚本同样会自动配置策略路由；若容器已存在则直接拉起保留状态)
-sudo bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
-
-# 重启独立容器 (保留容器历史状态)
-sudo bash docker-run.sh --restart
-
-# 强制重建容器 (清除旧容器与状态)
-sudo bash docker-run.sh --recreate -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
-
-# 停止独立容器 (保留容器数据)
-sudo bash docker-run.sh --stop
-```
-
-#### 🛠️ `docker-run.sh` 常用参数说明
-
-- `-t, --team <TEAM>`：Cloudflare Zero Trust 团队名称 (Team Name)
-- `-i, --token-id <CLIENT_ID>`：Zero Trust Service Token Client ID
-- `-s, --token-secret <SECRET>`：Zero Trust Service Token Client Secret
-- `--service-token <ID:SECRET>`：合并格式传入 Service Token
-- `-p, --port <PORT>`：宿主机对外映射的 SOCKS5 代理端口 (默认: `1080`)
-- `-u, --user <USER>`：SOCKS5 代理用户名 (可选)
-- `-w, --pass <PASS>`：SOCKS5 代理密码 (可选)
-- `-n, --name <NAME>`：指定容器/服务名称 (默认: `cloudflare-warp-socks5`)
-- `--route-src <CIDR>`：策略路由豁免的源地址网段 (默认: `172.17.0.0/16`)
-- `--route-prio <PRIO>`：策略路由规则优先级 (默认: `8999`)
-- `--install-service`：注册并启动 Systemd 服务 (无敏感信息，重启保留容器状态)
-- `--uninstall-service`：卸载 Systemd 服务并清理规则、删除容器
-- `--restart`：重启服务或容器 (保留容器上次运行的状态)
-- `--recreate`：强制删除旧容器并重新创建
-- `--build, --rebuild, -b`：重新编译 Docker 镜像 (仅构建镜像，不启动容器)
-- `--no-cache`：构建 Docker 镜像时不使用缓存 (全新编译)
-- `--status`：查看完整运行状态与连通性
-- `--test`：测试代理有效性
-- `--logs`：查看日志
-- `--stop`：停止服务与容器 (保留容器状态)
+| 参数选项 | 说明 | 默认值 / 示例 |
+| --- | --- | --- |
+| `--service`, `--install-service` | 安装并启动为开机自启的 Systemd 服务 | - |
+| `--uninstall-service` | 停止并卸载 Systemd 服务，清理环境文件与策略路由 | - |
+| `--restart` | 重启 Systemd 服务或 Docker 容器 (保留容器上次状态与数据) | - |
+| `--stop` | 停止运行中的容器或 Systemd 服务 (保留容器状态) | - |
+| `--status` | 查看服务状态、策略路由、容器与 WARP 连通概览 | - |
+| `--test` | 快速测试 SOCKS5 代理连通性 (自动调用 curl 请求 Cloudflare Trace) | - |
+| `--logs` | 查看实时运行日志 (优先使用 journalctl 跟踪) | - |
+| `-b, --build, --rebuild` | 重新编译 Docker 镜像 (若带启动参数则自动重建容器) | - |
+| `--no-cache` | 构建 Docker 镜像时不使用缓存 (全新编译) | - |
+| `--recreate` | 强制删除旧容器并重新创建 (清理历史注册状态) | - |
+| `-t, --team <TEAM>` | 指定 Cloudflare Zero Trust 团队名称 (Team Name) | `<team-name>` |
+| `-i, --token-id <ID>` | 指定 Zero Trust Service Token Client ID | `xxxx.access` |
+| `-s, --token-secret <SECRET>` | 指定 Zero Trust Service Token Client Secret | `yyyy` |
+| `--service-token <ID:SECRET>` | 使用 `ID:SECRET` 合并格式指定 Service Token | `xxxx.access:yyyy` |
+| `-k, --license <KEY>` | 指定 Cloudflare WARP+ 许可证密钥 (License Key) | - |
+| `-a, --auth-token <TOKEN>` | 指定 WARP API 注册鉴权 Token | - |
+| `-e, --endpoint <IP:PORT>` | 指定自定义 WARP 节点接入点 (例如优选 IP:端口) | `162.159.192.1:2408` |
+| `-p, --port <PORT>` | 宿主机对外映射的 SOCKS5 代理端口 | `1080` |
+| `-u, --user <USER>` | SOCKS5 代理验证用户名 (可选) | - |
+| `-w, --pass <PASS>` | SOCKS5 代理验证密码 (可选) | - |
+| `-n, --name <NAME>` | 指定容器与 Systemd 服务名称 | `cloudflare-warp-socks5` |
+| `--route-src <CIDR>` | 策略路由豁免的源地址网段 | `172.17.0.0/16` |
+| `--route-prio <PRIO>` | 策略路由规则优先级 | `8999` |
+| `-h, --help` | 显示帮助信息并退出 | - |
 
 ---
 
@@ -216,18 +265,82 @@ sudo bash setup-cloudflare-one.sh --unset
 
 ---
 
-## 🧪 四、本地代理效果验证与使用方法
+## 🧪 四、本地代理效果验证与各场景使用方法
+
+### 1. 终端测试与验证
 
 ```bash
-# 1. 使用内置指令测试:
+# 方法 A：使用脚本内置指令一键测试
 sudo bash docker-run.sh --test
 
-# 2. 手动 curl 验证 SOCKS5 代理 (推荐 socks5h:// 防 DNS 污染)
+# 方法 B：手动 curl 验证 (推荐使用 socks5h:// 协议以防止 DNS 污染)
 curl -x socks5h://127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace
+
+# 若启用了用户名和密码验证:
+curl -x socks5h://myuser:mypass@127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace
 ```
 
-**预期输出**中应包含：
+**预期输出**：
 ```text
-warp=on
-gateway=on (若配置了 Gateway 策略)
+fl=...
+h=www.cloudflare.com
+ip=2a09:... (或 Cloudflare 节点 IP)
+ts=...
+visit_scheme=https
+uag=curl/...
+colo=...
+sliver=none
+http=http/2
+loc=...
+tls=TLSv1.3
+sni=plaintext
+warp=on           <--- 显示 on 表示流量已走 WARP
+gateway=on        <--- 若团队启用了 Zero Trust Gateway 策略
+```
+
+---
+
+### 2. 常用开发与终端工具配置
+
+#### A. Linux / macOS 终端临时环境变量
+```bash
+# 当前终端会话所有流量走 SOCKS5
+export ALL_PROXY="socks5h://127.0.0.1:1080"
+export http_proxy="http://127.0.0.1:1080"
+export https_proxy="http://127.0.0.1:1080"
+
+# 取消代理
+unset ALL_PROXY http_proxy https_proxy
+```
+
+#### B. Git 命令代理配置
+```bash
+# 全局设置 Git 走 SOCKS5 代理
+git config --global http.proxy "socks5h://127.0.0.1:1080"
+git config --global https.proxy "socks5h://127.0.0.1:1080"
+
+# 取消 Git 代理设置
+git config --global --unset http.proxy
+git config --global --unset https.proxy
+```
+
+#### C. Clash / Mihomo 配置示例
+```yaml
+proxies:
+  - name: "WARP-SOCKS5-Local"
+    type: socks5
+    server: 127.0.0.1
+    port: 1080
+    # username: myuser # 若配置了鉴权
+    # password: mypass
+```
+
+#### D. sing-box 客户端出站配置 (`outbounds`)
+```json
+{
+  "type": "socks",
+  "tag": "warp-socks5-out",
+  "server": "127.0.0.1",
+  "server_port": 1080
+}
 ```

@@ -12,7 +12,7 @@
 | [singbox-sub-converter](./singbox-sub-converter) | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务 | `install.sh`<br>`pack.sh` | [singbox-sub-converter README](./singbox-sub-converter/README.md) |
 | [subconverter](./subconverter) | 通用代理订阅格式转换后端服务（带 Systemd 一键安装脚本） | `install.sh` | [subconverter README](./subconverter/README.md) |
 | [cloudflared-tunnel](./cloudflared-tunnel) | Cloudflare Official Agent 部署，实现 Cloudflare Tunnel 内网穿透服务 | `install.sh` | [cloudflared-tunnel README](./cloudflared-tunnel/README.md) |
-| [cloudflare-warp](./cloudflare-warp) | Cloudflare WARP 客户端部署与 Cloudflare One VPS 出口 NAT 转发配置 | `install.sh`<br>`setup-cloudflare-one.sh` | [cloudflare-warp README](./cloudflare-warp/README.md) |
+| [cloudflare-warp](./cloudflare-warp) | Cloudflare WARP 客户端容器化/原生部署与 Cloudflare One VPS 出口 NAT 转发配置 | `docker-run.sh`<br>`install.sh`<br>`setup-cloudflare-one.sh` | [cloudflare-warp README](./cloudflare-warp/README.md) |
 | [preferred-ip-manager](./preferred-ip-manager) | Cloudflare Worker 订阅管理与 Telegram/CFST 自动化测速同步工具 | `sub-worker.js`<br>`process_ips.py` | [preferred-ip-manager README](./preferred-ip-manager/README.md) |
 
 ---
@@ -69,8 +69,9 @@
 
 ### 5. [cloudflare-warp](./cloudflare-warp) — Cloudflare WARP 部署与 Cloudflare One VPS 出口转发
 
-官方 Cloudflare WARP 客户端部署与 Cloudflare One / Zero Trust 自定义 VPS 出口节点 NAT 转发自动化工具包：
+官方 Cloudflare WARP 客户端部署、本地 Docker + Systemd SOCKS5 代理封装与 Cloudflare One / Zero Trust 自定义 VPS 出口节点 NAT 转发自动化工具包：
 
+- **`docker-run.sh`**：本地 WARP + sing-box 容器一键部署与 Systemd 系统服务封装脚本，支持自动管理策略路由、凭据隔离存储与重启保留状态。
 - **`install.sh`**：自动配置 Cloudflare 官方 Apt / Yum 软件源并安装 `cloudflare-warp` 软件包与 `warp-svc` 开机自启服务。
 - **`setup-cloudflare-one.sh`**：自动开启 VPS 内核 IP 转发 (`ip_forward`) 并配置 `iptables` NAT MASQUERADE 规则，将 VPS 设置为 Cloudflare One WARP 流量的指定出口节点，支持配置 (`--setup`) 与清除还原 (`--unset`)。
 
