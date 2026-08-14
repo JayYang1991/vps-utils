@@ -46,6 +46,7 @@ if [ -n "$ST_ID" ] && [ -z "$ST_SECRET" ] && [[ "$ST_ID" == *":"* ]]; then
     ST_ID="${ST_ID%%:*}"
 fi
 
+HAS_MDM=false
 if [ -n "$TEAM_NAME" ] && [ -n "$ST_ID" ] && [ -n "$ST_SECRET" ]; then
     log "Configuring Zero Trust Service Token MDM profile (Team: ${TEAM_NAME})..."
     mkdir -p /var/lib/cloudflare-warp /etc/cloudflare-warp
@@ -60,6 +61,7 @@ if [ -n "$TEAM_NAME" ] && [ -n "$ST_ID" ] && [ -n "$ST_SECRET" ]; then
 </dict>
 EOF
     cp -f /var/lib/cloudflare-warp/mdm.xml /etc/cloudflare-warp/mdm.xml
+    HAS_MDM=true
 elif [ -n "$TEAM_NAME" ]; then
     log "Configuring Zero Trust Organization MDM profile (Team: ${TEAM_NAME})..."
     mkdir -p /var/lib/cloudflare-warp /etc/cloudflare-warp
@@ -70,6 +72,7 @@ elif [ -n "$TEAM_NAME" ]; then
 </dict>
 EOF
     cp -f /var/lib/cloudflare-warp/mdm.xml /etc/cloudflare-warp/mdm.xml
+    HAS_MDM=true
 fi
 
 # 3. Start warp-svc background daemon
@@ -91,44 +94,50 @@ while [ ! -S /run/cloudflare-warp/warp_service ]; do
 done
 log "warp-svc daemon is ready."
 
-# 4. WARP Registration & Zero Trust Configuration with Retry Loop
+# 4. WARP Registration & Zero Trust Configuration
 log "Checking WARP registration status..."
 REG_SUCCESS=false
-for i in $(seq 1 15); do
-    if warp-cli --accept-tos registration show 2>/dev/null | grep -qE "Account type: Team|Account type: Free|Account type: Plus"; then
-        log "WARP account is registered successfully."
-        REG_SUCCESS=true
-        break
-    fi
 
-    log "Attempting WARP registration / MDM sync ($i/15)..."
-    if [ -n "$ST_ID" ] && [ -n "$ST_SECRET" ]; then
-        warp-cli --accept-tos mdm refresh 2>/dev/null || true
-        warp-cli --accept-tos registration new 2>/dev/null || true
-    elif [ -n "$WARP_AUTH_TOKEN" ]; then
-        warp-cli --accept-tos registration token "$WARP_AUTH_TOKEN" 2>/dev/null || true
-    elif [ -n "$TEAM_NAME" ]; then
-        warp-cli --accept-tos registration organization "$TEAM_NAME" 2>/dev/null || true
-    elif [ -n "$WARP_LICENSE_KEY" ]; then
-        warp-cli --accept-tos registration license "$WARP_LICENSE_KEY" 2>/dev/null || true
-    else
-        warp-cli --accept-tos registration new 2>/dev/null || true
-    fi
-    sleep 2
-done
-
-if [ "$REG_SUCCESS" != "true" ]; then
-    warn "Registration did not complete immediately, attempting one last mdm refresh & new registration..."
+if [ "$HAS_MDM" = "true" ]; then
+    log "MDM profile detected, triggering MDM sync..."
     warp-cli --accept-tos mdm refresh 2>/dev/null || true
-    warp-cli --accept-tos registration new 2>/dev/null || true
+    for i in $(seq 1 15); do
+        if warp-cli --accept-tos registration show 2>/dev/null | grep -qE "Account type: Team"; then
+            log "Zero Trust MDM enrollment registered successfully."
+            REG_SUCCESS=true
+            break
+        fi
+        sleep 1
+        warp-cli --accept-tos mdm refresh 2>/dev/null || true
+    done
+else
+    for i in $(seq 1 10); do
+        if warp-cli --accept-tos registration show 2>/dev/null | grep -qE "Account type: Free|Account type: Plus|Account type: Team"; then
+            log "WARP account is registered successfully."
+            REG_SUCCESS=true
+            break
+        fi
+        if [ -n "$WARP_AUTH_TOKEN" ]; then
+            warp-cli --accept-tos registration token "$WARP_AUTH_TOKEN" 2>/dev/null || true
+        elif [ -n "$WARP_LICENSE_KEY" ]; then
+            warp-cli --accept-tos registration license "$WARP_LICENSE_KEY" 2>/dev/null || true
+        else
+            warp-cli --accept-tos registration new 2>/dev/null || true
+        fi
+        sleep 2
+    done
 fi
 
-# 5. Generate sing-box configuration (SOCKS5 inbound, direct outbound)
+if [ "$REG_SUCCESS" != "true" ]; then
+    warn "Initial registration check pending, proceeding to start services..."
+fi
+
+# 5. Generate sing-box configuration (SOCKS5 inbound with domain sniffing, direct outbound)
 SOCKS_PORT="${SOCKS_PORT:-1080}"
 CONFIG_FILE="/etc/sing-box/config.json"
 mkdir -p /etc/sing-box
 
-log "Generating sing-box configuration (SOCKS5 listen: ::${SOCKS_PORT}, outbound: direct)..."
+log "Generating sing-box configuration (SOCKS5 listen: ::${SOCKS_PORT}, sniff & destination override enabled)..."
 
 if [ -n "$SOCKS_USER" ] && [ -n "$SOCKS_PASS" ]; then
     log "Enabling SOCKS5 authentication for user '${SOCKS_USER}'..."
@@ -149,7 +158,9 @@ if [ -n "$SOCKS_USER" ] && [ -n "$SOCKS_PASS" ]; then
           "username": "${SOCKS_USER}",
           "password": "${SOCKS_PASS}"
         }
-      ]
+      ],
+      "sniff": true,
+      "sniff_override_destination": true
     }
   ],
   "outbounds": [
@@ -172,7 +183,9 @@ else
       "type": "socks",
       "tag": "socks-in",
       "listen": "::",
-      "listen_port": ${SOCKS_PORT}
+      "listen_port": ${SOCKS_PORT},
+      "sniff": true,
+      "sniff_override_destination": true
     }
   ],
   "outbounds": [
@@ -212,22 +225,27 @@ fi
 log "Connecting to Cloudflare WARP..."
 warp-cli --accept-tos connect 2>/dev/null || true
 
-# Check WARP connection status in background
+# Continuous WARP connection health checker daemon
 (
-    for i in $(seq 1 30); do
+    while true; do
+        sleep 5
         STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
         if echo "$STATUS" | grep -qE "Connected|Success"; then
-            log "Cloudflare WARP connected successfully!"
-            break
+            continue
         fi
-        log "Waiting for WARP connection... ($i/30)"
-        sleep 1
+        log "WARP not connected (${STATUS:-Disconnected}), attempting reconnect..."
+        warp-cli --accept-tos connect 2>/dev/null || true
+        sleep 5
     done
 ) &
+CHECKER_PID=$!
 
 # 8. Graceful shutdown signal handler
 cleanup() {
     log "Received shutdown signal, terminating processes gracefully..."
+    if [ -n "$CHECKER_PID" ]; then
+        kill -TERM "$CHECKER_PID" 2>/dev/null || true
+    fi
     if [ -n "$SINGBOX_PID" ] && kill -0 "$SINGBOX_PID" 2>/dev/null; then
         kill -TERM "$SINGBOX_PID" 2>/dev/null || true
     fi
@@ -244,6 +262,7 @@ trap cleanup SIGINT SIGTERM SIGHUP
 log "=========================================================="
 log "Container initialized and services running!"
 log "SOCKS5 Proxy : Listening on port ${SOCKS_PORT} (Direct outbound via WARP)"
+log "SNI Sniffing : Enabled (Resolves Host Fake-IP to Real Domain automatically)"
 log "=========================================================="
 
 wait "$SINGBOX_PID"
