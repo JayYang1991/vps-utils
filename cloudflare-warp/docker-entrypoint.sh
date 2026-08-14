@@ -244,6 +244,8 @@ else
     fi
 fi
 
+warp-cli --accept-tos debug connectivity-check disable 2>/dev/null || true
+
 log "Connecting to Cloudflare WARP..."
 warp-cli --accept-tos connect 2>/dev/null || true
 
