@@ -516,81 +516,12 @@ def patch_clash_sniffer(yaml_content: str) -> str:
         logger.error(f"Error patching Clash sniffer: {e}")
         return yaml_content
 
-def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list) -> str:
-    """Ensure VLESS Reality nodes and local Socks5 nodes are present in Clash YAML, clean non-standard fields, and patch sniffer config."""
-    extra_nodes = [n for n in nodes if n.get("type") in ["vless-reality", "socks", "socks5"]] if nodes else []
+def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list = None) -> str:
+    """Clean up non-standard fields and patch sniffer config in Clash YAML."""
+    if not yaml_content:
+        return yaml_content
     cleaned_yaml = clean_clash_proxies(yaml_content)
-    cleaned_yaml = patch_clash_sniffer(cleaned_yaml)
-    if not extra_nodes or not cleaned_yaml:
-        return cleaned_yaml
-        
-    try:
-        data = yaml.safe_load(cleaned_yaml)
-        if not isinstance(data, dict):
-            return cleaned_yaml
-            
-        existing_proxies = data.get("proxies", [])
-        if not isinstance(existing_proxies, list):
-            existing_proxies = []
-            
-        existing_names = {p.get("name") for p in existing_proxies if isinstance(p, dict)}
-        
-        added_names = []
-        for n in extra_nodes:
-            name = n["name"]
-            if name not in existing_names:
-                if n.get("type") == "vless-reality":
-                    pub_key = n["public_key"].replace('+', '-').replace('/', '_').rstrip('=')
-                    item = {
-                        "name": name,
-                        "type": "vless",
-                        "server": n["server"],
-                        "port": n["port"],
-                        "uuid": n["uuid"],
-                        "udp": True,
-                        "tls": True,
-                        "servername": n["sni"],
-                        "client-fingerprint": "chrome",
-                        "reality-opts": {
-                            "public-key": pub_key,
-                            "short-id": n["short_id"]
-                        }
-                    }
-                    if n.get("flow"):
-                        item["flow"] = n["flow"]
-                    existing_proxies.append(item)
-                    added_names.append(name)
-                elif n.get("type") in ["socks", "socks5"]:
-                    item = {
-                        "name": name,
-                        "type": "socks5",
-                        "server": n["server"],
-                        "port": n["port"],
-                        "udp": True
-                    }
-                    if n.get("user") and n.get("pass"):
-                        item["username"] = n["user"]
-                        item["password"] = n["pass"]
-                    existing_proxies.append(item)
-                    added_names.append(name)
-                
-        if added_names:
-            groups = data.get("proxy-groups", [])
-            for g in groups:
-                if isinstance(g, dict) and "proxies" in g:
-                    g_proxies = g["proxies"]
-                    if isinstance(g_proxies, list):
-                        g_name = g.get("name", "")
-                        if g_name in ["🚀 节点选择", "⚡ 自动选择", "🎯 全球直连"] or "节点" in g_name or "自用" in g_name or "VPS" in g_name or "本地" in g_name:
-                            for an in added_names:
-                                if an not in g_proxies:
-                                    g_proxies.append(an)
-            data["proxies"] = existing_proxies
-            return yaml.dump(data, allow_unicode=True, sort_keys=False)
-    except Exception as e:
-        logger.error(f"Error merging extra nodes into Clash YAML: {e}")
-        
-    return cleaned_yaml
+    return patch_clash_sniffer(cleaned_yaml)
 
 def ensure_reality_utls_in_singbox_dict(data: dict) -> bool:
     """Ensure all vless reality outbounds in sing-box config have utls enabled."""
@@ -652,8 +583,8 @@ def patch_singbox_direct_tag(data: dict) -> bool:
 
     return modified
 
-def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list) -> str:
-    """Ensure local Socks5 and missing extra nodes are present in sing-box JSON configuration, fix reality utls and patch DIRECT tags."""
+def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list = None) -> str:
+    """Ensure reality utls and patch DIRECT tags in sing-box JSON configuration."""
     if not json_content:
         return json_content
     try:
@@ -663,430 +594,12 @@ def ensure_extra_nodes_in_singbox_json(json_content: str, nodes: list) -> str:
             
         modified_utls = ensure_reality_utls_in_singbox_dict(data)
         modified_direct = patch_singbox_direct_tag(data)
-        modified = modified_utls or modified_direct
-
-        extra_nodes = [n for n in nodes if n.get("type") in ["vless-reality", "hysteria2", "socks", "socks5"]] if nodes else []
-        outbounds = data.get("outbounds", [])
-        if not isinstance(outbounds, list):
-            outbounds = []
-            
-        existing_tags = {ob.get("tag") for ob in outbounds if isinstance(ob, dict)}
-        
-        added_tags = []
-        for n in extra_nodes:
-            tag = n.get("name") or n.get("tag")
-            if not tag or tag in existing_tags:
-                continue
-                
-            if n.get("type") == "vless-reality":
-                ob_item = {
-                    "type": "vless",
-                    "tag": tag,
-                    "server": n["server"],
-                    "server_port": n["port"],
-                    "uuid": n["uuid"],
-                    "tls": {
-                        "enabled": True,
-                        "server_name": n["sni"],
-                        "utls": {
-                            "enabled": True,
-                            "fingerprint": "chrome"
-                        },
-                        "reality": {
-                            "enabled": True,
-                            "public_key": n["public_key"],
-                            "short_id": n.get("short_id", "")
-                        }
-                    }
-                }
-                if n.get("flow"):
-                    ob_item["flow"] = n["flow"]
-                outbounds.append(ob_item)
-                added_tags.append(tag)
-            elif n.get("type") == "hysteria2":
-                ob_item = {
-                    "type": "hysteria2",
-                    "tag": tag,
-                    "server": n["server"],
-                    "server_port": n["port"],
-                    "password": n["password"],
-                    "tls": {
-                        "enabled": True,
-                        "server_name": n["sni"]
-                    }
-                }
-                outbounds.append(ob_item)
-                added_tags.append(tag)
-            elif n.get("type") in ["socks", "socks5"]:
-                ob_item = {
-                    "type": "socks",
-                    "tag": tag,
-                    "server": n["server"],
-                    "server_port": n["port"]
-                }
-                if n.get("user") and n.get("pass"):
-                    ob_item["username"] = n["user"]
-                    ob_item["password"] = n["pass"]
-                outbounds.append(ob_item)
-                added_tags.append(tag)
-                
-        if added_tags:
-            for ob in outbounds:
-                if isinstance(ob, dict) and ob.get("type") in ["selector", "urltest"]:
-                    ob_list = ob.get("outbounds")
-                    if isinstance(ob_list, list):
-                        for at in added_tags:
-                            if at not in ob_list:
-                                ob_list.append(at)
-            data["outbounds"] = outbounds
-            modified = True
-
-        if modified:
+        if modified_utls or modified_direct:
             return json.dumps(data, indent=2, ensure_ascii=False)
     except Exception as e:
         logger.error(f"Error processing sing-box JSON: {e}")
         
     return json_content
-
-def generate_clash_yaml(nodes: list) -> str:
-    """Local fallback engine: Generate valid Clash Meta / Mihomo YAML configuration."""
-    proxies = []
-    proxy_names = []
-    
-    hk_nodes, us_nodes, jp_nodes, sg_nodes, tw_nodes = [], [], [], [], []
-    
-    for n in nodes:
-        name = n["name"]
-        proxy_names.append(name)
-        
-        name_upper = name.upper()
-        if "HK" in name_upper or "香港" in name:
-            hk_nodes.append(name)
-        elif "US" in name_upper or "美国" in name:
-            us_nodes.append(name)
-        elif "JP" in name_upper or "日本" in name:
-            jp_nodes.append(name)
-        elif "SG" in name_upper or "新加坡" in name or "狮城" in name:
-            sg_nodes.append(name)
-        elif "TW" in name_upper or "台湾" in name:
-            tw_nodes.append(name)
-            
-        if n["type"] == "vless-ws":
-            proxies.append({
-                "name": name,
-                "type": "vless",
-                "server": n["server"],
-                "port": n["port"],
-                "uuid": n["uuid"],
-                "udp": True,
-                "tls": True,
-                "servername": n["sni"],
-                "network": "ws",
-                "ws-opts": {
-                    "path": n["path"],
-                    "headers": {
-                        "Host": n["host"]
-                    }
-                }
-            })
-        elif n["type"] == "vless-reality":
-            pub_key = n["public_key"].replace('+', '-').replace('/', '_').rstrip('=')
-            item = {
-                "name": name,
-                "type": "vless",
-                "server": n["server"],
-                "port": n["port"],
-                "uuid": n["uuid"],
-                "udp": True,
-                "tls": True,
-                "servername": n["sni"],
-                "client-fingerprint": "chrome",
-                "reality-opts": {
-                    "public-key": pub_key,
-                    "short-id": n["short_id"]
-                }
-            }
-            if n.get("flow"):
-                item["flow"] = n["flow"]
-            proxies.append(item)
-        elif n["type"] == "hysteria2":
-            proxies.append({
-                "name": name,
-                "type": "hysteria2",
-                "server": n["server"],
-                "port": n["port"],
-                "password": n["password"],
-                "sni": n["sni"],
-                "skip-cert-verify": True,
-                "udp": True
-            })
-        elif n["type"] in ["socks", "socks5"]:
-            proxies.append({
-                "name": name,
-                "type": "socks5",
-                "server": n["server"],
-                "port": n["port"],
-                "udp": True
-            })
-            
-    proxy_groups = [
-        {
-            "name": "🚀 节点选择",
-            "type": "select",
-            "proxies": ["⚡ 自动选择", "🇭🇰 香港节点", "🇺🇸 美国节点", "🇸🇬 狮城节点", "🇯🇵 日本节点", "🇨🇳 台湾节点", "DIRECT"] + proxy_names
-        },
-        {
-            "name": "⚡ 自动选择",
-            "type": "url-test",
-            "url": "https://www.gstatic.com/generate_204",
-            "interval": 300,
-            "tolerance": 50,
-            "proxies": proxy_names
-        },
-        {
-            "name": "🇭🇰 香港节点",
-            "type": "select",
-            "proxies": hk_nodes if hk_nodes else ["⚡ 自动选择"] + proxy_names
-        },
-        {
-            "name": "🇺🇸 美国节点",
-            "type": "select",
-            "proxies": us_nodes if us_nodes else ["⚡ 自动选择"] + proxy_names
-        },
-        {
-            "name": "🇸🇬 狮城节点",
-            "type": "select",
-            "proxies": sg_nodes if sg_nodes else ["⚡ 自动选择"] + proxy_names
-        },
-        {
-            "name": "🇯🇵 日本节点",
-            "type": "select",
-            "proxies": jp_nodes if jp_nodes else ["⚡ 自动选择"] + proxy_names
-        },
-        {
-            "name": "🇨🇳 台湾节点",
-            "type": "select",
-            "proxies": tw_nodes if tw_nodes else ["⚡ 自动选择"] + proxy_names
-        },
-        {
-            "name": "🤖 OpenAi",
-            "type": "select",
-            "proxies": ["🚀 节点选择", "🇺🇸 美国节点", "🇯🇵 日本节点", "🇸🇬 狮城节点"] + proxy_names
-        },
-        {
-            "name": "📲 电报消息",
-            "type": "select",
-            "proxies": ["🚀 节点选择", "🇭🇰 香港节点", "🇸🇬 狮城节点"] + proxy_names
-        },
-        {
-            "name": "🎥 奈飞视频",
-            "type": "select",
-            "proxies": ["🚀 节点选择", "🇭🇰 香港节点", "🇸🇬 狮城节点", "🇺🇸 美国节点"] + proxy_names
-        },
-        {
-            "name": "🛑 广告拦截",
-            "type": "select",
-            "proxies": ["REJECT", "DIRECT", "🚀 节点选择"]
-        },
-        {
-            "name": "🎯 全球直连",
-            "type": "select",
-            "proxies": ["DIRECT", "🚀 节点选择"]
-        }
-    ]
-    
-    rules = [
-        "GEOIP,LAN,🎯 全球直连",
-        "GEOSITE,category-ads-all,🛑 广告拦截",
-        "DOMAIN-KEYWORD,openai,🤖 OpenAi",
-        "DOMAIN-KEYWORD,chatgpt,🤖 OpenAi",
-        "DOMAIN-SUFFIX,telegram.org,📲 电报消息",
-        "DOMAIN-SUFFIX,netflix.com,🎥 奈飞视频",
-        "GEOIP,CN,🎯 全球直连",
-        "MATCH,🚀 节点选择"
-    ]
-    
-    clash_config = {
-        "port": 7890,
-        "socks-port": 7891,
-        "allow-lan": True,
-        "mode": "rule",
-        "log-level": "info",
-        "external-controller": "0.0.0.0:9090",
-        "sniffer": {
-            "enable": True,
-            "force-dns-mapping": True,
-            "parse-pure-ip": True,
-            "override-destination": True,
-            "sniff": {
-                "HTTP": {
-                    "ports": [80, "8080-8880"],
-                    "override-destination": True
-                },
-                "TLS": {
-                    "ports": [443, 8443]
-                },
-                "QUIC": {
-                    "ports": [443, 8443]
-                }
-            },
-            "skip-domain": [
-                "MJP.Mihomo.DEV",
-                "+.push.apple.com"
-            ]
-        },
-        "proxies": proxies,
-        "proxy-groups": proxy_groups,
-        "rules": rules
-    }
-    
-    return yaml.dump(clash_config, allow_unicode=True, sort_keys=False)
-
-_cached_singbox_template = ""
-_cached_singbox_template_time = 0
-TEMPLATE_CACHE_TTL = 600
-
-def fetch_singbox_template() -> str:
-    global _cached_singbox_template, _cached_singbox_template_time
-    now = time.time()
-    if _cached_singbox_template and (now - _cached_singbox_template_time < TEMPLATE_CACHE_TTL):
-        return _cached_singbox_template
-        
-    req = urllib.request.Request(DEFAULT_SINGBOX_CONFIG_URL, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            if resp.status == 200:
-                content = resp.read().decode("utf-8")
-                data = json.loads(content)
-                if isinstance(data, dict) and "outbounds" in data:
-                    _cached_singbox_template = content
-                    _cached_singbox_template_time = now
-                    return content
-    except Exception as e:
-        logger.debug(f"Notice: singbox config URL ({DEFAULT_SINGBOX_CONFIG_URL}) is not a JSON template or fetch failed: {e}")
-        
-    return _cached_singbox_template
-
-def generate_singbox_json(nodes: list) -> str:
-    """Generate sing-box JSON configuration using DEFAULT_SINGBOX_CONFIG_URL template with injected outbounds."""
-    node_outbounds = []
-    for n in nodes:
-        name = n["name"]
-        if n["type"] == "vless-ws":
-            node_outbounds.append({
-                "type": "vless",
-                "tag": name,
-                "server": n["server"],
-                "server_port": n["port"],
-                "uuid": n["uuid"],
-                "tls": {
-                    "enabled": True,
-                    "server_name": n["sni"],
-                    "insecure": False
-                },
-                "transport": {
-                    "type": "ws",
-                    "path": n["path"],
-                    "headers": {
-                        "Host": n["host"]
-                    }
-                }
-            })
-        elif n["type"] == "vless-reality":
-            item = {
-                "type": "vless",
-                "tag": name,
-                "server": n["server"],
-                "server_port": n["port"],
-                "uuid": n["uuid"],
-                "tls": {
-                    "enabled": True,
-                    "server_name": n["sni"],
-                    "utls": {
-                        "enabled": True,
-                        "fingerprint": "chrome"
-                    },
-                    "reality": {
-                        "enabled": True,
-                        "public_key": n["public_key"],
-                        "short_id": n["short_id"]
-                    }
-                }
-            }
-            if n.get("flow"):
-                item["flow"] = n["flow"]
-            node_outbounds.append(item)
-        elif n["type"] == "hysteria2":
-            node_outbounds.append({
-                "type": "hysteria2",
-                "tag": name,
-                "server": n["server"],
-                "server_port": n["port"],
-                "password": n["password"],
-                "tls": {
-                    "enabled": True,
-                    "server_name": n["sni"]
-                }
-            })
-        elif n["type"] in ["socks", "socks5"]:
-            item = {
-                "type": "socks",
-                "tag": name,
-                "server": n["server"],
-                "server_port": n["port"]
-            }
-            if n.get("user") and n.get("pass"):
-                item["username"] = n["user"]
-                item["password"] = n["pass"]
-            node_outbounds.append(item)
-
-    node_tags = [ob["tag"] for ob in node_outbounds]
-    template_str = fetch_singbox_template()
-    
-    if template_str:
-        try:
-            template = json.loads(template_str)
-            existing_outbounds = template.get("outbounds", [])
-            
-            for ob in existing_outbounds:
-                if ob.get("type") in ["urltest", "selector"]:
-                    ob_list = ob.get("outbounds", [])
-                    filtered = [t for t in ob_list if t != "direct"]
-                    ob["outbounds"] = node_tags + filtered
-
-            template["outbounds"] = existing_outbounds + node_outbounds
-            patch_singbox_direct_tag(template)
-            return json.dumps(template, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"Error building singbox config from template: {e}")
-
-    # Local fallback
-    fallback_outbounds = []
-    fallback_outbounds.append({
-        "type": "selector",
-        "tag": "select",
-        "outbounds": ["auto", "direct"] + node_tags,
-        "default": "auto"
-    })
-    fallback_outbounds.append({
-        "type": "urltest",
-        "tag": "auto",
-        "outbounds": node_tags,
-        "url": "https://www.gstatic.com/generate_204",
-        "interval": "3m"
-    })
-    fallback_outbounds.extend(node_outbounds)
-    fallback_outbounds.append({
-        "type": "direct",
-        "tag": "direct"
-    })
-    config = {
-        "log": {"level": "info", "timestamp": True},
-        "inbounds": [{"type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 7890}],
-        "outbounds": fallback_outbounds,
-        "route": {"auto_detect_interface": True, "final": "select"}
-    }
-    return json.dumps(config, indent=2, ensure_ascii=False)
 
 def generate_base64_v2ray(nodes: list) -> str:
     """Generate Base64 encoded V2Ray / URI subscription links."""
@@ -1108,14 +621,21 @@ def generate_base64_v2ray(nodes: list) -> str:
             link = f"hysteria2://{n['password']}@{n['server']}:{n['port']}?sni={n['sni']}&insecure=0#{encoded_name}"
             links.append(link)
         elif n["type"] in ["socks", "socks5"]:
-            link = f"socks5://{n['server']}:{n['port']}#{encoded_name}"
+            user = n.get("user") or ""
+            pwd = n.get("pass") or n.get("password") or ""
+            if user and pwd:
+                payload = f"{user}:{pwd}@{n['server']}:{n['port']}"
+            else:
+                payload = f"{n['server']}:{n['port']}"
+            b64_payload = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("utf-8")
+            link = f"socks://{b64_payload}#{encoded_name}"
             links.append(link)
             
     raw_text = "\n".join(links)
     return base64.b64encode(raw_text.encode("utf-8")).decode("utf-8")
 
 def generate_subscription(sb_config_path: str, target: str = "clash", server_host: str = "", sub_url: str = "", config_url: str = "", node_type: str = ""):
-    """Adaptive subscription generator with https://subapi.19910417.xyz/ support, custom config_url, node_type filter, and local fallback."""
+    """Adaptive subscription generator via https://subapi.19910417.xyz/, custom config_url, and node_type filter."""
     nodes = parse_server_inbounds(sb_config_path, server_host)
     nodes = filter_nodes_by_type(nodes, node_type)
     target = target.lower()
@@ -1136,7 +656,4 @@ def generate_subscription(sb_config_path: str, target: str = "clash", server_hos
             logger.error(f"❌ 订阅生成失败: subapi 转换失败 (target={target})，拒绝本地配置兜底")
             return ""
             
-    if "singbox" in target or "sing-box" in target:
-        return generate_singbox_json(nodes)
-    else:
-        return generate_clash_yaml(nodes)
+    return ""
