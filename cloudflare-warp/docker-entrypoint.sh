@@ -35,6 +35,10 @@ sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
 sysctl -w net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
 sysctl -w net.ipv6.conf.lo.disable_ipv6=1 2>/dev/null || true
 
+# Start system dbus daemon to silence power_notifier warning logs in container
+mkdir -p /run/dbus
+dbus-daemon --system --fork 2>/dev/null || true
+
 # 2. Extract and configure Zero Trust Service Token if provided
 TEAM_NAME="${WARP_TEAM:-${ZERO_TRUST_TEAM:-$WARP_ORGANIZATION}}"
 ST_ID="${WARP_SERVICE_TOKEN_ID:-${SERVICE_TOKEN_ID:-$CF_ACCESS_CLIENT_ID}}"
