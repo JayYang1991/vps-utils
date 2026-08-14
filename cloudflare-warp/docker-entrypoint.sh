@@ -11,6 +11,9 @@ log() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+WARP_LOG_LEVEL="${WARP_LOG_LEVEL:-warn}"
+SINGBOX_LOG_LEVEL="${SINGBOX_LOG_LEVEL:-warn}"
+
 # 1. Ensure TUN device node exists & configure container network & DNS
 mkdir -p /dev/net
 if [ ! -c /dev/net/tun ]; then
@@ -79,10 +82,18 @@ EOF
     HAS_MDM=true
 fi
 
-# 3. Start warp-svc background daemon
-log "Starting Cloudflare WARP daemon (warp-svc)..."
-/usr/bin/warp-svc --accept-tos &
-WARP_PID=$!
+# 3. Start warp-svc background daemon (with WARP_LOG_LEVEL filtering)
+log "Starting Cloudflare WARP daemon (warp-svc) [LogLevel: ${WARP_LOG_LEVEL}]..."
+if [[ "$WARP_LOG_LEVEL" == "warn" || "$WARP_LOG_LEVEL" == "warning" ]]; then
+    /usr/bin/warp-svc --accept-tos 2>&1 | grep --line-buffered -v -E "( (DEBUG|INFO) )" &
+    WARP_PID=$!
+elif [[ "$WARP_LOG_LEVEL" == "error" ]]; then
+    /usr/bin/warp-svc --accept-tos 2>&1 | grep --line-buffered -E "ERROR|FATAL|panic|Panic" &
+    WARP_PID=$!
+else
+    /usr/bin/warp-svc --accept-tos &
+    WARP_PID=$!
+fi
 
 # Wait for warp-svc socket to be ready
 log "Waiting for warp-svc socket connection..."
@@ -141,14 +152,14 @@ SOCKS_PORT="${SOCKS_PORT:-1080}"
 CONFIG_FILE="/etc/sing-box/config.json"
 mkdir -p /etc/sing-box
 
-log "Generating sing-box configuration (SOCKS5 listen: ::${SOCKS_PORT}, sniff & destination override enabled)..."
+log "Generating sing-box configuration (SOCKS5 listen: ::${SOCKS_PORT}, LogLevel: ${SINGBOX_LOG_LEVEL}, sniff enabled)..."
 
 if [ -n "$SOCKS_USER" ] && [ -n "$SOCKS_PASS" ]; then
     log "Enabling SOCKS5 authentication for user '${SOCKS_USER}'..."
     cat <<EOF > "$CONFIG_FILE"
 {
   "log": {
-    "level": "${SINGBOX_LOG_LEVEL:-info}",
+    "level": "${SINGBOX_LOG_LEVEL}",
     "timestamp": true
   },
   "inbounds": [
@@ -179,7 +190,7 @@ else
     cat <<EOF > "$CONFIG_FILE"
 {
   "log": {
-    "level": "${SINGBOX_LOG_LEVEL:-info}",
+    "level": "${SINGBOX_LOG_LEVEL}",
     "timestamp": true
   },
   "inbounds": [
@@ -237,7 +248,7 @@ warp-cli --accept-tos connect 2>/dev/null || true
         if echo "$STATUS" | grep -qE "Connected|Success"; then
             continue
         fi
-        log "WARP not connected (${STATUS:-Disconnected}), attempting reconnect..."
+        warn "WARP not connected (${STATUS:-Disconnected}), attempting reconnect..."
         warp-cli --accept-tos connect 2>/dev/null || true
         sleep 5
     done
@@ -266,7 +277,7 @@ trap cleanup SIGINT SIGTERM SIGHUP
 log "=========================================================="
 log "Container initialized and services running!"
 log "SOCKS5 Proxy : Listening on port ${SOCKS_PORT} (Direct outbound via WARP)"
-log "SNI Sniffing : Enabled (Resolves Host Fake-IP to Real Domain automatically)"
+log "Logging      : sing-box=${SINGBOX_LOG_LEVEL}, warp-svc=${WARP_LOG_LEVEL}"
 log "=========================================================="
 
 wait "$SINGBOX_PID"
