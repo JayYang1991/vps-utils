@@ -24,11 +24,11 @@ fi
 
 # Ensure container uses reliable public DNS to prevent inheriting host Clash Fake-IP (198.18.0.2)
 if grep -qE "198.18.|127.0.0." /etc/resolv.conf 2>/dev/null || [ ! -s /etc/resolv.conf ]; then
-    log "Configuring public DNS nameservers (1.1.1.1, 8.8.8.8, 223.5.5.5)..."
+    log "Configuring public DNS nameservers (223.5.5.5, 119.29.29.29, 1.1.1.1)..."
     cat <<EOF > /etc/resolv.conf
-nameserver 1.1.1.1
-nameserver 8.8.8.8
 nameserver 223.5.5.5
+nameserver 119.29.29.29
+nameserver 1.1.1.1
 EOF
 fi
 
@@ -82,18 +82,20 @@ EOF
     HAS_MDM=true
 fi
 
-# 3. Start warp-svc background daemon (with WARP_LOG_LEVEL filtering)
+# 3. Start warp-svc background daemon (with WARP_LOG_LEVEL filtering via named pipe)
 log "Starting Cloudflare WARP daemon (warp-svc) [LogLevel: ${WARP_LOG_LEVEL}]..."
+rm -f /tmp/warp_log.pipe
+mkfifo /tmp/warp_log.pipe
+
 if [[ "$WARP_LOG_LEVEL" == "warn" || "$WARP_LOG_LEVEL" == "warning" ]]; then
-    /usr/bin/warp-svc --accept-tos 2>&1 | grep --line-buffered -v -E "( (DEBUG|INFO) )" &
-    WARP_PID=$!
+    grep --line-buffered -v -E "(DEBUG|INFO)" < /tmp/warp_log.pipe &
 elif [[ "$WARP_LOG_LEVEL" == "error" ]]; then
-    /usr/bin/warp-svc --accept-tos 2>&1 | grep --line-buffered -E "ERROR|FATAL|panic|Panic" &
-    WARP_PID=$!
+    grep --line-buffered -E "(ERROR|FATAL|panic|Panic)" < /tmp/warp_log.pipe &
 else
-    /usr/bin/warp-svc --accept-tos &
-    WARP_PID=$!
+    cat < /tmp/warp_log.pipe &
 fi
+
+/usr/bin/warp-svc --accept-tos > /tmp/warp_log.pipe 2>&1 &
 
 # Wait for warp-svc socket to be ready
 log "Waiting for warp-svc socket connection..."
@@ -122,8 +124,7 @@ if [ "$HAS_MDM" = "true" ]; then
             REG_SUCCESS=true
             break
         fi
-        sleep 1
-        warp-cli --accept-tos mdm refresh 2>/dev/null || true
+        sleep 2
     done
 else
     for i in $(seq 1 10); do
@@ -225,32 +226,37 @@ sing-box run -c "$CONFIG_FILE" &
 SINGBOX_PID=$!
 
 # 7. Set WARP mode, Tunnel Endpoint & Connect
-WARP_MODE="${WARP_MODE:-warp}"
-log "Setting WARP mode to ${WARP_MODE}..."
-warp-cli --accept-tos mode "$WARP_MODE" 2>/dev/null || true
+if [ "$HAS_MDM" != "true" ]; then
+    WARP_MODE="${WARP_MODE:-warp}"
+    log "Setting WARP mode to ${WARP_MODE}..."
+    warp-cli --accept-tos mode "$WARP_MODE" 2>/dev/null || true
 
-if [ -n "$WARP_ENDPOINT" ]; then
-    log "Setting custom WARP tunnel endpoint: ${WARP_ENDPOINT}..."
-    warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
+    if [ -n "$WARP_ENDPOINT" ]; then
+        log "Setting custom WARP tunnel endpoint: ${WARP_ENDPOINT}..."
+        warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
+    else
+        warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
+    fi
 else
-    log "Using WARP native default Endpoint..."
-    warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
+    if [ -n "$WARP_ENDPOINT" ]; then
+        log "Setting custom WARP tunnel endpoint: ${WARP_ENDPOINT}..."
+        warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
+    fi
 fi
 
 log "Connecting to Cloudflare WARP..."
 warp-cli --accept-tos connect 2>/dev/null || true
 
-# Continuous WARP connection health checker daemon
+# Continuous WARP connection health checker daemon (checks every 30s)
 (
     while true; do
-        sleep 5
+        sleep 30
         STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
         if echo "$STATUS" | grep -qE "Connected|Success"; then
             continue
         fi
-        warn "WARP not connected (${STATUS:-Disconnected}), attempting reconnect..."
+        warn "WARP disconnected (${STATUS:-Unknown}), attempting reconnect..."
         warp-cli --accept-tos connect 2>/dev/null || true
-        sleep 5
     done
 ) &
 CHECKER_PID=$!
@@ -261,12 +267,9 @@ cleanup() {
     if [ -n "$CHECKER_PID" ]; then
         kill -TERM "$CHECKER_PID" 2>/dev/null || true
     fi
-    if [ -n "$SINGBOX_PID" ] && kill -0 "$SINGBOX_PID" 2>/dev/null; then
-        kill -TERM "$SINGBOX_PID" 2>/dev/null || true
-    fi
-    if [ -n "$WARP_PID" ] && kill -0 "$WARP_PID" 2>/dev/null; then
-        kill -TERM "$WARP_PID" 2>/dev/null || true
-    fi
+    pkill -TERM -x sing-box 2>/dev/null || true
+    pkill -TERM -x warp-svc 2>/dev/null || true
+    rm -f /tmp/warp_log.pipe 2>/dev/null || true
     wait 2>/dev/null || true
     log "All container services stopped."
     exit 0

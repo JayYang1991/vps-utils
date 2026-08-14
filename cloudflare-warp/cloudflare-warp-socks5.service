@@ -20,9 +20,9 @@ ExecStart=/usr/bin/docker run --rm \
   --name cloudflare-warp-socks5 \
   --cap-add=NET_ADMIN \
   --device /dev/net/tun \
-  --dns 1.1.1.1 \
-  --dns 8.8.8.8 \
   --dns 223.5.5.5 \
+  --dns 119.29.29.29 \
+  --dns 1.1.1.1 \
   -p 1080:1080 \
   --env-file /etc/cloudflare-warp/warp.env \
   cloudflare-warp-socks5:latest

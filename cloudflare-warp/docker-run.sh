@@ -306,9 +306,7 @@ ExecStart=/usr/bin/docker run --rm \\
   --name ${CONTAINER_NAME} \\
   --cap-add=NET_ADMIN \\
   --device /dev/net/tun \\
-  --dns 1.1.1.1 \\
-  --dns 8.8.8.8 \\
-  --dns 223.5.5.5 \\
+  --dns 223.5.5.5 --dns 119.29.29.29 --dns 1.1.1.1 \\
   -p ${HOST_PORT}:1080 \\
   --env-file ${ENV_FILE} \\
   ${IMAGE_NAME}
