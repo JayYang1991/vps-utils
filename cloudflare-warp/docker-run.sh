@@ -221,6 +221,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# 如果指定了 --rebuild/--no-cache 重新编译镜像，则启动时自动重建容器以应用新镜像
+if [[ "$FORCE_BUILD" == "true" ]]; then
+  RECREATE=true
+fi
+
 # 如果指定了 build 且同时携带了运行参数，则默认模式转为 run (先编译再运行)
 if [[ "$ACTION" == "build" ]]; then
   if [[ -n "$WARP_TEAM" || -n "$WARP_SERVICE_TOKEN_ID" || -n "$WARP_LICENSE_KEY" || -n "$WARP_AUTH_TOKEN" || -n "$WARP_ENDPOINT" || -n "$SOCKS_USER" || -n "$SOCKS_PASS" ]]; then
