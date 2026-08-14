@@ -11,26 +11,16 @@ Type=simple
 # 1. 确保宿主机 /dev/net/tun 设备与内核模块正常
 ExecStartPre=/bin/bash -c "modprobe tun 2>/dev/null || true; mkdir -p /dev/net; [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true; chmod 600 /dev/net/tun 2>/dev/null || true"
 
-# 2. 清理可能残留的同名旧容器
-ExecStartPre=-/usr/bin/docker stop cloudflare-warp-socks5
-ExecStartPre=-/usr/bin/docker rm cloudflare-warp-socks5
+# 2. 确保容器已创建 (若不存在则创建，若已存在则保留其已有状态与数据)
+ExecStartPre=/bin/bash -c "docker container inspect cloudflare-warp-socks5 >/dev/null 2>&1 || docker create --name cloudflare-warp-socks5 --cap-add=NET_ADMIN --device /dev/net/tun --dns 223.5.5.5 --dns 119.29.29.29 --dns 1.1.1.1 -p 1080:1080 --env-file /etc/cloudflare-warp/warp.env cloudflare-warp-socks5:latest"
 
-# 3. 前台启动容器 (指定公共 DNS 防止继承宿主机 Fake-IP，敏感认证凭据由 600 权限独立文件直接供给 Docker)
-ExecStart=/usr/bin/docker run --rm \
-  --name cloudflare-warp-socks5 \
-  --cap-add=NET_ADMIN \
-  --device /dev/net/tun \
-  --dns 223.5.5.5 \
-  --dns 119.29.29.29 \
-  --dns 1.1.1.1 \
-  -p 1080:1080 \
-  --env-file /etc/cloudflare-warp/warp.env \
-  cloudflare-warp-socks5:latest
+# 3. 前台启动并附加到容器 (保留容器历史状态，不使用 --rm)
+ExecStart=/usr/bin/docker start -a cloudflare-warp-socks5
 
 # 4. 服务启动后：自动配置策略路由 (源地址 172.17.0.0/16 查 main 表)
 ExecStartPost=/bin/bash -c "ip rule show | grep -q '8999:' || /sbin/ip rule add from 172.17.0.0/16 priority 8999 lookup main || true"
 
-# 5. 服务停止时：优雅停止 Docker 容器
+# 5. 服务停止时：优雅停止 Docker 容器 (保留容器状态)
 ExecStop=-/usr/bin/docker stop -t 10 cloudflare-warp-socks5
 
 # 6. 服务退出后：自动清理策略路由规则

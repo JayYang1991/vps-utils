@@ -42,6 +42,7 @@ SOCKS_PASS=""
 ACTION=""
 FORCE_BUILD=false
 NO_CACHE=false
+RECREATE=false
 
 show_help() {
   echo -e "${CYAN}Cloudflare WARP + Sing-box SOCKS5 容器化与 Systemd 服务管理脚本${NC}"
@@ -50,10 +51,12 @@ show_help() {
   echo ""
   echo "核心操作模式:"
   echo "  --service, --install-service     将容器安装为开机自启的 Systemd 服务 (含策略路由管理，凭据隔离加密存储)"
-  echo "  --uninstall-service              停止并卸载 Systemd 服务，清理环境配置文件与策略路由"
+  echo "  --uninstall-service              停止并卸载 Systemd 服务，清理环境配置文件、删除容器与策略路由"
+  echo "  --restart                        重启 Systemd 服务或 Docker 容器 (保留容器历史状态与数据)"
+  echo "  --stop                           停止运行中的容器或 Systemd 服务 (保留容器状态)"
   echo "  --build, --rebuild, -b           重新编译 Docker 镜像 (仅构建镜像，不启动容器)"
   echo "  --no-cache                       构建 Docker 镜像时不使用缓存 (全新编译)"
-  echo "  --stop                           停止并删除运行中的容器/Systemd服务"
+  echo "  --recreate                       强制删除已有旧容器并重新创建 (清除旧状态)"
   echo "  --logs                           查看实时运行日志 (优先使用 journalctl)"
   echo "  --status                         查看 Systemd 服务、策略路由、容器与 WARP 连通状态"
   echo "  --test                           快速测试 SOCKS5 代理连通性 (curl Cloudflare trace)"
@@ -78,22 +81,26 @@ show_help() {
   echo -e "  ${YELLOW}# 1. 推荐：一键安装为 Systemd 系统服务 (开机自启 + 策略路由自动管理 + 凭据隔离存储)${NC}"
   echo "  sudo bash $0 --install-service -t my-team --service-token xxxx.access:yyyyy -p 1080"
   echo ""
-  echo -e "  ${YELLOW}# 2. 直接运行容器 (独立模式)${NC}"
+  echo -e "  ${YELLOW}# 2. 重启服务 (保留容器已有状态，不重新注册)${NC}"
+  echo "  sudo bash $0 --restart"
+  echo "  sudo systemctl restart cloudflare-warp-socks5"
+  echo ""
+  echo -e "  ${YELLOW}# 3. 直接运行容器 (独立模式，已存在则复用)${NC}"
   echo "  sudo bash $0 -t my-team --service-token xxxx.access:yyyyy -p 1080"
   echo ""
-  echo -e "  ${YELLOW}# 3. 重新编译 Docker 镜像 (支持 --no-cache 无缓存构建)${NC}"
+  echo -e "  ${YELLOW}# 4. 重新编译 Docker 镜像 (支持 --no-cache 无缓存构建)${NC}"
   echo "  bash $0 --rebuild"
   echo "  bash $0 --rebuild --no-cache"
   echo ""
-  echo -e "  ${YELLOW}# 4. 查看状态与测试${NC}"
+  echo -e "  ${YELLOW}# 5. 查看状态与测试${NC}"
   echo "  sudo bash $0 --status"
   echo "  sudo bash $0 --test"
   echo ""
-  echo -e "  ${YELLOW}# 5. 查看日志与停止${NC}"
+  echo -e "  ${YELLOW}# 6. 查看日志与停止${NC}"
   echo "  sudo bash $0 --logs"
   echo "  sudo bash $0 --stop"
   echo ""
-  echo -e "  ${YELLOW}# 6. 卸载 Systemd 服务${NC}"
+  echo -e "  ${YELLOW}# 7. 卸载 Systemd 服务${NC}"
   echo "  sudo bash $0 --uninstall-service"
 }
 
@@ -165,6 +172,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --uninstall-service)
       ACTION="uninstall_service"
+      shift 1
+      ;;
+    --restart)
+      ACTION="restart"
+      shift 1
+      ;;
+    --recreate)
+      RECREATE=true
       shift 1
       ;;
     -b | --build | --rebuild)
@@ -295,6 +310,12 @@ do_install_service() {
   ensure_tun_device
   build_image_if_needed
 
+  if [[ "$RECREATE" == "true" ]]; then
+    log "检测到 --recreate 参数，清理旧容器 ${CONTAINER_NAME}..."
+    docker stop "$CONTAINER_NAME" 2>/dev/null || true
+    docker rm "$CONTAINER_NAME" 2>/dev/null || true
+  fi
+
   log "1. 将敏感认证参数安全写入独立凭据文件 (权限 600): ${ENV_FILE}..."
   mkdir -p "$CONF_DIR"
   cat <<EOF > "$ENV_FILE"
@@ -318,7 +339,7 @@ EOF
     chmod 640 "$ENV_FILE" 2>/dev/null || true
   fi
 
-  log "2. 生成干净的 Systemd 服务单元文件 (无任何敏感凭据): ${SERVICE_FILE}..."
+  log "2. 生成干净的 Systemd 服务单元文件 (无任何敏感凭据，重启保留容器状态): ${SERVICE_FILE}..."
   cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Cloudflare WARP + Sing-box SOCKS5 Proxy Service (Docker Container)
@@ -333,24 +354,16 @@ Type=simple
 # 1. 确保宿主机 /dev/net/tun 设备与内核模块正常
 ExecStartPre=/bin/bash -c "modprobe tun 2>/dev/null || true; mkdir -p /dev/net; [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true; chmod 600 /dev/net/tun 2>/dev/null || true"
 
-# 2. 清理可能残留的同名旧容器
-ExecStartPre=-/usr/bin/docker stop ${CONTAINER_NAME}
-ExecStartPre=-/usr/bin/docker rm ${CONTAINER_NAME}
+# 2. 确保容器已创建 (若不存在则创建，若已存在则保留其已有状态与数据)
+ExecStartPre=/bin/bash -c "docker container inspect ${CONTAINER_NAME} >/dev/null 2>&1 || docker create --name ${CONTAINER_NAME} --cap-add=NET_ADMIN --device /dev/net/tun --dns 223.5.5.5 --dns 119.29.29.29 --dns 1.1.1.1 -p ${HOST_PORT}:1080 --env-file ${ENV_FILE} ${IMAGE_NAME}"
 
-# 3. 前台启动容器 (指定公共 DNS 防止继承宿主机 Fake-IP，敏感凭据由独立文件提供)
-ExecStart=/usr/bin/docker run --rm \\
-  --name ${CONTAINER_NAME} \\
-  --cap-add=NET_ADMIN \\
-  --device /dev/net/tun \\
-  --dns 223.5.5.5 --dns 119.29.29.29 --dns 1.1.1.1 \\
-  -p ${HOST_PORT}:1080 \\
-  --env-file ${ENV_FILE} \\
-  ${IMAGE_NAME}
+# 3. 前台启动并附加到容器 (保留容器历史状态，不使用 --rm)
+ExecStart=/usr/bin/docker start -a ${CONTAINER_NAME}
 
 # 4. 服务启动后：自动配置策略路由 (源地址 ${POLICY_ROUTE_SRC} 查 main 表)
 ExecStartPost=/bin/bash -c "ip rule show | grep -q '${POLICY_ROUTE_PRIO}:' || /sbin/ip rule add from ${POLICY_ROUTE_SRC} priority ${POLICY_ROUTE_PRIO} lookup main || true"
 
-# 5. 优雅停止容器
+# 5. 优雅停止容器 (保留容器状态)
 ExecStop=-/usr/bin/docker stop -t 10 ${CONTAINER_NAME}
 
 # 6. 服务退出后：自动清理策略路由
@@ -420,13 +433,27 @@ do_stop() {
   if command -v systemctl &>/dev/null && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
     log "停止 Systemd 服务 ${SERVICE_NAME}..."
     systemctl stop "$SERVICE_NAME"
-    success "Systemd 服务已停止（策略路由已由 ExecStopPost 自动清理）。"
+    success "Systemd 服务已停止 (容器状态已保留，策略路由已由 ExecStopPost 自动清理)。"
   else
-    log "停止并清理 Docker 容器 ${CONTAINER_NAME}..."
+    log "停止 Docker 容器 ${CONTAINER_NAME} (保留容器状态)..."
     docker stop "$CONTAINER_NAME" 2>/dev/null || true
-    docker rm "$CONTAINER_NAME" 2>/dev/null || true
     remove_policy_route
-    success "容器已停止并删除，策略路由已清理。"
+    success "容器已停止 (容器数据与状态已保留)，策略路由已清理。"
+  fi
+}
+
+do_restart() {
+  check_root
+  if command -v systemctl &>/dev/null && (systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null || [[ -f "$SERVICE_FILE" ]]); then
+    log "重启 Systemd 服务 ${SERVICE_NAME} (保留容器状态)..."
+    systemctl restart "$SERVICE_NAME"
+    success "Systemd 服务已重启！"
+  else
+    check_docker
+    add_policy_route
+    log "重启 Docker 容器 ${CONTAINER_NAME} (保留容器状态)..."
+    docker restart "$CONTAINER_NAME"
+    success "Docker 容器已重启！"
   fi
 }
 
@@ -529,11 +556,40 @@ do_run() {
   build_image_if_needed
   add_policy_route
 
-  # 清理旧同名容器
-  if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    log "清理现有旧容器 ${CONTAINER_NAME}..."
-    docker stop "$CONTAINER_NAME" 2>/dev/null || true
-    docker rm "$CONTAINER_NAME" 2>/dev/null || true
+  local container_exists=false
+  if docker container inspect "$CONTAINER_NAME" &>/dev/null; then
+    container_exists=true
+  fi
+
+  if [[ "$container_exists" == "true" ]]; then
+    if [[ "$RECREATE" == "true" ]]; then
+      log "检测到 --recreate 参数，删除旧容器 ${CONTAINER_NAME} 并重新创建..."
+      docker stop "$CONTAINER_NAME" 2>/dev/null || true
+      docker rm "$CONTAINER_NAME" 2>/dev/null || true
+    else
+      local is_running=false
+      if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        is_running=true
+      fi
+
+      if [[ "$is_running" == "true" ]]; then
+        log "容器 ${CONTAINER_NAME} 已经在运行中 (状态已保留)。"
+      else
+        log "发现已有容器 ${CONTAINER_NAME}，直接启动现有容器 (保留上次运行状态)..."
+        docker start "$CONTAINER_NAME"
+        success "容器 ${CONTAINER_NAME} 已成功启动！"
+      fi
+
+      echo ""
+      echo "=========================================================="
+      echo -e "SOCKS5 代理配置信息:"
+      echo -e "  - 容器名称 : ${YELLOW}${CONTAINER_NAME}${NC}"
+      echo -e "  - 运行状态 : ${GREEN}运行中 (保留已有状态与注册信息)${NC}"
+      echo -e "  - 策略路由 : ${GREEN}优先级 ${POLICY_ROUTE_PRIO} (${POLICY_ROUTE_SRC} 走 main 表)${NC}"
+      echo -e "  - 如需重建 : 可使用 ${YELLOW}sudo bash $0 --recreate ...${NC}"
+      echo "=========================================================="
+      return 0
+    fi
   fi
 
   DOCKER_ENV_ARGS=()
@@ -586,6 +642,9 @@ case "$ACTION" in
     ;;
   run)
     do_run
+    ;;
+  restart)
+    do_restart
     ;;
   stop)
     do_stop

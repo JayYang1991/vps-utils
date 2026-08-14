@@ -54,6 +54,7 @@ sysctl -w net.ipv6.conf.lo.disable_ipv6=1 2>/dev/null || true
 
 # Start system dbus daemon to silence power_notifier warning logs in container
 mkdir -p /run/dbus
+rm -f /run/dbus/pid /run/dbus/system_bus_socket 2>/dev/null || true
 dbus-daemon --system --fork 2>/dev/null || true
 
 # Pre-allow DNS in iptables
@@ -101,6 +102,8 @@ fi
 
 # 3. Start warp-svc background daemon (with WARP_LOG_LEVEL filtering via named pipe)
 log "Starting Cloudflare WARP daemon (warp-svc) [LogLevel: ${WARP_LOG_LEVEL}]..."
+mkdir -p /run/cloudflare-warp
+rm -f /run/cloudflare-warp/warp_service /run/cloudflare-warp/warp_service.sock 2>/dev/null || true
 rm -f /tmp/warp_log.pipe
 mkfifo /tmp/warp_log.pipe
 

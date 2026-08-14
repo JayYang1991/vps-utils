@@ -109,25 +109,33 @@ sudo bash docker-run.sh --logs
 # 或直接使用:
 journalctl -u cloudflare-warp-socks5 -f
 
-# 4. 重启 / 停止服务
+# 4. 重启服务 (保留容器已有状态，不重新注册) / 停止服务
 sudo systemctl restart cloudflare-warp-socks5
+# 或使用脚本重启:
+sudo bash docker-run.sh --restart
 sudo bash docker-run.sh --stop
 
-# 5. 卸载 Systemd 服务与规则
+# 5. 卸载 Systemd 服务与规则 (彻底清理环境与容器)
 sudo bash docker-run.sh --uninstall-service
 ```
 
 ---
 
-### 4. 也可以直接以 Docker 独立容器模式运行
+### 5. 也可以直接以 Docker 独立容器模式运行
 
-如果不想注册 Systemd 服务，也可以直接前台/后台运行容器：
+如果不想注册 Systemd 服务，也可以直接前台/后台运行容器（首次创建后，后续启动/重启自动保留容器状态）：
 
 ```bash
-# 启动独立容器 (脚本同样会自动配置策略路由)
+# 启动独立容器 (脚本同样会自动配置策略路由；若容器已存在则直接拉起保留状态)
 sudo bash docker-run.sh -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
 
-# 停止并清理独立容器
+# 重启独立容器 (保留容器历史状态)
+sudo bash docker-run.sh --restart
+
+# 强制重建容器 (清除旧容器与状态)
+sudo bash docker-run.sh --recreate -t <YOUR_TEAM_NAME> --service-token <CLIENT_ID>:<CLIENT_SECRET> -p 1080
+
+# 停止独立容器 (保留容器数据)
 sudo bash docker-run.sh --stop
 ```
 
@@ -143,14 +151,16 @@ sudo bash docker-run.sh --stop
 - `-n, --name <NAME>`：指定容器/服务名称 (默认: `cloudflare-warp-socks5`)
 - `--route-src <CIDR>`：策略路由豁免的源地址网段 (默认: `172.17.0.0/16`)
 - `--route-prio <PRIO>`：策略路由规则优先级 (默认: `8999`)
-- `--install-service`：注册并启动 Systemd 服务
-- `--uninstall-service`：卸载 Systemd 服务并清理规则
+- `--install-service`：注册并启动 Systemd 服务 (无敏感信息，重启保留容器状态)
+- `--uninstall-service`：卸载 Systemd 服务并清理规则、删除容器
+- `--restart`：重启服务或容器 (保留容器上次运行的状态)
+- `--recreate`：强制删除旧容器并重新创建
 - `--build, --rebuild, -b`：重新编译 Docker 镜像 (仅构建镜像，不启动容器)
 - `--no-cache`：构建 Docker 镜像时不使用缓存 (全新编译)
 - `--status`：查看完整运行状态与连通性
 - `--test`：测试代理有效性
 - `--logs`：查看日志
-- `--stop`：停止服务与容器
+- `--stop`：停止服务与容器 (保留容器状态)
 
 ---
 
