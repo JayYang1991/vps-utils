@@ -30,6 +30,7 @@ IMAGE_NAME="cloudflare-warp-socks5:latest"
 HOST_PORT="1080"
 POLICY_ROUTE_SRC="172.17.0.0/16"
 POLICY_ROUTE_PRIO="8999"
+VOLUME_NAME="cloudflare-warp-data"
 
 WARP_TEAM=""
 WARP_SERVICE_TOKEN_ID=""
@@ -184,13 +185,15 @@ while [[ $# -gt 0 ]]; do
       ;;
     -b | --build | --rebuild)
       FORCE_BUILD=true
-      [[ -z "$ACTION" ]] && ACTION="build"
+      RECREATE=true
+      [[ -z "$ACTION" ]] && ACTION="rebuild"
       shift 1
       ;;
     --no-cache)
       NO_CACHE=true
       FORCE_BUILD=true
-      [[ -z "$ACTION" ]] && ACTION="build"
+      RECREATE=true
+      [[ -z "$ACTION" ]] && ACTION="rebuild"
       shift 1
       ;;
     --stop)
@@ -277,6 +280,40 @@ do_build() {
   success "Docker 镜像 ${IMAGE_NAME} 编译完成！"
 }
 
+do_rebuild() {
+  do_build
+
+  # 编译完成后，若存在正在运行的容器或服务，自动重建并平滑重启
+  if docker container inspect "$CONTAINER_NAME" &>/dev/null; then
+    log "检测到已有旧容器 ${CONTAINER_NAME}，正在删除以应用新编译镜像..."
+    docker stop "$CONTAINER_NAME" 2>/dev/null || true
+    docker rm "$CONTAINER_NAME" 2>/dev/null || true
+
+    if command -v systemctl &>/dev/null && (systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null || [[ -f "$SERVICE_FILE" ]]); then
+      log "检测到 Systemd 服务 ${SERVICE_NAME}，正在使用新镜像重启服务..."
+      systemctl restart "$SERVICE_NAME"
+      success "服务已根据新镜像成功重启并运行！"
+    elif [[ -f "$ENV_FILE" ]]; then
+      log "正在根据新镜像重新创建并启动容器..."
+      ensure_tun_device
+      add_policy_route
+      docker run -d \
+        --name "$CONTAINER_NAME" \
+        --restart unless-stopped \
+        --cap-add=NET_ADMIN \
+        --device /dev/net/tun \
+        --dns 223.5.5.5 --dns 119.29.29.29 --dns 1.1.1.1 \
+        -p "${HOST_PORT}:1080" \
+        -v "${VOLUME_NAME}:/var/lib/cloudflare-warp" \
+        --env-file "$ENV_FILE" \
+        "$IMAGE_NAME" >/dev/null
+      success "容器 ${CONTAINER_NAME} 已成功根据新镜像重建并启动！"
+    fi
+  else
+    log "当前无运行中的旧容器。镜像已就绪，您可直接启动或使用 '--install-service' 安装服务。"
+  fi
+}
+
 build_image_if_needed() {
   if [[ "$FORCE_BUILD" == "true" ]] || ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     do_build
@@ -360,18 +397,18 @@ Type=simple
 ExecStartPre=/bin/bash -c "modprobe tun 2>/dev/null || true; mkdir -p /dev/net; [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true; chmod 600 /dev/net/tun 2>/dev/null || true"
 
 # 2. 确保容器已创建 (若不存在则创建，若已存在则保留其已有状态与数据)
-ExecStartPre=/bin/bash -c "docker container inspect ${CONTAINER_NAME} >/dev/null 2>&1 || docker create --name ${CONTAINER_NAME} --cap-add=NET_ADMIN --device /dev/net/tun --dns 223.5.5.5 --dns 119.29.29.29 --dns 1.1.1.1 -p ${HOST_PORT}:1080 --env-file ${ENV_FILE} ${IMAGE_NAME}"
+ExecStartPre=/bin/bash -c "docker container inspect ${CONTAINER_NAME} >/dev/null 2>&1 || docker create --name ${CONTAINER_NAME} --cap-add=NET_ADMIN --device /dev/net/tun --dns 223.5.5.5 --dns 119.29.29.29 --dns 1.1.1.1 -p ${HOST_PORT}:1080 -v ${VOLUME_NAME}:/var/lib/cloudflare-warp --env-file ${ENV_FILE} ${IMAGE_NAME}"
 
 # 3. 前台启动并附加到容器 (保留容器历史状态，不使用 --rm)
 ExecStart=/usr/bin/docker start -a ${CONTAINER_NAME}
 
-# 4. 服务启动后：自动配置策略路由 (源地址 ${POLICY_ROUTE_SRC} 查 main 表)
+# 4. 服务启动后：自动配置策略路由 (源地址 ${POLICY_ROUTE_SRC} 查 main 表，防止与宿主机 Clash 形成流量循环)
 ExecStartPost=/bin/bash -c "ip rule show | grep -q '${POLICY_ROUTE_PRIO}:' || /sbin/ip rule add from ${POLICY_ROUTE_SRC} priority ${POLICY_ROUTE_PRIO} lookup main || true"
 
 # 5. 优雅停止容器 (保留容器状态)
 ExecStop=-/usr/bin/docker stop -t 10 ${CONTAINER_NAME}
 
-# 6. 服务退出后：自动清理策略路由
+# 6. 服务退出后：自动清理策略路由规则
 ExecStopPost=/bin/bash -c "while ip rule show | grep -q '${POLICY_ROUTE_PRIO}:'; do /sbin/ip rule del from ${POLICY_ROUTE_SRC} priority ${POLICY_ROUTE_PRIO} lookup main || break; done"
 
 Restart=always
@@ -612,10 +649,11 @@ do_run() {
     --name "$CONTAINER_NAME" \
     --cap-add=NET_ADMIN \
     --device /dev/net/tun \
-    --dns 1.1.1.1 \
-    --dns 8.8.8.8 \
     --dns 223.5.5.5 \
+    --dns 119.29.29.29 \
+    --dns 1.1.1.1 \
     -p "${HOST_PORT}:1080" \
+    -v "${VOLUME_NAME}:/var/lib/cloudflare-warp" \
     "${DOCKER_ENV_ARGS[@]}" \
     --restart unless-stopped \
     "$IMAGE_NAME"
@@ -636,8 +674,11 @@ do_run() {
 
 # 动作分发
 case "$ACTION" in
-  build | rebuild)
+  build)
     do_build
+    ;;
+  rebuild)
+    do_rebuild
     ;;
   install_service)
     do_install_service

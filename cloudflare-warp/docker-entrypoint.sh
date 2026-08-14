@@ -46,16 +46,19 @@ nameserver 1.1.1.1
 EOF
 fi
 
-# Disable IPv6 stack inside container to prevent WARP IPv6 Happy Eyeballs timeouts
+# Configure network stack inside container
 log "Configuring network stack inside container..."
-sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
-sysctl -w net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
-sysctl -w net.ipv6.conf.lo.disable_ipv6=1 2>/dev/null || true
+sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
 
 # Start system dbus daemon to silence power_notifier warning logs in container
-mkdir -p /run/dbus
+mkdir -p /run/dbus /var/lib/dbus /etc
 rm -f /run/dbus/pid /run/dbus/system_bus_socket 2>/dev/null || true
+dbus-uuidgen --ensure 2>/dev/null || true
 dbus-daemon --system --fork 2>/dev/null || true
+for _ in {1..15}; do
+    [ -S /run/dbus/system_bus_socket ] && break
+    sleep 0.1
+done
 
 # Pre-allow DNS in iptables
 allow_dns_firewall
