@@ -145,6 +145,8 @@ sudo bash docker-run.sh --stop
 - `--route-prio <PRIO>`：策略路由规则优先级 (默认: `8999`)
 - `--install-service`：注册并启动 Systemd 服务
 - `--uninstall-service`：卸载 Systemd 服务并清理规则
+- `--build, --rebuild, -b`：重新编译 Docker 镜像 (仅构建镜像，不启动容器)
+- `--no-cache`：构建 Docker 镜像时不使用缓存 (全新编译)
 - `--status`：查看完整运行状态与连通性
 - `--test`：测试代理有效性
 - `--logs`：查看日志

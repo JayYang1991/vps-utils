@@ -39,8 +39,9 @@ WARP_LICENSE_KEY=""
 WARP_AUTH_TOKEN=""
 SOCKS_USER=""
 SOCKS_PASS=""
-ACTION="run"
+ACTION=""
 FORCE_BUILD=false
+NO_CACHE=false
 
 show_help() {
   echo -e "${CYAN}Cloudflare WARP + Sing-box SOCKS5 容器化与 Systemd 服务管理脚本${NC}"
@@ -50,11 +51,12 @@ show_help() {
   echo "核心操作模式:"
   echo "  --service, --install-service     将容器安装为开机自启的 Systemd 服务 (含策略路由管理，凭据隔离加密存储)"
   echo "  --uninstall-service              停止并卸载 Systemd 服务，清理环境配置文件与策略路由"
+  echo "  --build, --rebuild, -b           重新编译 Docker 镜像 (仅构建镜像，不启动容器)"
+  echo "  --no-cache                       构建 Docker 镜像时不使用缓存 (全新编译)"
   echo "  --stop                           停止并删除运行中的容器/Systemd服务"
   echo "  --logs                           查看实时运行日志 (优先使用 journalctl)"
   echo "  --status                         查看 Systemd 服务、策略路由、容器与 WARP 连通状态"
   echo "  --test                           快速测试 SOCKS5 代理连通性 (curl Cloudflare trace)"
-  echo "  --build                          强制重新构建 Docker 镜像"
   echo ""
   echo "配置选项 (用于启动容器或安装服务):"
   echo "  -t, --team <TEAM>                指定 Cloudflare Zero Trust 团队名称 (Team Name)"
@@ -79,15 +81,19 @@ show_help() {
   echo -e "  ${YELLOW}# 2. 直接运行容器 (独立模式)${NC}"
   echo "  sudo bash $0 -t my-team --service-token xxxx.access:yyyyy -p 1080"
   echo ""
-  echo -e "  ${YELLOW}# 3. 查看状态与测试${NC}"
+  echo -e "  ${YELLOW}# 3. 重新编译 Docker 镜像 (支持 --no-cache 无缓存构建)${NC}"
+  echo "  bash $0 --rebuild"
+  echo "  bash $0 --rebuild --no-cache"
+  echo ""
+  echo -e "  ${YELLOW}# 4. 查看状态与测试${NC}"
   echo "  sudo bash $0 --status"
   echo "  sudo bash $0 --test"
   echo ""
-  echo -e "  ${YELLOW}# 4. 查看日志与停止${NC}"
+  echo -e "  ${YELLOW}# 5. 查看日志与停止${NC}"
   echo "  sudo bash $0 --logs"
   echo "  sudo bash $0 --stop"
   echo ""
-  echo -e "  ${YELLOW}# 5. 卸载 Systemd 服务${NC}"
+  echo -e "  ${YELLOW}# 6. 卸载 Systemd 服务${NC}"
   echo "  sudo bash $0 --uninstall-service"
 }
 
@@ -161,8 +167,15 @@ while [[ $# -gt 0 ]]; do
       ACTION="uninstall_service"
       shift 1
       ;;
-    --build)
+    -b | --build | --rebuild)
       FORCE_BUILD=true
+      [[ -z "$ACTION" ]] && ACTION="build"
+      shift 1
+      ;;
+    --no-cache)
+      NO_CACHE=true
+      FORCE_BUILD=true
+      [[ -z "$ACTION" ]] && ACTION="build"
       shift 1
       ;;
     --stop)
@@ -193,6 +206,15 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# 如果指定了 build 且同时携带了运行参数，则默认模式转为 run (先编译再运行)
+if [[ "$ACTION" == "build" ]]; then
+  if [[ -n "$WARP_TEAM" || -n "$WARP_SERVICE_TOKEN_ID" || -n "$WARP_LICENSE_KEY" || -n "$WARP_AUTH_TOKEN" || -n "$WARP_ENDPOINT" || -n "$SOCKS_USER" || -n "$SOCKS_PASS" ]]; then
+    ACTION="run"
+  fi
+elif [[ -z "$ACTION" ]]; then
+  ACTION="run"
+fi
+
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")
 
 check_root() {
@@ -219,11 +241,25 @@ ensure_tun_device() {
   fi
 }
 
+do_build() {
+  check_docker
+  if [[ ! -f "${SCRIPT_DIR}/Dockerfile" ]]; then
+    error "未在脚本同级目录找到 Dockerfile: ${SCRIPT_DIR}/Dockerfile"
+    exit 1
+  fi
+  log "构建/重新编译 Docker 镜像 ${IMAGE_NAME}..."
+  local build_opts=("--network" "host" "-t" "$IMAGE_NAME")
+  if [[ "$NO_CACHE" == "true" ]]; then
+    build_opts+=("--no-cache")
+    log "已启用 --no-cache 模式 (无缓存全新编译)"
+  fi
+  docker build "${build_opts[@]}" "$SCRIPT_DIR"
+  success "Docker 镜像 ${IMAGE_NAME} 编译完成！"
+}
+
 build_image_if_needed() {
   if [[ "$FORCE_BUILD" == "true" ]] || ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
-    log "构建 Docker 镜像 ${IMAGE_NAME}..."
-    docker build --network host -t "$IMAGE_NAME" "$SCRIPT_DIR"
-    success "Docker 镜像 ${IMAGE_NAME} 构建完成。"
+    do_build
   fi
 }
 
@@ -539,6 +575,9 @@ do_run() {
 
 # 动作分发
 case "$ACTION" in
+  build | rebuild)
+    do_build
+    ;;
   install_service)
     do_install_service
     ;;
