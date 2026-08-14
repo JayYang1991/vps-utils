@@ -14,6 +14,20 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 WARP_LOG_LEVEL="${WARP_LOG_LEVEL:-warn}"
 SINGBOX_LOG_LEVEL="${SINGBOX_LOG_LEVEL:-warn}"
 
+# Helper to ensure container DNS is never blocked by WARP Zero Trust kill-switch firewall
+allow_dns_firewall() {
+    iptables -C OUTPUT -p udp --dport 53 -j ACCEPT 2>/dev/null || iptables -I OUTPUT 1 -p udp --dport 53 -j ACCEPT
+    iptables -C OUTPUT -p tcp --dport 53 -j ACCEPT 2>/dev/null || iptables -I OUTPUT 1 -p tcp --dport 53 -j ACCEPT
+    iptables -C INPUT -p udp --sport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p udp --sport 53 -j ACCEPT
+    iptables -C INPUT -p tcp --sport 53 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --sport 53 -j ACCEPT
+    if command -v nft >/dev/null 2>&1; then
+        nft insert rule inet cloudflare-warp output udp dport 53 accept 2>/dev/null || true
+        nft insert rule inet cloudflare-warp output tcp dport 53 accept 2>/dev/null || true
+        nft insert rule inet cloudflare-warp input udp sport 53 accept 2>/dev/null || true
+        nft insert rule inet cloudflare-warp input tcp sport 53 accept 2>/dev/null || true
+    fi
+}
+
 # 1. Ensure TUN device node exists & configure container network & DNS
 mkdir -p /dev/net
 if [ ! -c /dev/net/tun ]; then
@@ -41,6 +55,9 @@ sysctl -w net.ipv6.conf.lo.disable_ipv6=1 2>/dev/null || true
 # Start system dbus daemon to silence power_notifier warning logs in container
 mkdir -p /run/dbus
 dbus-daemon --system --fork 2>/dev/null || true
+
+# Pre-allow DNS in iptables
+allow_dns_firewall
 
 # 2. Extract and configure Zero Trust Service Token if provided
 TEAM_NAME="${WARP_TEAM:-${ZERO_TRUST_TEAM:-$WARP_ORGANIZATION}}"
@@ -119,7 +136,7 @@ if [ "$HAS_MDM" = "true" ]; then
     log "MDM profile detected, triggering MDM sync..."
     warp-cli --accept-tos mdm refresh 2>/dev/null || true
     for i in $(seq 1 15); do
-        if warp-cli --accept-tos registration show 2>/dev/null | grep -qE "Account type: Team"; then
+        if warp-cli --accept-tos registration show 2>/dev/null | grep -qE "Account: Team|Account type: Team|Organization:|Registration:"; then
             log "Zero Trust MDM enrollment registered successfully."
             REG_SUCCESS=true
             break
@@ -182,7 +199,8 @@ if [ -n "$SOCKS_USER" ] && [ -n "$SOCKS_PASS" ]; then
   "outbounds": [
     {
       "type": "direct",
-      "tag": "direct"
+      "tag": "direct",
+      "domain_strategy": "prefer_ipv4"
     }
   ]
 }
@@ -207,7 +225,8 @@ else
   "outbounds": [
     {
       "type": "direct",
-      "tag": "direct"
+      "tag": "direct",
+      "domain_strategy": "prefer_ipv4"
     }
   ]
 }
@@ -248,13 +267,18 @@ warp-cli --accept-tos debug connectivity-check disable 2>/dev/null || true
 
 log "Connecting to Cloudflare WARP..."
 warp-cli --accept-tos connect 2>/dev/null || true
+allow_dns_firewall
 
-# Continuous WARP connection health checker daemon (checks every 30s)
+# Continuous WARP connection health checker daemon (checks every 15s)
 (
     while true; do
-        sleep 30
+        allow_dns_firewall
+        sleep 15
         STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
         if echo "$STATUS" | grep -qE "Connected|Success"; then
+            continue
+        fi
+        if echo "$STATUS" | grep -qE "Connecting"; then
             continue
         fi
         warn "WARP disconnected (${STATUS:-Unknown}), attempting reconnect..."
