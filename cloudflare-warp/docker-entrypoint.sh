@@ -141,6 +141,9 @@ if [ "$HAS_MDM" = "true" ]; then
             REG_SUCCESS=true
             break
         fi
+        if [ $((i % 4)) -eq 0 ]; then
+            warp-cli --accept-tos mdm refresh 2>/dev/null || true
+        fi
         sleep 2
     done
 else
@@ -281,6 +284,18 @@ allow_dns_firewall
         if echo "$STATUS" | grep -qE "Connecting"; then
             continue
         fi
+
+        # If registration is missing or invalidated in API, automatically re-enroll
+        if echo "$STATUS" | grep -qE "Registration Missing|Does not exist in API|Missing registration|Unable"; then
+            warn "WARP registration missing/invalidated in API, re-triggering enrollment..."
+            if [ "$HAS_MDM" = "true" ]; then
+                warp-cli --accept-tos mdm refresh 2>/dev/null || true
+            else
+                warp-cli --accept-tos registration new 2>/dev/null || true
+            fi
+            sleep 3
+        fi
+
         warn "WARP disconnected (${STATUS:-Unknown}), attempting reconnect..."
         warp-cli --accept-tos connect 2>/dev/null || true
     done
