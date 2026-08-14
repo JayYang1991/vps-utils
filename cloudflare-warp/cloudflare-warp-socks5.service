@@ -15,11 +15,14 @@ ExecStartPre=/bin/bash -c "modprobe tun 2>/dev/null || true; mkdir -p /dev/net; 
 ExecStartPre=-/usr/bin/docker stop cloudflare-warp-socks5
 ExecStartPre=-/usr/bin/docker rm cloudflare-warp-socks5
 
-# 3. 前台启动容器 (敏感凭据仅保存在权限为 600 的独立文件 /etc/cloudflare-warp/warp.env 中，由 Docker 直接读取，不注入 Systemd 单元配置)
+# 3. 前台启动容器 (指定公共 DNS 防止继承宿主机 Fake-IP，敏感认证凭据由 600 权限独立文件直接供给 Docker)
 ExecStart=/usr/bin/docker run --rm \
   --name cloudflare-warp-socks5 \
   --cap-add=NET_ADMIN \
   --device /dev/net/tun \
+  --dns 1.1.1.1 \
+  --dns 8.8.8.8 \
+  --dns 223.5.5.5 \
   -p 1080:1080 \
   --env-file /etc/cloudflare-warp/warp.env \
   cloudflare-warp-socks5:latest

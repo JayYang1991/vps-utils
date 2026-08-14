@@ -222,7 +222,7 @@ ensure_tun_device() {
 build_image_if_needed() {
   if [[ "$FORCE_BUILD" == "true" ]] || ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     log "构建 Docker 镜像 ${IMAGE_NAME}..."
-    docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    docker build --network host -t "$IMAGE_NAME" "$SCRIPT_DIR"
     success "Docker 镜像 ${IMAGE_NAME} 构建完成。"
   fi
 }
@@ -275,6 +275,10 @@ SOCKS_PASS=${SOCKS_PASS}
 SOCKS_PORT=1080
 EOF
   chmod 600 "$ENV_FILE"
+  if getent group docker >/dev/null 2>&1; then
+    chgrp docker "$ENV_FILE" 2>/dev/null || true
+    chmod 640 "$ENV_FILE" 2>/dev/null || true
+  fi
 
   log "2. 生成干净的 Systemd 服务单元文件 (无任何敏感凭据): ${SERVICE_FILE}..."
   cat <<EOF > "$SERVICE_FILE"
@@ -295,11 +299,14 @@ ExecStartPre=/bin/bash -c "modprobe tun 2>/dev/null || true; mkdir -p /dev/net; 
 ExecStartPre=-/usr/bin/docker stop ${CONTAINER_NAME}
 ExecStartPre=-/usr/bin/docker rm ${CONTAINER_NAME}
 
-# 3. 前台启动容器 (敏感认证凭据由独立文件 ${ENV_FILE} 直接供给 Docker，不写入 Systemd 单元)
+# 3. 前台启动容器 (指定公共 DNS 防止继承宿主机 Fake-IP，敏感凭据由独立文件提供)
 ExecStart=/usr/bin/docker run --rm \\
   --name ${CONTAINER_NAME} \\
   --cap-add=NET_ADMIN \\
   --device /dev/net/tun \\
+  --dns 1.1.1.1 \\
+  --dns 8.8.8.8 \\
+  --dns 223.5.5.5 \\
   -p ${HOST_PORT}:1080 \\
   --env-file ${ENV_FILE} \\
   ${IMAGE_NAME}
@@ -508,6 +515,9 @@ do_run() {
     --name "$CONTAINER_NAME" \
     --cap-add=NET_ADMIN \
     --device /dev/net/tun \
+    --dns 1.1.1.1 \
+    --dns 8.8.8.8 \
+    --dns 223.5.5.5 \
     -p "${HOST_PORT}:1080" \
     "${DOCKER_ENV_ARGS[@]}" \
     --restart unless-stopped \

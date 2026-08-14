@@ -11,12 +11,22 @@ log() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 1. Ensure TUN device node exists & disable IPv6 inside container if possible
+# 1. Ensure TUN device node exists & configure container network & DNS
 mkdir -p /dev/net
 if [ ! -c /dev/net/tun ]; then
     log "Creating /dev/net/tun device node..."
     mknod /dev/net/tun c 10 200 2>/dev/null || true
     chmod 600 /dev/net/tun 2>/dev/null || true
+fi
+
+# Ensure container uses reliable public DNS to prevent inheriting host Clash Fake-IP (198.18.0.2)
+if grep -qE "198.18.|127.0.0." /etc/resolv.conf 2>/dev/null || [ ! -s /etc/resolv.conf ]; then
+    log "Configuring public DNS nameservers (1.1.1.1, 8.8.8.8, 223.5.5.5)..."
+    cat <<EOF > /etc/resolv.conf
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+nameserver 223.5.5.5
+EOF
 fi
 
 # Disable IPv6 stack inside container to prevent WARP IPv6 Happy Eyeballs timeouts
@@ -81,27 +91,36 @@ while [ ! -S /run/cloudflare-warp/warp_service ]; do
 done
 log "warp-svc daemon is ready."
 
-# 4. WARP Registration & Zero Trust Configuration
-if ! warp-cli --accept-tos registration show 2>/dev/null | grep -qE "Account type|Registration Missing: false"; then
-    if [ -n "$ST_ID" ] && [ -n "$ST_SECRET" ]; then
-        log "Registering WARP with Zero Trust Service Token..."
-        warp-cli --accept-tos mdm refresh 2>/dev/null || true
-        warp-cli --accept-tos registration new 2>/dev/null || warp-cli --accept-tos registration new "$TEAM_NAME" 2>/dev/null || true
-    elif [ -n "$WARP_AUTH_TOKEN" ]; then
-        log "Registering WARP with Auth Token..."
-        warp-cli --accept-tos registration token "$WARP_AUTH_TOKEN" || warp-cli registration token "$WARP_AUTH_TOKEN" || true
-    elif [ -n "$TEAM_NAME" ]; then
-        log "Registering WARP with Zero Trust Team: ${TEAM_NAME}..."
-        warp-cli --accept-tos registration organization "$TEAM_NAME" || warp-cli registration organization "$TEAM_NAME" || warp-cli organization "$TEAM_NAME" || warp-cli --accept-tos registration new "$TEAM_NAME" || true
-    elif [ -n "$WARP_LICENSE_KEY" ]; then
-        log "Registering WARP with License Key..."
-        warp-cli --accept-tos registration license "$WARP_LICENSE_KEY" || warp-cli registration license "$WARP_LICENSE_KEY" || true
-    else
-        log "Registering WARP with free account..."
-        warp-cli --accept-tos registration new || warp-cli registration new || true
+# 4. WARP Registration & Zero Trust Configuration with Retry Loop
+log "Checking WARP registration status..."
+REG_SUCCESS=false
+for i in $(seq 1 15); do
+    if warp-cli --accept-tos registration show 2>/dev/null | grep -qE "Account type: Team|Account type: Free|Account type: Plus"; then
+        log "WARP account is registered successfully."
+        REG_SUCCESS=true
+        break
     fi
-else
-    log "WARP account is already registered."
+
+    log "Attempting WARP registration / MDM sync ($i/15)..."
+    if [ -n "$ST_ID" ] && [ -n "$ST_SECRET" ]; then
+        warp-cli --accept-tos mdm refresh 2>/dev/null || true
+        warp-cli --accept-tos registration new 2>/dev/null || true
+    elif [ -n "$WARP_AUTH_TOKEN" ]; then
+        warp-cli --accept-tos registration token "$WARP_AUTH_TOKEN" 2>/dev/null || true
+    elif [ -n "$TEAM_NAME" ]; then
+        warp-cli --accept-tos registration organization "$TEAM_NAME" 2>/dev/null || true
+    elif [ -n "$WARP_LICENSE_KEY" ]; then
+        warp-cli --accept-tos registration license "$WARP_LICENSE_KEY" 2>/dev/null || true
+    else
+        warp-cli --accept-tos registration new 2>/dev/null || true
+    fi
+    sleep 2
+done
+
+if [ "$REG_SUCCESS" != "true" ]; then
+    warn "Registration did not complete immediately, attempting one last mdm refresh & new registration..."
+    warp-cli --accept-tos mdm refresh 2>/dev/null || true
+    warp-cli --accept-tos registration new 2>/dev/null || true
 fi
 
 # 5. Generate sing-box configuration (SOCKS5 inbound, direct outbound)
