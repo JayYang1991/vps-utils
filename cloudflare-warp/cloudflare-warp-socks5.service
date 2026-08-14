@@ -1,0 +1,41 @@
+[Unit]
+Description=Cloudflare WARP + Sing-box SOCKS5 Proxy Service (Docker Container)
+Documentation=https://github.com/JayYang1991/vps-utils/tree/main/cloudflare-warp
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# 1. 确保宿主机 /dev/net/tun 设备与内核模块正常
+ExecStartPre=/bin/bash -c "modprobe tun 2>/dev/null || true; mkdir -p /dev/net; [ -c /dev/net/tun ] || mknod /dev/net/tun c 10 200 2>/dev/null || true; chmod 600 /dev/net/tun 2>/dev/null || true"
+
+# 2. 清理可能残留的同名旧容器
+ExecStartPre=-/usr/bin/docker stop cloudflare-warp-socks5
+ExecStartPre=-/usr/bin/docker rm cloudflare-warp-socks5
+
+# 3. 前台启动容器 (敏感凭据仅保存在权限为 600 的独立文件 /etc/cloudflare-warp/warp.env 中，由 Docker 直接读取，不注入 Systemd 单元配置)
+ExecStart=/usr/bin/docker run --rm \
+  --name cloudflare-warp-socks5 \
+  --cap-add=NET_ADMIN \
+  --device /dev/net/tun \
+  -p 1080:1080 \
+  --env-file /etc/cloudflare-warp/warp.env \
+  cloudflare-warp-socks5:latest
+
+# 4. 服务启动后：自动配置策略路由 (源地址 172.17.0.0/16 查 main 表)
+ExecStartPost=/bin/bash -c "ip rule show | grep -q '8999:' || /sbin/ip rule add from 172.17.0.0/16 priority 8999 lookup main || true"
+
+# 5. 服务停止时：优雅停止 Docker 容器
+ExecStop=-/usr/bin/docker stop -t 10 cloudflare-warp-socks5
+
+# 6. 服务退出后：自动清理策略路由规则
+ExecStopPost=/bin/bash -c "while ip rule show | grep -q '8999:'; do /sbin/ip rule del from 172.17.0.0/16 priority 8999 lookup main || break; done"
+
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15s
+
+[Install]
+WantedBy=multi-user.target

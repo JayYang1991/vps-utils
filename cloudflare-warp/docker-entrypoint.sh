@@ -11,16 +11,16 @@ log() { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# 1. Ensure TUN device exists & Disable IPv6 in container
+# 1. Ensure TUN device node exists & disable IPv6 inside container if possible
 mkdir -p /dev/net
 if [ ! -c /dev/net/tun ]; then
-    log "Creating /dev/net/tun node..."
-    mknod /dev/net/tun c 10 200
-    chmod 600 /dev/net/tun
+    log "Creating /dev/net/tun device node..."
+    mknod /dev/net/tun c 10 200 2>/dev/null || true
+    chmod 600 /dev/net/tun 2>/dev/null || true
 fi
 
-# Disable IPv6 stack inside container to prevent WARP IPv6 Happy Eyeballs timeout
-log "Disabling IPv6 stack inside container..."
+# Disable IPv6 stack inside container to prevent WARP IPv6 Happy Eyeballs timeouts
+log "Configuring network stack inside container..."
 sysctl -w net.ipv6.conf.all.disable_ipv6=1 2>/dev/null || true
 sysctl -w net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
 sysctl -w net.ipv6.conf.lo.disable_ipv6=1 2>/dev/null || true
@@ -62,13 +62,13 @@ EOF
     cp -f /var/lib/cloudflare-warp/mdm.xml /etc/cloudflare-warp/mdm.xml
 fi
 
-# 3. Start warp-svc background process
+# 3. Start warp-svc background daemon
 log "Starting Cloudflare WARP daemon (warp-svc)..."
 /usr/bin/warp-svc --accept-tos &
 WARP_PID=$!
 
 # Wait for warp-svc socket to be ready
-log "Waiting for warp-svc socket..."
+log "Waiting for warp-svc socket connection..."
 MAX_RETRIES=30
 RETRY=0
 while [ ! -S /run/cloudflare-warp/warp_service ]; do
@@ -79,10 +79,10 @@ while [ ! -S /run/cloudflare-warp/warp_service ]; do
         exit 1
     fi
 done
-log "warp-svc is ready."
+log "warp-svc daemon is ready."
 
 # 4. WARP Registration & Zero Trust Configuration
-if ! warp-cli --accept-tos registration show 2>/dev/null | grep -q "Account type"; then
+if ! warp-cli --accept-tos registration show 2>/dev/null | grep -qE "Account type|Registration Missing: false"; then
     if [ -n "$ST_ID" ] && [ -n "$ST_SECRET" ]; then
         log "Registering WARP with Zero Trust Service Token..."
         warp-cli --accept-tos mdm refresh 2>/dev/null || true
@@ -112,7 +112,7 @@ mkdir -p /etc/sing-box
 log "Generating sing-box configuration (SOCKS5 listen: ::${SOCKS_PORT}, outbound: direct)..."
 
 if [ -n "$SOCKS_USER" ] && [ -n "$SOCKS_PASS" ]; then
-    log "Enabling SOCKS5 user/password authentication for user '${SOCKS_USER}'..."
+    log "Enabling SOCKS5 authentication for user '${SOCKS_USER}'..."
     cat <<EOF > "$CONFIG_FILE"
 {
   "log": {
@@ -166,7 +166,7 @@ else
 EOF
 fi
 
-# 6. Validate and start sing-box process immediately
+# 6. Validate and start sing-box process
 log "Validating sing-box configuration..."
 if ! sing-box check -c "$CONFIG_FILE"; then
     error "sing-box configuration check failed!"
@@ -183,7 +183,7 @@ log "Setting WARP mode to ${WARP_MODE}..."
 warp-cli --accept-tos mode "$WARP_MODE" 2>/dev/null || true
 
 if [ -n "$WARP_ENDPOINT" ]; then
-    log "Setting user-defined WARP tunnel endpoint: ${WARP_ENDPOINT}..."
+    log "Setting custom WARP tunnel endpoint: ${WARP_ENDPOINT}..."
     warp-cli --accept-tos tunnel endpoint set "$WARP_ENDPOINT" 2>/dev/null || true
 else
     log "Using WARP native default Endpoint..."
@@ -193,11 +193,11 @@ fi
 log "Connecting to Cloudflare WARP..."
 warp-cli --accept-tos connect 2>/dev/null || true
 
-# Check WARP connection status in background loop
+# Check WARP connection status in background
 (
     for i in $(seq 1 30); do
         STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
-        if echo "$STATUS" | grep -q "Connected"; then
+        if echo "$STATUS" | grep -qE "Connected|Success"; then
             log "Cloudflare WARP connected successfully!"
             break
         fi
@@ -208,20 +208,22 @@ warp-cli --accept-tos connect 2>/dev/null || true
 
 # 8. Graceful shutdown signal handler
 cleanup() {
-    log "Shutting down services..."
-    if [ -n "$SINGBOX_PID" ]; then
+    log "Received shutdown signal, terminating processes gracefully..."
+    if [ -n "$SINGBOX_PID" ] && kill -0 "$SINGBOX_PID" 2>/dev/null; then
         kill -TERM "$SINGBOX_PID" 2>/dev/null || true
     fi
-    if [ -n "$WARP_PID" ]; then
+    if [ -n "$WARP_PID" ] && kill -0 "$WARP_PID" 2>/dev/null; then
         kill -TERM "$WARP_PID" 2>/dev/null || true
     fi
+    wait 2>/dev/null || true
+    log "All container services stopped."
     exit 0
 }
 
-trap cleanup SIGINT SIGTERM
+trap cleanup SIGINT SIGTERM SIGHUP
 
 log "=========================================================="
-log "Container initialized and services are running!"
+log "Container initialized and services running!"
 log "SOCKS5 Proxy : Listening on port ${SOCKS_PORT} (Direct outbound via WARP)"
 log "=========================================================="
 
