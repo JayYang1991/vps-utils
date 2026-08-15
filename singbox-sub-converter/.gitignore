@@ -6,3 +6,5 @@ venv/
 .venv/
 singbox-template.ini
 *.ini
+data/
+

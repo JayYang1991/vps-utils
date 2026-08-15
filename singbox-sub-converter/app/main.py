@@ -24,8 +24,13 @@ from app.converter import (
     ensure_extra_nodes_in_singbox_json,
     filter_nodes_by_type,
     fetch_subconfigs,
+    get_server_settings,
     get_server_config_url,
+    get_server_enabled_node_types,
+    set_server_settings,
     set_server_config_url,
+    set_server_enabled_node_types,
+    get_node_category,
     logger,
     DATA_DIR
 )
@@ -255,14 +260,22 @@ async def refresh_ip(request: Request, current_user: str = Depends(get_current_u
 
 @app.post("/api/settings")
 async def update_settings(request: Request, current_user: str = Depends(get_current_user)):
-    """Save active conversion config_url setting to server."""
+    """Save active conversion config_url and/or enabled_node_types setting to server."""
     data = await request.json()
     config_url = data.get("config_url")
-    if not config_url:
-        raise HTTPException(status_code=400, detail="Missing config_url")
-    if set_server_config_url(config_url):
-        logger.info(f"✅ 服务端转换规则配置已更新保存为: {config_url}")
-        return {"status": "success", "config_url": config_url}
+    enabled_node_types = data.get("enabled_node_types")
+    
+    if config_url is None and enabled_node_types is None:
+        raise HTTPException(status_code=400, detail="Missing config_url or enabled_node_types")
+        
+    if set_server_settings(config_url=config_url, enabled_node_types=enabled_node_types):
+        cur_settings = get_server_settings()
+        logger.info(f"✅ 服务端配置已更新保存: config_url={cur_settings['config_url']}, enabled_node_types={cur_settings['enabled_node_types']}")
+        return {
+            "status": "success",
+            "config_url": cur_settings["config_url"],
+            "enabled_node_types": cur_settings["enabled_node_types"]
+        }
     else:
         raise HTTPException(status_code=500, detail="Failed to save settings")
 
@@ -271,18 +284,32 @@ async def get_config_info(request: Request, current_user: str = Depends(get_curr
     base = get_base_url(request)
     ensure_fresh_nodes()
     
+    cur_settings = get_server_settings()
+    preferred_count = sum(1 for n in parsed_nodes_cache if get_node_category(n) == "preferred")
+    vps_count = sum(1 for n in parsed_nodes_cache if get_node_category(n) == "vps")
+    local_count = sum(1 for n in parsed_nodes_cache if get_node_category(n) == "local")
+    
     return {
         "token": SUB_TOKEN,
         "external_url": base,
-        "current_config_url": get_server_config_url(),
+        "current_config_url": cur_settings["config_url"],
+        "enabled_node_types": cur_settings["enabled_node_types"],
+        "node_counts": {
+            "preferred": preferred_count,
+            "vps": vps_count,
+            "local": local_count,
+            "total": len(parsed_nodes_cache)
+        },
         "sub_url": f"{base}/sub?token={SUB_TOKEN}" if SUB_TOKEN else f"{base}/sub",
         "clash_url": f"{base}/clash?token={SUB_TOKEN}" if SUB_TOKEN else f"{base}/clash",
         "singbox_url": f"{base}/singbox?token={SUB_TOKEN}" if SUB_TOKEN else f"{base}/singbox",
         "v2ray_url": f"{base}/v2ray?token={SUB_TOKEN}" if SUB_TOKEN else f"{base}/v2ray"
     }
 
-def resolve_node_type_param(request: Request, node_type: str = "", category: str = "", node: str = "", type: str = "") -> str:
+def resolve_node_type_param(request: Request, node_type: str = "", category: str = "", node: str = "", type: str = "", types: str = "") -> str:
     """Extract and resolve effective node_type filter string from endpoint query parameters."""
+    if types:
+        return types
     if node_type:
         return node_type
     if category:
@@ -290,11 +317,9 @@ def resolve_node_type_param(request: Request, node_type: str = "", category: str
     if node:
         return node
     if type:
-        t = type.strip().lower()
-        if t in ["preferred", "preferred_ip", "cf", "cdn", "优选", "优选ip", "vps", "vps自用", "自用", "local", "socks", "socks5", "本地", "1", "2", "3"]:
-            return type
+        return type
     params = request.query_params
-    for key in ["node_type", "nodeType", "category", "node", "group", "filter"]:
+    for key in ["types", "node_types", "node_type", "nodeType", "category", "node", "group", "filter", "type"]:
         val = params.get(key)
         if val:
             return val
@@ -311,7 +336,7 @@ def build_v2ray_url(base_url: str, eff_node_type: str = "") -> str:
 
 # Subscription Endpoints with non-blocking async execution and reality merge
 @app.get("/sub")
-async def get_adaptive_sub(request: Request, token: str = "", target: str = "", flag: str = "", config: str = "", node_type: str = "", category: str = "", node: str = ""):
+async def get_adaptive_sub(request: Request, token: str = "", target: str = "", flag: str = "", config: str = "", node_type: str = "", category: str = "", node: str = "", types: str = ""):
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /sub")
         return Response(content="# Error: Invalid Token", media_type="text/plain", status_code=403)
@@ -319,8 +344,8 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
     base_url = get_base_url(request)
     ensure_fresh_nodes()
     
-    eff_node_type = resolve_node_type_param(request, node_type, category, node)
-    filtered_nodes = filter_nodes_by_type(parsed_nodes_cache, eff_node_type) if eff_node_type else parsed_nodes_cache
+    eff_node_type = resolve_node_type_param(request, node_type, category, node, types=types)
+    filtered_nodes = filter_nodes_by_type(parsed_nodes_cache, eff_node_type if eff_node_type else None)
     v2ray_url = build_v2ray_url(base_url, eff_node_type)
     
     ua = request.headers.get("user-agent", "").lower()
@@ -351,18 +376,18 @@ async def get_adaptive_sub(request: Request, token: str = "", target: str = "", 
         }
         return Response(content=content, media_type="text/yaml; charset=utf-8", headers=clash_headers)
     else:
-        b64_content = generate_base64_v2ray(filtered_nodes) if eff_node_type else cached_base64_config
+        b64_content = generate_base64_v2ray(filtered_nodes)
         return Response(content=b64_content, media_type="text/plain; charset=utf-8")
 
 @app.get("/clash")
-async def get_clash_sub(request: Request, token: str = "", config: str = "", node_type: str = "", category: str = "", node: str = ""):
+async def get_clash_sub(request: Request, token: str = "", config: str = "", node_type: str = "", category: str = "", node: str = "", types: str = ""):
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /clash")
         return Response(content="# Error: Invalid Token", media_type="text/plain", status_code=403)
     base_url = get_base_url(request)
     ensure_fresh_nodes()
     
-    eff_node_type = resolve_node_type_param(request, node_type, category, node)
+    eff_node_type = resolve_node_type_param(request, node_type, category, node, types=types)
     v2ray_url = build_v2ray_url(base_url, eff_node_type)
 
     content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "clash", config_url=config)
@@ -379,14 +404,14 @@ async def get_clash_sub(request: Request, token: str = "", config: str = "", nod
     return Response(content=content, media_type="text/yaml; charset=utf-8", headers=clash_headers)
 
 @app.get("/singbox")
-async def get_singbox_sub(request: Request, token: str = "", node_type: str = "", category: str = "", node: str = ""):
+async def get_singbox_sub(request: Request, token: str = "", node_type: str = "", category: str = "", node: str = "", types: str = ""):
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /singbox")
         return Response(content="# Error: Invalid Token", media_type="application/json", status_code=403)
     base_url = get_base_url(request)
     ensure_fresh_nodes()
     
-    eff_node_type = resolve_node_type_param(request, node_type, category, node)
+    eff_node_type = resolve_node_type_param(request, node_type, category, node, types=types)
     v2ray_url = build_v2ray_url(base_url, eff_node_type)
 
     content = await asyncio.to_thread(convert_via_subapi, v2ray_url, "singbox")
@@ -399,20 +424,16 @@ async def get_singbox_sub(request: Request, token: str = "", node_type: str = ""
 
 @app.get("/v2ray")
 @app.get("/base64")
-async def get_v2ray_sub(request: Request, token: str = "", node_type: str = "", category: str = "", node: str = "", type: str = ""):
-    """Instant 0ms response for /v2ray: returns pre-computed cached_base64_config or filtered base64 configuration."""
+async def get_v2ray_sub(request: Request, token: str = "", node_type: str = "", category: str = "", node: str = "", type: str = "", types: str = ""):
+    """Instant response for /v2ray: returns filtered base64 configuration according to query param or server-side settings."""
     if SUB_TOKEN and token != SUB_TOKEN:
         logger.warning("拒绝非法 Token 订阅请求: /v2ray")
         return Response(content="# Error: Invalid Token", media_type="text/plain", status_code=403)
     ensure_fresh_nodes()
     
-    eff_node_type = resolve_node_type_param(request, node_type, category, node, type)
-    if eff_node_type:
-        filtered_nodes = filter_nodes_by_type(parsed_nodes_cache, eff_node_type)
-        b64_content = generate_base64_v2ray(filtered_nodes)
-    else:
-        b64_content = cached_base64_config
-        
+    eff_node_type = resolve_node_type_param(request, node_type, category, node, type=type, types=types)
+    filtered_nodes = filter_nodes_by_type(parsed_nodes_cache, eff_node_type if eff_node_type else None)
+    b64_content = generate_base64_v2ray(filtered_nodes)
     return Response(content=b64_content, media_type="text/plain; charset=utf-8")
 
 @app.get("/", response_class=HTMLResponse)

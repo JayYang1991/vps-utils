@@ -4,13 +4,16 @@
 
 ## 核心功能与转换规则
 
-0. **订阅节点分类排序与指定提取**:
-   - 订阅节点内部按固定顺序排列：**优选 IP 节点** -> **VPS 自用节点** -> **本地 Socks5 节点**。
-   - 支持在所有订阅链接（`/sub`、`/clash`、`/singbox`、`/v2ray` / `/base64`）上附加 `node_type`（或 `category` / `node`）参数提取指定分类节点：
-     - `node_type=preferred`（或 `cf` / `优选`）：仅获取优选 IP 节点
-     - `node_type=vps`（或 `自用`）：仅获取 VPS 自用节点
-     - `node_type=local`（或 `socks` / `本地`）：仅获取本地 Socks5 节点
-     - 不带 `node_type` 参数（或 `node_type=all`）：默认获取所有节点
+0. **节点分类选择与服务端动态过滤 (Web 控制台设置)**:
+   - **界面交互**：Web 控制台提供「🎛️ 订阅包含节点类型设置」，包含 3 个复选框：
+     - **优选IP节点** (`preferred`)：由 edgetunnel 动态获取的 Cloudflare Anycast 优选节点；
+     - **VPS节点** (`vps`)：服务端的 Reality、Hysteria2 等直连自用节点；
+     - **本地节点** (`local`)：本地 `127.0.0.1:1080` Socks5 转发节点。
+   - **服务端过滤逻辑**：
+     - 默认全部勾选，设置持久化保存在服务端的 `data/settings.json` 中；
+     - 当用户取消勾选某些类型并保存后，**界面生成的所有默认订阅链接（`/sub`、`/clash`、`/singbox`、`/v2ray` / `/base64`）在 Server 端实时按勾选类型过滤输出**；
+     - 过滤与转换逻辑全部在服务端完成，客户端无需做任何额外配置；
+   - **URL 参数灵活覆盖**：支持通过 `types`（或 `node_type` / `category`）参数临时提取指定分类（如 `?types=preferred,vps` 或 `?types=preferred`）。
 
 1. **优选 IP 节点转换**:
    - 自动读取 `sing-box` 服务端配置中 `tag` 为 `vless-grpc` 的 inbound 参数（`host` 与 `uuid`）。

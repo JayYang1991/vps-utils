@@ -101,6 +101,60 @@
                 </select>
             </div>
 
+            <!-- 0.1 节点类型筛选设置 -->
+            <div class="p-4 bg-slate-900/80 rounded-2xl border border-indigo-500/30">
+                <div class="flex items-center justify-between mb-2.5">
+                    <label class="text-xs font-semibold text-indigo-300 flex items-center gap-1.5">
+                        <span>🎛️ 订阅包含节点类型设置</span>
+                    </label>
+                    <span id="nodeTypesStatusTip" class="text-[11px] text-emerald-400">已保存至服务端</span>
+                </div>
+                
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-3">
+                    <!-- 优选 IP 节点 -->
+                    <label class="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-indigo-500/50 transition cursor-pointer select-none">
+                        <input type="checkbox" id="chkPreferred" class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-900 border-slate-700 transition cursor-pointer" checked>
+                        <div class="flex flex-col">
+                            <span class="text-xs font-medium text-slate-200 flex items-center gap-1">
+                                <span>🌐</span> 优选IP节点
+                            </span>
+                            <span class="text-[10px] text-slate-400" id="preferredCountText">Cloudflare 节点</span>
+                        </div>
+                    </label>
+
+                    <!-- VPS 节点 -->
+                    <label class="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-indigo-500/50 transition cursor-pointer select-none">
+                        <input type="checkbox" id="chkVps" class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-900 border-slate-700 transition cursor-pointer" checked>
+                        <div class="flex flex-col">
+                            <span class="text-xs font-medium text-slate-200 flex items-center gap-1">
+                                <span>⚡</span> VPS节点
+                            </span>
+                            <span class="text-[10px] text-slate-400" id="vpsCountText">Reality/H2 自用</span>
+                        </div>
+                    </label>
+
+                    <!-- 本地节点 -->
+                    <label class="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-indigo-500/50 transition cursor-pointer select-none">
+                        <input type="checkbox" id="chkLocal" class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-slate-900 border-slate-700 transition cursor-pointer" checked>
+                        <div class="flex flex-col">
+                            <span class="text-xs font-medium text-slate-200 flex items-center gap-1">
+                                <span>🏠</span> 本地节点
+                            </span>
+                            <span class="text-[10px] text-slate-400" id="localCountText">Socks5 127.0.0.1</span>
+                        </div>
+                    </label>
+                </div>
+
+                <div class="flex items-center justify-between pt-1">
+                    <p class="text-[11px] text-slate-400">
+                        保存后，默认各个订阅链接只返回勾选的节点
+                    </p>
+                    <button onclick="handleSaveNodeTypes()" id="saveNodeTypesBtn" class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition shadow-sm shadow-indigo-600/30 flex items-center gap-1">
+                        <span>💾</span> 保存设置
+                    </button>
+                </div>
+            </div>
+
             <!-- 1. 功能区域：生成自适应订阅链接 -->
             <div class="p-5 bg-gradient-to-r from-indigo-900/40 via-purple-900/20 to-slate-900/60 rounded-2xl border border-indigo-500/40 relative overflow-hidden shadow-lg shadow-indigo-950/40">
                 <div class="absolute top-0 right-0 p-3 opacity-10 font-mono text-xs select-none">ADAPTIVE_SUB_GEN</div>
@@ -472,6 +526,21 @@
                 currentConfigUrl = data.current_config_url;
             }
 
+            if (data.enabled_node_types && Array.isArray(data.enabled_node_types)) {
+                document.getElementById('chkPreferred').checked = data.enabled_node_types.includes('preferred');
+                document.getElementById('chkVps').checked = data.enabled_node_types.includes('vps');
+                document.getElementById('chkLocal').checked = data.enabled_node_types.includes('local');
+            }
+
+            if (data.node_counts) {
+                const pCnt = data.node_counts.preferred ?? 0;
+                const vCnt = data.node_counts.vps ?? 0;
+                const lCnt = data.node_counts.local ?? 0;
+                document.getElementById('preferredCountText').textContent = `Cloudflare (${pCnt} 个)`;
+                document.getElementById('vpsCountText').textContent = `VPS 自用 (${vCnt} 个)`;
+                document.getElementById('localCountText').textContent = `Socks5 (${lCnt} 个)`;
+            }
+
             rawBaseData = {
                 sub_url: data.sub_url,
                 clash_url: data.clash_url,
@@ -480,6 +549,46 @@
             };
             
             updateSubUrls();
+        }
+
+        async function handleSaveNodeTypes() {
+            const preferred = document.getElementById('chkPreferred').checked;
+            const vps = document.getElementById('chkVps').checked;
+            const local = document.getElementById('chkLocal').checked;
+            
+            const enabled_node_types = [];
+            if (preferred) enabled_node_types.push('preferred');
+            if (vps) enabled_node_types.push('vps');
+            if (local) enabled_node_types.push('local');
+            
+            const statusTip = document.getElementById('nodeTypesStatusTip');
+            const btn = document.getElementById('saveNodeTypesBtn');
+            if (statusTip) statusTip.textContent = '⌛ 正在保存设置至服务端...';
+            if (btn) btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled_node_types })
+                });
+
+                if (res.ok) {
+                    if (statusTip) {
+                        statusTip.textContent = '✅ 已成功保存至服务端';
+                        setTimeout(() => { statusTip.textContent = '已保存至服务端'; }, 3000);
+                    }
+                } else {
+                    alert('保存节点设置至服务端失败！');
+                    if (statusTip) statusTip.textContent = '❌ 保存失败';
+                }
+            } catch (e) {
+                console.error("Error saving node types:", e);
+                alert('保存节点设置发生错误: ' + e.message);
+                if (statusTip) statusTip.textContent = '❌ 保存错误';
+            } finally {
+                if (btn) btn.disabled = false;
+            }
         }
 
         function showLogin() {

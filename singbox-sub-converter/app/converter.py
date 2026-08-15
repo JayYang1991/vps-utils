@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import yaml
 import time
@@ -16,6 +17,7 @@ SUBAPI_CONVERT_URL = "https://subapi.19910417.xyz/sub?target={target}&url={url}&
 REMOTE_SUBCONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/edgetunnel/main/SUBCONFIG.json"
 DEFAULT_CONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Full_CF.ini"
 DEFAULT_SINGBOX_CONFIG_URL = "https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/sing-box/singbox-template.ini"
+DEFAULT_ENABLED_NODE_TYPES = ["preferred", "vps", "local"]
 USER_AGENT = "v2rayN/edgetunnel (https://github.com/cmliu/edgetunnel)"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,31 +27,55 @@ SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
-def get_server_config_url() -> str:
-    """Get active default Clash config_url from settings.json or fallback to DEFAULT_CONFIG_URL."""
+def get_server_settings() -> dict:
+    """Get active server settings (config_url and enabled_node_types) from settings.json."""
+    default_settings = {
+        "config_url": DEFAULT_CONFIG_URL,
+        "enabled_node_types": list(DEFAULT_ENABLED_NODE_TYPES)
+    }
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get("config_url") or DEFAULT_CONFIG_URL
+                return {
+                    "config_url": data.get("config_url") or DEFAULT_CONFIG_URL,
+                    "enabled_node_types": data.get("enabled_node_types") if isinstance(data.get("enabled_node_types"), list) else list(DEFAULT_ENABLED_NODE_TYPES)
+                }
         except Exception as e:
             logger.error(f"Error reading settings.json: {e}")
-    return DEFAULT_CONFIG_URL
+    return default_settings
 
-def set_server_config_url(config_url: str) -> bool:
-    """Save active Clash config_url to settings.json."""
+def get_server_config_url() -> str:
+    """Get active default Clash config_url from settings."""
+    return get_server_settings()["config_url"]
+
+def get_server_enabled_node_types() -> list:
+    """Get active enabled node types list (e.g. ['preferred', 'vps', 'local']) from settings."""
+    return get_server_settings()["enabled_node_types"]
+
+def set_server_settings(config_url: str = None, enabled_node_types: list = None) -> bool:
+    """Save active config_url and/or enabled_node_types to settings.json."""
     try:
-        data = {}
-        if os.path.exists(SETTINGS_FILE):
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        data["config_url"] = config_url
+        current = get_server_settings()
+        if config_url is not None:
+            current["config_url"] = config_url
+        if enabled_node_types is not None:
+            valid_types = [t for t in enabled_node_types if t in ["preferred", "vps", "local"]]
+            current["enabled_node_types"] = valid_types
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+            json.dump(current, f, indent=2, ensure_ascii=False)
         return True
     except Exception as e:
         logger.error(f"Error writing settings.json: {e}")
         return False
+
+def set_server_config_url(config_url: str) -> bool:
+    """Save active Clash config_url to settings.json."""
+    return set_server_settings(config_url=config_url)
+
+def set_server_enabled_node_types(enabled_node_types: list) -> bool:
+    """Save active enabled node types to settings.json."""
+    return set_server_settings(enabled_node_types=enabled_node_types)
 
 # Configure Logger
 logger = logging.getLogger("subconverter")
@@ -308,25 +334,57 @@ def get_node_category(node: dict) -> str:
     else:
         return "vps"
 
-def filter_nodes_by_type(nodes: list, node_type: str = "") -> list:
-    """Filter nodes by category ('preferred', 'vps', 'local'). Default (empty or 'all') returns all nodes."""
-    if not node_type or not isinstance(node_type, str):
-        return nodes
-    
-    t = node_type.strip().lower()
-    if t in ["", "all", "full", "全部", "所有", "0"]:
-        return nodes
+def parse_type_string(t_str: str) -> list:
+    """Parse a comma/pipe-separated string or single type string into a list of canonical categories ('preferred', 'vps', 'local')."""
+    if not t_str:
+        return []
+    result = []
+    for part in re.split(r'[,|+ \-_]+', str(t_str).strip().lower()):
+        part = part.strip()
+        if not part:
+            continue
+        if part in ["preferred", "preferred_ip", "cf", "cdn", "优选", "优选ip", "1"]:
+            if "preferred" not in result:
+                result.append("preferred")
+        elif part in ["vps", "vps自用", "自用", "server", "2"]:
+            if "vps" not in result:
+                result.append("vps")
+        elif part in ["local", "socks", "socks5", "本地", "3"]:
+            if "local" not in result:
+                result.append("local")
+        elif part in ["all", "full", "全部", "所有", "0"]:
+            return list(DEFAULT_ENABLED_NODE_TYPES)
+    return result
 
-    if t in ["preferred", "preferred_ip", "cf", "cdn", "优选", "优选ip", "1"]:
-        target_cat = "preferred"
-    elif t in ["vps", "vps自用", "自用", "server", "2"]:
-        target_cat = "vps"
-    elif t in ["local", "socks", "socks5", "本地", "3"]:
-        target_cat = "local"
+def filter_nodes_by_type(nodes: list, node_type = None) -> list:
+    """
+    Filter nodes by category ('preferred', 'vps', 'local').
+    - If node_type is None: defaults to server-side configured get_server_enabled_node_types().
+    - If node_type is provided as list or str: filters by specified categories.
+    - If node_type is 'all' / '全部' / '0': returns all categories.
+    """
+    if not nodes:
+        return []
+        
+    if node_type is None:
+        allowed_categories = get_server_enabled_node_types()
+    elif isinstance(node_type, list):
+        allowed_categories = [t for t in node_type if t in ["preferred", "vps", "local"]]
+    elif isinstance(node_type, str):
+        s = node_type.strip().lower()
+        if not s:
+            allowed_categories = get_server_enabled_node_types()
+        elif s in ["all", "full", "全部", "所有", "0"]:
+            allowed_categories = list(DEFAULT_ENABLED_NODE_TYPES)
+        else:
+            allowed_categories = parse_type_string(s)
     else:
-        return nodes
+        allowed_categories = get_server_enabled_node_types()
 
-    return [n for n in nodes if get_node_category(n) == target_cat]
+    if not allowed_categories:
+        return []
+
+    return [n for n in nodes if get_node_category(n) in allowed_categories]
 
 def fetch_subconfigs() -> list:
     """Fetch rule configuration list from REMOTE_SUBCONFIG_URL."""
