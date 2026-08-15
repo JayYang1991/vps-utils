@@ -2,8 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 Cloudflare WARP MASQUE (QUIC / HTTP3) 协议协商与连通性深度测试工具
-基于 RFC 9000 (QUIC v1) 协议标准实现纯标准库双阶段握手测试 (Initial -> Retry -> Handshake)
-无需安装任何第三方依赖，支持指定网卡/源IP、自定义端口、批量 IP 探测与 RTT 时延诊断。
+基于 RFC 9000 (QUIC v1) 协议标准实现 Initial 握手探测与 RTT 时延精确测量。
+向目标发送 1200 字节标准 QUIC Initial 报文，接收服务端返回的防 DDoS 挑战 (Retry Token) 或握手响应，
+用于验证 UDP 路由连通性、1200B MTU 大包可达性与 MASQUE 服务端真实监听状态。
+纯 Python 标准库编写，无需安装任何第三方依赖。
 """
 
 import socket
@@ -121,7 +123,7 @@ def parse_quic_response(resp: bytes):
     return result
 
 def test_single_endpoint(target_ip: str, port: int, local_ip: str = "", timeout: float = 2.5, retries: int = 2, sni: str = "engage.cloudflareclient.com"):
-    """测试单个 IP:PORT 的 MASQUE 双阶段协商流程"""
+    """测试单个 IP:PORT 的 MASQUE 探测握手"""
     print(f"\n{CYAN}------------------------------------------------------------{RESET}")
     print(f"{BOLD}[*] 探测目标: {YELLOW}{target_ip}:{port}{RESET} | 协议: {PURPLE}MASQUE (QUIC v1){RESET} | 本地源IP: {local_ip or '默认'}")
     print(f"{CYAN}------------------------------------------------------------{RESET}")
@@ -133,81 +135,52 @@ def test_single_endpoint(target_ip: str, port: int, local_ip: str = "", timeout:
         except Exception as e:
             print(f"{RED}[-] 绑定本地源 IP ({local_ip}) 失败: {e}{RESET}")
             sock.close()
-            return False
+            return {"success": False, "rtt": None, "type": None}
             
     sock.settimeout(timeout)
     
     dcid = secrets.token_bytes(8)
     scid = secrets.token_bytes(8)
-    pkt1 = build_quic_initial(dcid, scid, sni=sni)
+    pkt = build_quic_initial(dcid, scid, sni=sni)
     
-    token = None
-    new_dcid = None
-    stage1_success = False
+    print(f"[->] 发送 QUIC Initial 探测包 (长度: {len(pkt)} 字节, DCID: {dcid.hex()})...")
     
-    print(f"[->] 第一阶段: 发送 Initial 探测包 (长度: {len(pkt1)} 字节)...")
+    last_rtt = None
+    last_type = None
+    
     for attempt in range(1, retries + 1):
         t0 = time.time()
         try:
-            sock.sendto(pkt1, (target_ip, port))
+            sock.sendto(pkt, (target_ip, port))
             resp, addr = sock.recvfrom(2048)
             rtt = (time.time() - t0) * 1000
             pinfo = parse_quic_response(resp)
+            
+            last_rtt = rtt
+            last_type = pinfo.get("type")
             
             print(f"{GREEN}[<-] [第 {attempt} 次] 收到响应! 来自: {addr[0]}:{addr[1]} | 长度: {len(resp)} 字节 | RTT: {BOLD}{rtt:.2f} ms{RESET}")
             print(f"    └─ 报文类型: {BLUE}{pinfo.get('type')}{RESET} (格式: {'Long Header' if pinfo.get('is_long') else 'Short Header'})")
             
             if pinfo.get("type") == "Retry" and "token" in pinfo:
                 token = pinfo["token"]
-                new_dcid = pinfo["server_scid"]
-                print(f"    └─ {GREEN}✅ 成功提取服务端 Retry Token ({len(token)} 字节) & 新 DCID: {new_dcid.hex()}{RESET}")
-                stage1_success = True
-            elif pinfo.get("type") in ("Initial", "Handshake"):
-                print(f"    └─ {GREEN}✅ 服务端直接返回握手报文 (无需 Retry 校验)！{RESET}")
-                stage1_success = True
-            break
+                server_scid = pinfo.get("server_scid", b"")
+                print(f"    └─ {GREEN}✅ 成功提取服务端 Retry Token ({len(token)} 字节) & Server SCID: {server_scid.hex()}{RESET}")
+                print(f"{GREEN}{BOLD}[SUCCESS] 🎉 MASQUE/QUIC 服务端响应正常，UDP 路由通畅，无 MTU 大包丢包！{RESET}")
+            elif pinfo.get("type") in ("Initial", "Handshake", "1-RTT/ShortHeader"):
+                print(f"{GREEN}{BOLD}[SUCCESS] 🎉 服务端返回握手数据 ({pinfo.get('type')})，MASQUE 隧道通畅！{RESET}")
+                
+            sock.close()
+            return {"success": True, "rtt": rtt, "type": last_type}
         except socket.timeout:
             print(f"{YELLOW}[-] [尝试 {attempt}/{retries}] 等待响应超时 (丢包/无应答)...{RESET}")
         except Exception as e:
             print(f"{RED}[-] 网络发送异常: {e}{RESET}")
             break
             
-    if not stage1_success:
-        print(f"{RED}[FAIL] 第一阶段 Initial 探测失败，目标未响应或大包被拦截。{RESET}")
-        sock.close()
-        return False
-        
-    if token and new_dcid:
-        print(f"\n[->] 第二阶段: 携带 Retry Token 发送第二次 Initial 握手包 (长度: 1200 字节)...")
-        pkt2 = build_quic_initial(new_dcid, scid, sni=sni, token=token)
-        stage2_success = False
-        
-        for attempt in range(1, retries + 1):
-            t0 = time.time()
-            try:
-                sock.sendto(pkt2, (target_ip, port))
-                resp, addr = sock.recvfrom(2048)
-                rtt = (time.time() - t0) * 1000
-                pinfo = parse_quic_response(resp)
-                
-                print(f"{GREEN}[<-] 收到第二阶段握手响应! 长度: {len(resp)} 字节 | RTT: {BOLD}{rtt:.2f} ms{RESET}")
-                print(f"    └─ 报文类型: {BLUE}{pinfo.get('type')}{RESET}")
-                
-                if pinfo.get("type") in ("Handshake", "Initial", "1-RTT/ShortHeader"):
-                    print(f"{GREEN}{BOLD}[SUCCESS] 🎉 MASQUE/QUIC 双阶段握手完全成功！该 Endpoint 能够正常建立隧道连接。{RESET}")
-                    stage2_success = True
-                break
-            except socket.timeout:
-                print(f"{YELLOW}[-] [第二阶段尝试 {attempt}/{retries}] 等待 Handshake 响应超时 (大包丢包)...{RESET}")
-            except Exception as e:
-                print(f"{RED}[-] 第二阶段异常: {e}{RESET}")
-                break
-                
-        sock.close()
-        return stage2_success
-        
+    print(f"{RED}[FAIL] 探测失败，目标未响应或 1200B 大包被跨境拦截。{RESET}")
     sock.close()
-    return stage1_success
+    return {"success": False, "rtt": None, "type": None}
 
 def main():
     parser = argparse.ArgumentParser(
@@ -224,8 +197,8 @@ def main():
   3. 测试指定端口 (例如 4443 和 8443):
      python3 test-masque.py -t 162.159.197.2 -p 4443,8443
 
-  4. 批量测速探测多个优选 IP:
-     python3 test-masque.py -t 162.159.192.1,162.159.193.10,162.159.195.1 -p 8443
+  4. 批量测速探测多个优选 Anycast IP:
+     python3 test-masque.py -t 162.159.192.1,162.159.193.10,162.159.195.1,188.114.96.1 -p 8443,4443
 """
     )
     parser.add_argument("-t", "--target", default="162.159.197.2", help="目标 IP 地址或逗号分隔的 IP 列表 (默认: 162.159.197.2)")
@@ -257,7 +230,7 @@ def main():
     
     for ip in targets:
         for p in ports:
-            success = test_single_endpoint(
+            res = test_single_endpoint(
                 target_ip=ip,
                 port=p,
                 local_ip=args.ip,
@@ -265,11 +238,16 @@ def main():
                 retries=args.retries,
                 sni=args.sni
             )
-            summary.append((ip, p, success))
+            summary.append((ip, p, res))
             
     print(f"\n\n{BOLD}=========================== 测试结果汇总 ==========================={RESET}")
-    for ip, p, success in summary:
-        status_str = f"{GREEN}✅ 握手成功 (可建立 MASQUE 隧道){RESET}" if success else f"{RED}❌ 握手失败 (超时/丢包){RESET}"
+    for ip, p, res in summary:
+        if res["success"]:
+            rtt_str = f"{res['rtt']:.2f} ms"
+            type_str = res['type'] or "OK"
+            status_str = f"{GREEN}✅ 正常通畅 (RTT: {BOLD}{rtt_str}{RESET}{GREEN}, 响应: {type_str}){RESET}"
+        else:
+            status_str = f"{RED}❌ 探测超时 (丢包/被拦截){RESET}"
         print(f"  - {ip:<16}:{p:<5} --> {status_str}")
     print(f"{BOLD}===================================================================={RESET}\n")
 

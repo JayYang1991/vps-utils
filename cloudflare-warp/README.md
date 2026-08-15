@@ -407,11 +407,12 @@ bash generate-singbox-server-config.sh -o /etc/sing-box/config.json
 
 ### 1. 工具特性
 * **纯 Python 标准库**：无需安装任何第三方依赖（无需 `pip install`），开箱即用；
-* **RFC 9000 QUIC v1 双阶段握手模拟**：
-  * **第一阶段 (Initial -> Retry)**：构造标准 QUIC Initial 探测报文（填充至 1200 字节，携带 TLS 1.3 ClientHello 与 SNI），测试目标 Endpoint 的 UDP 大包可达性并提取服务端防 DDoS `Retry Token`；
-  * **第二阶段 (Token Initial -> Handshake)**：携带服务端 Token 发起二次握手协商，探测服务端协议层响应；
+* **RFC 9000 QUIC v1 Initial 握手探测**：
+  * 构造标准 QUIC Initial 探测报文（严格按 RFC 规范填充至 1200 字节，携带 TLS 1.3 ClientHello 与 SNI 伪装）；
+  * 接收服务端返回的防 DDoS 挑战（`QUIC Retry` 带 HMAC 签名）或握手响应，精确测量往返时延（RTT）；
+  * 彻底验证物理网络到目标 Endpoint 的 UDP 路由连通性、1200 字节 MTU 大包传输能力与服务端真实监听状态；
 * **支持物理网卡源 IP 绑定 (`-i / --ip`)**：在宿主机开启全局 TUN 代理时，可显式指定物理网卡 IP 强制走直连物理出口测试；
-* **支持单目标/批量优选 IP 测速**：支持逗号分隔的 IP 列表与自定义端口列表，输出详细时延与丢包统计。
+* **支持单目标/批量优选 IP 测速**：支持逗号分隔的 IP 列表与自定义端口列表，输出详细时延与连通性汇总。
 
 ### 2. 常用命令示例
 
@@ -443,11 +444,10 @@ python3 test-masque.py -t 162.159.197.2 -p 4443 --timeout 3.0 --retries 3
 | `--timeout` | - | `2.5` | 单次请求超时时间（单位：秒） |
 | `--retries` | - | `2` | 单端口探测重试次数 |
 
-### 4. 诊断结果解读与说明
-* **第一阶段成功 (收到 Retry，RTT 正常)**：
-  说明从当前机器到目标 Endpoint 的 UDP 路由、MTU（1200 字节大包传输）和 NAT 映射**完全正常通畅**，服务端能够正常响应 QUIC 探测；
-* **第一阶段超时 (丢包/无应答)**：
-  说明当前网络（如部分国内云服务器 IDC 机房直连出网）对境外特定 Anycast IP 或非标准 UDP 端口存在**丢包黑洞或机房边界 QoS 拦截**；
-* **第二阶段说明**：
-  Cloudflare Zero Trust MASQUE 接入网关在第二阶段会严格验证真实客户端设备私钥与 mTLS 凭据。测试脚本作为轻量探针未携带真实设备私钥，服务端在第一阶段防 DDoS 校验通过后会对未授权的第二阶段模拟包执行静默丢弃（Silent Drop），这是预期的安全机制。只要第一阶段 1200B 大包稳定收到 Retry 回包，即证明真实 WARP 容器能正常握手连接。
+### 4. 诊断结果解读
+* **✅ 正常通畅 (收到 Retry / Handshake，显示 RTT)**：
+  说明从当前机器到目标 Endpoint 的 UDP 路由、MTU（1200 字节大包传输）和 NAT 映射**完全正常通畅**，服务端能够正常响应 QUIC 探测，WARP 客户端在此 Endpoint 下可正常建立 MASQUE 隧道连接；
+* **❌ 探测超时 (丢包/被拦截)**：
+  说明当前网络（如部分国内云服务器 IDC 机房直连出网）对境外特定 Anycast IP 或非标准 UDP 端口存在**丢包黑洞或机房边界 QoS 拦截**，建议更换优选 IP 或通过宿主机出海代理连接。
+
 
