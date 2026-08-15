@@ -318,7 +318,7 @@ fetch_preferred_endpoints() {
     printf "%s\n" "${endpoints[@]}"
 }
 
-# 7. Set WARP mode, Tunnel Endpoint & Connect
+# 7. Set WARP mode, Connect to official default endpoint first
 if [ "$HAS_MDM" != "true" ]; then
     WARP_MODE="${WARP_MODE:-warp}"
     log "Setting WARP mode to ${WARP_MODE}..."
@@ -327,43 +327,73 @@ fi
 
 warp-cli --accept-tos debug connectivity-check disable 2>/dev/null || true
 
-# Fetch endpoints and try connecting sequentially
-mapfile -t ENDPOINT_LIST < <(fetch_preferred_endpoints)
-TOTAL_EPS=${#ENDPOINT_LIST[@]}
-CONNECTED=false
-CURRENT_EP_INDEX=0
+# 优先重置并尝试连接官方默认接入点 (等待最多 2 分钟 / 120 秒)
+log "Attempting initial connection using official default endpoint..."
+warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
+warp-cli --accept-tos connect 2>/dev/null || true
+allow_dns_firewall
 
-if [ "$TOTAL_EPS" -gt 0 ]; then
-    log "Loaded ${TOTAL_EPS} preferred edge endpoints, attempting connection sequentially..."
-    for i in "${!ENDPOINT_LIST[@]}"; do
-        EP="${ENDPOINT_LIST[$i]}"
-        log "[$((i+1))/${TOTAL_EPS}] Trying edge endpoint: ${EP}..."
-        warp-cli --accept-tos tunnel endpoint set "$EP" 2>/dev/null || true
+CONNECTED=false
+log "Waiting for default endpoint connection (timeout: 120s / 2 minutes)..."
+for i in {1..24}; do
+    sleep 5
+    STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
+    if echo "$STATUS" | grep -qE "Connected|Success"; then
+        log "✅ Successfully connected using official default endpoint!"
+        CONNECTED=true
+        break
+    fi
+    allow_dns_firewall
+    if [ $((i % 6)) -eq 0 ]; then
+        log "Still connecting to official default endpoint ($((i * 5))/120s)..."
+    fi
+done
+
+# 如果持续 2 分钟仍无法建立连接，再切换尝试优选接入点列表
+if [ "$CONNECTED" != "true" ]; then
+    warn "Official default endpoint failed to connect within 2 minutes. Switching to preferred endpoint list..."
+    warp-cli --accept-tos disconnect 2>/dev/null || true
+
+    mapfile -t ENDPOINT_LIST < <(fetch_preferred_endpoints)
+    TOTAL_EPS=${#ENDPOINT_LIST[@]}
+    CURRENT_EP_INDEX=0
+
+    if [ "$TOTAL_EPS" -gt 0 ]; then
+        log "Loaded ${TOTAL_EPS} preferred edge endpoints, attempting connection sequentially..."
+        for i in "${!ENDPOINT_LIST[@]}"; do
+            EP="${ENDPOINT_LIST[$i]}"
+            log "[$((i+1))/${TOTAL_EPS}] Trying preferred edge endpoint: ${EP}..."
+            warp-cli --accept-tos tunnel endpoint set "$EP" 2>/dev/null || true
+            warp-cli --accept-tos connect 2>/dev/null || true
+            allow_dns_firewall
+
+            # Check status for up to 6 seconds per node
+            for check in {1..3}; do
+                sleep 2
+                STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
+                if echo "$STATUS" | grep -qE "Connected|Success"; then
+                    log "✅ Successfully connected to preferred endpoint: ${EP}"
+                    CONNECTED=true
+                    CURRENT_EP_INDEX=$i
+                    break 2
+                fi
+            done
+
+            warn "Preferred endpoint ${EP} connection timed out, trying next..."
+            warp-cli --accept-tos disconnect 2>/dev/null || true
+        done
+    fi
+
+    if [ "$CONNECTED" != "true" ]; then
+        warn "All preferred endpoints also failed, resetting back to official default endpoint..."
+        warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
         warp-cli --accept-tos connect 2>/dev/null || true
         allow_dns_firewall
-
-        # Check status for up to 4 seconds
-        for check in {1..2}; do
-            sleep 2
-            STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
-            if echo "$STATUS" | grep -qE "Connected|Success"; then
-                log "✅ Successfully connected to endpoint: ${EP}"
-                CONNECTED=true
-                CURRENT_EP_INDEX=$i
-                break 2
-            fi
-        done
-
-        warn "Endpoint ${EP} connection timed out, trying next endpoint..."
-        warp-cli --accept-tos disconnect 2>/dev/null || true
-    done
-fi
-
-if [ "$CONNECTED" != "true" ]; then
-    warn "All preferred endpoints failed or none available, resetting to official default endpoint..."
-    warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
-    warp-cli --accept-tos connect 2>/dev/null || true
-    allow_dns_firewall
+    fi
+else
+    # 已成功连接官方节点，后台预加载优选列表供后续故障转移备用
+    mapfile -t ENDPOINT_LIST < <(fetch_preferred_endpoints)
+    CURRENT_EP_INDEX=0
 fi
 
 # Continuous WARP connection health checker daemon (checks every 10s)
