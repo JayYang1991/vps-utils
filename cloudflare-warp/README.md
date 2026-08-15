@@ -45,6 +45,7 @@
 | **`cloudflare-warp-socks5.service`** | Systemd 服务 Unit 模板，包含开机自启、优雅退出与策略路由钩子 | **本地部署**：宿主机系统服务配置文件 |
 | **`Dockerfile`** | 基于 `ubuntu:24.04` 构建包含 WARP、sing-box 与健康检查的镜像 | **本地部署**：Docker 镜像构建 |
 | **`docker-entrypoint.sh`** | 容器入口脚本，自动初始化 TUN、启动 WARP、配置 Service Token 并运行 sing-box | **本地部署**：容器自动连通与生命周期管理 |
+| **`generate-singbox-server-config.sh`** | 国内中转 VPS 专用：自动生成 sing-box 服务端配置 (VLESS+Reality 入站 -> WARP SOCKS5 出站) | **中转 VPS 部署**：自动生成多端口 VLESS+Reality 配置并打印客户端链接与配置 |
 | **`install.sh`** | 自动配置官方 Apt/Yum 软件源并安装 `cloudflare-warp` 客户端 | **本地 / VPS 部署**：原生 Linux 环境安装官方 WARP 客户端 |
 | **`setup-cloudflare-one.sh`** | VPS 出口 NAT 转发与开机双重持久化配置脚本 | **VPS 宿主机部署**：将 VPS 配置为 Cloudflare Zero Trust 出口节点 (NAT Gateway) |
 
@@ -128,16 +129,26 @@ sudo bash docker-run.sh --install-service \
   -p 1080
 ```
 
-#### 场景 D：指定自定义 WARP 优选接入点 (Endpoint)
+#### 场景 D：指定优选节点订阅链接 (动态顺序探测与自动故障转移)
+```bash
+# 默认使用内置订阅源，启动时自动解析 Base64 提取 IP:PORT 优选列表
+sudo bash docker-run.sh --install-service \
+  -t <YOUR_TEAM_NAME> \
+  --service-token <CLIENT_ID>:<CLIENT_SECRET> \
+  --sub-url "https://sub.19910417.xyz/sub?host=1&uuid=1" \
+  -p 1080
+```
+
+#### 场景 E：指定自定义静态 WARP 接入点 (单节点或逗号分隔列表)
 ```bash
 sudo bash docker-run.sh --install-service \
   -t <YOUR_TEAM_NAME> \
   --service-token <CLIENT_ID>:<CLIENT_SECRET> \
-  -e 162.159.192.1:2408 \
+  -e "162.159.192.1:2408,188.114.97.10:500" \
   -p 1080
 ```
 
-#### 场景 E：更新脚本或 entrypoint 后重新编译并重建服务
+#### 场景 F：更新脚本或 entrypoint 后重新编译并重建服务
 ```bash
 # --rebuild 会自动重新构建镜像并重建容器以应用最新代码
 sudo bash docker-run.sh --install-service --rebuild \
@@ -146,7 +157,7 @@ sudo bash docker-run.sh --install-service --rebuild \
   -p 1080
 ```
 
-#### 场景 F：自定义策略路由网段与优先级
+#### 场景 G：自定义策略路由网段与优先级
 ```bash
 sudo bash docker-run.sh --install-service \
   -t <YOUR_TEAM_NAME> \
@@ -182,7 +193,38 @@ sudo bash docker-run.sh --install-service \
 
 ---
 
-### 5. 🛠️ `docker-run.sh` 完整参数对照表
+### 5. 🌐 优选节点订阅拉取、顺序探测与高可用故障转移机制
+
+针对国内直连环境下 Cloudflare 默认边缘节点偶发 UDP 丢包、TCP 阻断或握手超时的痛点，容器内置了**多重优选接入点自愈体系**：
+
+```text
+[ 启动阶段 ] ──> 优先拉取订阅 / 离线读取缓存 (/var/lib/cloudflare-warp/endpoints.txt)
+                     │
+                     ▼
+         [ 顺序轮询探测 (每个候选节点快速探测 4 秒) ]
+          ├─ 握手成功 (Connected) ──> 立即锁定该节点，正常启动
+          └─ 超时 / 阻断 ───────────> 自动断开，平滑切换下一个节点
+                     │
+     [ 若列表中所有自定义节点均未通 ]
+                     │
+                     ▼
+       [ 自动安全兜底：重置为官方默认节点 (tunnel endpoint reset) ]
+
+[ 运行阶段 ] ──> 后台守护进程每 10 秒巡检
+                     │
+         [ 若检测到 Connecting >= 30s 或长时间 Disconnected ]
+                     │
+                     ▼
+        [ 触发 Round-Robin 故障转移：自动切换至下一个优选节点并强制重连 ]
+```
+
+* **自动 Base64 解码与格式提取**：支持直接从 VLESS 订阅链接（如 `https://sub.19910417.xyz/sub?host=1&uuid=1`）自动提取包含的 `IP:PORT` 节点。
+* **本地持久化缓存保障**：获取到的节点自动写入数据卷挂载目录 `/var/lib/cloudflare-warp/endpoints.txt`，开机断网或冷启动时可无缝读取上次成功缓存。
+* **死锁防护**：规避了 WARP 内核因指数退避导致的无限休眠，通过外部超时计数器实现秒级自愈。
+
+---
+
+### 6. 🛠️ `docker-run.sh` 完整参数对照表
 
 | 参数选项 | 说明 | 默认值 / 示例 |
 | --- | --- | --- |
@@ -202,7 +244,8 @@ sudo bash docker-run.sh --install-service \
 | `--service-token <ID:SECRET>` | 使用 `ID:SECRET` 合并格式指定 Service Token | `xxxx.access:yyyy` |
 | `-k, --license <KEY>` | 指定 Cloudflare WARP+ 许可证密钥 (License Key) | - |
 | `-a, --auth-token <TOKEN>` | 指定 WARP API 注册鉴权 Token | - |
-| `-e, --endpoint <IP:PORT>` | 指定自定义 WARP 节点接入点 (例如优选 IP:端口) | `162.159.192.1:2408` |
+| `-e, --endpoint <IP:PORT>` | 指定自定义 WARP 节点接入点 (支持逗号分隔多个) | `162.159.192.1:2408` |
+| `--sub-url <URL>` | 指定优选节点订阅链接 (支持自动 Base64 解码与 IP 提取) | `https://sub.19910417.xyz/sub?host=1&uuid=1` |
 | `-p, --port <PORT>` | 宿主机对外映射的 SOCKS5 代理端口 | `1080` |
 | `-u, --user <USER>` | SOCKS5 代理验证用户名 (可选) | - |
 | `-w, --pass <PASS>` | SOCKS5 代理验证密码 (可选) | - |
@@ -344,3 +387,44 @@ proxies:
   "server_port": 1080
 }
 ```
+
+---
+
+## 🚀 三、国内中转 VPS 结合 Cloudflare WARP 部署 (VLESS + Reality + SOCKS5 出站)
+
+当您在**国内云服务器 / 中转 VPS** 上运行本项目的 Cloudflare WARP SOCKS5 代理时，可以使用配套脚本 [`generate-singbox-server-config.sh`](file:///home/jason/user_data/code/vps-utils/cloudflare-warp/generate-singbox-server-config.sh) 一键生成 sing-box 服务端配置。
+
+### 1. 架构与运作流程
+```text
+[ 用户客户端 (电脑/手机) ] 
+          │
+          ▼ (VLESS + Reality 伪装加密协议，防探测防封锁)
+[ 国内中转 VPS: sing-box (监听 443, 8443, 2053, 2083, 2087, 2096, 8080 等多端口) ]
+          │
+          ▼ (本地转发: socks5://127.0.0.1:1080)
+[ Cloudflare WARP 容器 (Zero Trust / 策略路由隔离) ]
+          │
+          ▼ (跨洋高速加密隧道)
+[ Cloudflare 全球网络 ] ──> [ 目标国际互联网 (Google/GitHub/YouTube等) ]
+```
+
+### 2. 脚本使用方法
+
+```bash
+# 1. 零配置一键生成 (自动探测公网 IP、自动生成 UUID 与 Reality 密钥对，开放所有常用端口)
+bash generate-singbox-server-config.sh
+
+# 2. 自定义开放端口与 Reality 伪装域名
+bash generate-singbox-server-config.sh --ports 443,8443,2053,2083 --sni gateway.icloud.com
+
+# 3. 一键生成并直接应用到系统 /etc/sing-box/config.json 并重启服务
+sudo bash generate-singbox-server-config.sh --apply
+
+# 4. 指定自定义输出路径
+bash generate-singbox-server-config.sh -o /etc/sing-box/config.json
+```
+
+### 3. 生成内容概览
+- **服务端**：自动配置 VLESS + Reality (XTLS-Vision)，出站绑定 `socks5://127.0.0.1:1080`；
+- **客户端**：终端自动输出彩色可直接复制的各端口 `vless://` 链接、Clash Meta YAML 配置及 sing-box 客户端 JSON。
+
