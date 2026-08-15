@@ -129,26 +129,7 @@ sudo bash docker-run.sh --install-service \
   -p 1080
 ```
 
-#### 场景 D：指定优选节点订阅链接 (动态顺序探测与自动故障转移)
-```bash
-# 默认使用内置订阅源，启动时自动解析 Base64 提取 IP:PORT 优选列表
-sudo bash docker-run.sh --install-service \
-  -t <YOUR_TEAM_NAME> \
-  --service-token <CLIENT_ID>:<CLIENT_SECRET> \
-  --sub-url "https://sub.19910417.xyz/sub?host=1&uuid=1" \
-  -p 1080
-```
-
-#### 场景 E：指定自定义静态 WARP 接入点 (单节点或逗号分隔列表)
-```bash
-sudo bash docker-run.sh --install-service \
-  -t <YOUR_TEAM_NAME> \
-  --service-token <CLIENT_ID>:<CLIENT_SECRET> \
-  -e "162.159.192.1:2408,188.114.97.10:500" \
-  -p 1080
-```
-
-#### 场景 F：更新脚本或 entrypoint 后重新编译并重建服务
+#### 场景 D：更新脚本或 entrypoint 后重新编译并重建服务
 ```bash
 # --rebuild 会自动重新构建镜像并重建容器以应用最新代码
 sudo bash docker-run.sh --install-service --rebuild \
@@ -157,7 +138,7 @@ sudo bash docker-run.sh --install-service --rebuild \
   -p 1080
 ```
 
-#### 场景 G：自定义策略路由网段与优先级
+#### 场景 E：自定义策略路由网段与优先级
 ```bash
 sudo bash docker-run.sh --install-service \
   -t <YOUR_TEAM_NAME> \
@@ -193,39 +174,25 @@ sudo bash docker-run.sh --install-service \
 
 ---
 
-### 5. 🌐 优选节点订阅拉取、顺序探测与高可用故障转移机制
+### 5. 🔄 官方默认接入点连接与健康检查自愈机制
 
-针对国内直连环境下 Cloudflare 默认边缘节点偶发 UDP 丢包、TCP 阻断或握手超时的痛点，容器内置了**官方优先 + 优选回退的多重接入点自愈体系**：
+容器默认使用 Cloudflare 官方 Anycast 接入点，并内置了后台健康检查巡检守护进程：
 
 ```text
-[ 启动阶段 ] ──> 优先使用官方默认接入点连接 (tunnel endpoint reset)
+[ 启动阶段 ] ──> 重置并连接官方默认接入点 (warp-cli tunnel endpoint reset && warp-cli connect)
                      │
                      ▼
-         [ 监测连接状态 (给予最多 2 分钟 / 120 秒建立时间) ]
-          ├─ 握手成功 (Connected) ──> 立即锁定并正常提供服务，后台预加载优选列表备用
-          └─ 持续 2 分钟未通 ───────> 触发优选降级通道
-                                          │
-                                          ▼
-                         [ 从订阅/缓存拉取优选节点列表 (/var/lib/cloudflare-warp/endpoints.txt) ]
-                                          │
-                                          ▼
-                         [ 顺序轮询探测优选节点 (每个候选节点探测 6 秒) ]
-                          ├─ 握手成功 (Connected) ──> 锁定该优选节点并提供服务
-                          └─ 全灭 / 无可用节点 ──────> 自动重置回官方默认节点
-
 [ 运行阶段 ] ──> 后台守护进程每 10 秒巡检
                      │
-         [ 若检测到 Connecting >= 30s 或长时间 Disconnected ]
+         [ 若检测到 Connecting >= 30s 或断开连接 ]
                      │
                      ▼
-        [ 触发 Round-Robin 故障转移：自动轮换至下一个优选节点并强制重连 ]
+        [ 自动重置官方接入点并执行断开重连 (disconnect + connect) ]
 ```
 
-* **官方默认接入点优先**：容器启动时优先走 Cloudflare 官方 Anycast 接入点，保证最原生的 MASQUE/QUIC 路由路径；
-* **2 分钟平滑超时回退**：若受 GFW 干扰持续 2 分钟无法握手，自动无缝启动优选 IP 探测；
-* **自动 Base64 解码与格式提取**：支持直接从 VLESS 订阅链接（如 `https://sub.19910417.xyz/sub?host=1&uuid=1`）自动提取包含的 `IP:PORT` 节点。
-* **本地持久化缓存保障**：获取到的节点自动写入数据卷挂载目录 `/var/lib/cloudflare-warp/endpoints.txt`，开机断网或冷启动时可无缝读取上次成功缓存。
-* **死锁防护**：规避了 WARP 内核因指数退避导致的无限休眠，通过外部超时计数器实现秒级自愈。
+* **原生官方路由**：使用 Cloudflare 官方 Anycast 节点，保持最稳定原生的 WireGuard/MASQUE 隧道；
+* **防死锁自愈**：当遇到网络抖动卡在 `Connecting` 超过 30 秒时，外部守护进程自动触发重连与状态机重置；
+* **凭据自动更新**：当检测到团队注册信息失效时，自动触发 `warp-cli mdm refresh` 重新同步。
 
 ---
 
@@ -249,8 +216,6 @@ sudo bash docker-run.sh --install-service \
 | `--service-token <ID:SECRET>` | 使用 `ID:SECRET` 合并格式指定 Service Token | `xxxx.access:yyyy` |
 | `-k, --license <KEY>` | 指定 Cloudflare WARP+ 许可证密钥 (License Key) | - |
 | `-a, --auth-token <TOKEN>` | 指定 WARP API 注册鉴权 Token | - |
-| `-e, --endpoint <IP:PORT>` | 指定自定义 WARP 节点接入点 (支持逗号分隔多个) | `162.159.192.1:2408` |
-| `--sub-url <URL>` | 指定优选节点订阅链接 (支持自动 Base64 解码与 IP 提取) | `https://sub.19910417.xyz/sub?host=1&uuid=1` |
 | `-p, --port <PORT>` | 宿主机对外映射的 SOCKS5 代理端口 | `1080` |
 | `-u, --user <USER>` | SOCKS5 代理验证用户名 (可选) | - |
 | `-w, --pass <PASS>` | SOCKS5 代理验证密码 (可选) | - |

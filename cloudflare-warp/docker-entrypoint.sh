@@ -253,72 +253,7 @@ log "Starting sing-box SOCKS5 proxy..."
 sing-box run -c "$CONFIG_FILE" &
 SINGBOX_PID=$!
 
-CACHE_FILE="/var/lib/cloudflare-warp/endpoints.txt"
-
-# Helper to fetch preferred WARP endpoints from subscription URL and/or persistent cache
-fetch_preferred_endpoints() {
-    local sub_url="${WARP_SUB_URL:-https://sub.19910417.xyz/sub?host=1&uuid=1}"
-    local endpoints=()
-    local fetched=false
-
-    # 1. Try fetching online via SOCKS5 proxy or direct
-    if [ -n "$sub_url" ]; then
-        log "Fetching preferred WARP endpoints from subscription: ${sub_url}..."
-        local raw_data=""
-        raw_data=$(curl -sSL -m 8 -x socks5h://127.0.0.1:${SOCKS_PORT:-1080} "$sub_url" 2>/dev/null || curl -sSL -m 8 "$sub_url" 2>/dev/null || true)
-
-        if [ -n "$raw_data" ]; then
-            local decoded=""
-            decoded=$(echo "$raw_data" | base64 -d 2>/dev/null || echo "$raw_data")
-
-            # Extract @IP:PORT patterns from vless:// subscription nodes
-            while IFS= read -r line; do
-                if [[ -n "$line" && "$line" != *"example.com"* ]]; then
-                    endpoints+=("$line")
-                fi
-            done < <(echo "$decoded" | grep -oE '@[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+' | tr -d '@')
-
-            # Fallback to plain IP:PORT pattern if no @IP:PORT found
-            if [ ${#endpoints[@]} -eq 0 ]; then
-                while IFS= read -r line; do
-                    if [[ -n "$line" && "$line" != *"127.0.0.1"* && "$line" != *"0.0.0.0"* ]]; then
-                        endpoints+=("$line")
-                    fi
-                done < <(echo "$decoded" | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{2,5}')
-            fi
-
-            if [ ${#endpoints[@]} -gt 0 ]; then
-                fetched=true
-                mkdir -p /var/lib/cloudflare-warp
-                printf "%s\n" "${endpoints[@]}" > "$CACHE_FILE" 2>/dev/null || true
-            fi
-        fi
-    fi
-
-    # 2. If online fetch failed (e.g. cold boot before proxy), load from persistent cache
-    if [ "$fetched" = "false" ] && [ -f "$CACHE_FILE" ]; then
-        log "Loading preferred endpoints from local cache: ${CACHE_FILE}..."
-        while IFS= read -r line; do
-            [ -n "$line" ] && endpoints+=("$line")
-        done < "$CACHE_FILE"
-    fi
-
-    # 3. Append static endpoints from WARP_ENDPOINT if specified
-    if [ -n "$WARP_ENDPOINT" ]; then
-        local IFS=','
-        for sep in $WARP_ENDPOINT; do
-            sep=$(echo "$sep" | xargs)
-            if [ -n "$sep" ]; then
-                endpoints+=("$sep")
-            fi
-        done
-    fi
-
-    # Output list (one per line)
-    printf "%s\n" "${endpoints[@]}"
-}
-
-# 7. Set WARP mode, Connect to official default endpoint first
+# 7. Set WARP mode, Reset to Official Default Endpoint & Connect
 if [ "$HAS_MDM" != "true" ]; then
     WARP_MODE="${WARP_MODE:-warp}"
     log "Setting WARP mode to ${WARP_MODE}..."
@@ -327,74 +262,10 @@ fi
 
 warp-cli --accept-tos debug connectivity-check disable 2>/dev/null || true
 
-# 优先重置并尝试连接官方默认接入点 (等待最多 2 分钟 / 120 秒)
-log "Attempting initial connection using official default endpoint..."
+log "Connecting to Cloudflare WARP using official default endpoint..."
 warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
 warp-cli --accept-tos connect 2>/dev/null || true
 allow_dns_firewall
-
-CONNECTED=false
-log "Waiting for default endpoint connection (timeout: 120s / 2 minutes)..."
-for i in {1..24}; do
-    sleep 5
-    STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
-    if echo "$STATUS" | grep -qE "Connected|Success"; then
-        log "✅ Successfully connected using official default endpoint!"
-        CONNECTED=true
-        break
-    fi
-    allow_dns_firewall
-    if [ $((i % 6)) -eq 0 ]; then
-        log "Still connecting to official default endpoint ($((i * 5))/120s)..."
-    fi
-done
-
-# 如果持续 2 分钟仍无法建立连接，再切换尝试优选接入点列表
-if [ "$CONNECTED" != "true" ]; then
-    warn "Official default endpoint failed to connect within 2 minutes. Switching to preferred endpoint list..."
-    warp-cli --accept-tos disconnect 2>/dev/null || true
-
-    mapfile -t ENDPOINT_LIST < <(fetch_preferred_endpoints)
-    TOTAL_EPS=${#ENDPOINT_LIST[@]}
-    CURRENT_EP_INDEX=0
-
-    if [ "$TOTAL_EPS" -gt 0 ]; then
-        log "Loaded ${TOTAL_EPS} preferred edge endpoints, attempting connection sequentially..."
-        for i in "${!ENDPOINT_LIST[@]}"; do
-            EP="${ENDPOINT_LIST[$i]}"
-            log "[$((i+1))/${TOTAL_EPS}] Trying preferred edge endpoint: ${EP}..."
-            warp-cli --accept-tos tunnel endpoint set "$EP" 2>/dev/null || true
-            warp-cli --accept-tos connect 2>/dev/null || true
-            allow_dns_firewall
-
-            # Check status for up to 6 seconds per node
-            for check in {1..3}; do
-                sleep 2
-                STATUS=$(warp-cli --accept-tos status 2>/dev/null || echo "")
-                if echo "$STATUS" | grep -qE "Connected|Success"; then
-                    log "✅ Successfully connected to preferred endpoint: ${EP}"
-                    CONNECTED=true
-                    CURRENT_EP_INDEX=$i
-                    break 2
-                fi
-            done
-
-            warn "Preferred endpoint ${EP} connection timed out, trying next..."
-            warp-cli --accept-tos disconnect 2>/dev/null || true
-        done
-    fi
-
-    if [ "$CONNECTED" != "true" ]; then
-        warn "All preferred endpoints also failed, resetting back to official default endpoint..."
-        warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
-        warp-cli --accept-tos connect 2>/dev/null || true
-        allow_dns_firewall
-    fi
-else
-    # 已成功连接官方节点，后台预加载优选列表供后续故障转移备用
-    mapfile -t ENDPOINT_LIST < <(fetch_preferred_endpoints)
-    CURRENT_EP_INDEX=0
-fi
 
 # Continuous WARP connection health checker daemon (checks every 10s)
 (
@@ -410,21 +281,12 @@ fi
             continue
         fi
 
-        # 2. In Connecting state: track duration and force failover if stuck >= 30s (3 consecutive checks)
+        # 2. In Connecting state: track duration and force reconnect if stuck >= 30s (3 consecutive checks)
         if echo "$STATUS" | grep -qE "Connecting"; then
             CONNECTING_COUNT=$((CONNECTING_COUNT + 1))
             if [ "$CONNECTING_COUNT" -ge 3 ]; then
-                warn "WARP stuck in Connecting state for >=30s, initiating endpoint failover..."
-                if [ ${#ENDPOINT_LIST[@]} -gt 1 ]; then
-                    CURRENT_EP_INDEX=$(( (CURRENT_EP_INDEX + 1) % ${#ENDPOINT_LIST[@]} ))
-                    NEXT_EP="${ENDPOINT_LIST[$CURRENT_EP_INDEX]}"
-                    warn "Switching to next preferred endpoint [$((CURRENT_EP_INDEX+1))/${#ENDPOINT_LIST[@]}]: ${NEXT_EP}..."
-                    warp-cli --accept-tos tunnel endpoint set "$NEXT_EP" 2>/dev/null || true
-                elif [ ${#ENDPOINT_LIST[@]} -eq 1 ]; then
-                    warp-cli --accept-tos tunnel endpoint set "${ENDPOINT_LIST[0]}" 2>/dev/null || true
-                else
-                    warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
-                fi
+                warn "WARP stuck in Connecting state for >=30s, resetting to default endpoint and reconnecting..."
+                warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
                 warp-cli --accept-tos disconnect 2>/dev/null || true
                 sleep 1
                 warp-cli --accept-tos connect 2>/dev/null || true
@@ -446,14 +308,9 @@ fi
             sleep 3
         fi
 
-        # 4. If disconnected or in unexpected state, actively failover and reconnect
-        warn "WARP disconnected (${STATUS:-Unknown}), attempting failover and reconnect..."
-        if [ ${#ENDPOINT_LIST[@]} -gt 1 ]; then
-            CURRENT_EP_INDEX=$(( (CURRENT_EP_INDEX + 1) % ${#ENDPOINT_LIST[@]} ))
-            NEXT_EP="${ENDPOINT_LIST[$CURRENT_EP_INDEX]}"
-            warn "Switching to next preferred endpoint [$((CURRENT_EP_INDEX+1))/${#ENDPOINT_LIST[@]}]: ${NEXT_EP}..."
-            warp-cli --accept-tos tunnel endpoint set "$NEXT_EP" 2>/dev/null || true
-        fi
+        # 4. If disconnected or in unexpected state, actively reset and reconnect
+        warn "WARP disconnected (${STATUS:-Unknown}), attempting reconnect..."
+        warp-cli --accept-tos tunnel endpoint reset 2>/dev/null || true
         warp-cli --accept-tos disconnect 2>/dev/null || true
         sleep 1
         warp-cli --accept-tos connect 2>/dev/null || true
