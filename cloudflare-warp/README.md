@@ -48,6 +48,7 @@
 | **`generate-singbox-server-config.sh`** | 国内中转 VPS 专用：自动生成 sing-box 服务端配置 (VLESS+Reality 入站 -> WARP SOCKS5 出站) | **中转 VPS 部署**：自动生成多端口 VLESS+Reality 配置并打印客户端链接与配置 |
 | **`install.sh`** | 自动配置官方 Apt/Yum 软件源并安装 `cloudflare-warp` 客户端 | **本地 / VPS 部署**：原生 Linux 环境安装官方 WARP 客户端 |
 | **`setup-cloudflare-one.sh`** | VPS 出口 NAT 转发与开机双重持久化配置脚本 | **VPS 宿主机部署**：将 VPS 配置为 Cloudflare Zero Trust 出口节点 (NAT Gateway) |
+| **`test-masque.py`** | MASQUE (QUIC v1) 协议双阶段握手协商与连通性诊断测试工具 | **本地 / VPS 诊断**：探测 Endpoint 端口可用性、时延与大包丢包率 |
 
 ---
 
@@ -397,4 +398,56 @@ bash generate-singbox-server-config.sh -o /etc/sing-box/config.json
 ### 3. 生成内容概览
 - **服务端**：自动配置 VLESS + Reality (XTLS-Vision)，出站绑定 `socks5://127.0.0.1:1080`；
 - **客户端**：终端自动输出彩色可直接复制的各端口 `vless://` 链接、Clash Meta YAML 配置及 sing-box 客户端 JSON。
+
+---
+
+## 🧪 四、Cloudflare WARP MASQUE (QUIC) 协议协商与连通性测试工具 (`test-masque.py`)
+
+在本地或 VPS 环境下排查 Cloudflare WARP MASQUE 协议连接异常时，可以使用配套测试工具 [`test-masque.py`](file:///home/jason/user_data/code/vps-utils/cloudflare-warp/test-masque.py) 进行底层协议级的网络连通性与往返时延（RTT）诊断。
+
+### 1. 工具特性
+* **纯 Python 标准库**：无需安装任何第三方依赖（无需 `pip install`），开箱即用；
+* **RFC 9000 QUIC v1 双阶段握手模拟**：
+  * **第一阶段 (Initial -> Retry)**：构造标准 QUIC Initial 探测报文（填充至 1200 字节，携带 TLS 1.3 ClientHello 与 SNI），测试目标 Endpoint 的 UDP 大包可达性并提取服务端防 DDoS `Retry Token`；
+  * **第二阶段 (Token Initial -> Handshake)**：携带服务端 Token 发起二次握手协商，探测服务端协议层响应；
+* **支持物理网卡源 IP 绑定 (`-i / --ip`)**：在宿主机开启全局 TUN 代理时，可显式指定物理网卡 IP 强制走直连物理出口测试；
+* **支持单目标/批量优选 IP 测速**：支持逗号分隔的 IP 列表与自定义端口列表，输出详细时延与丢包统计。
+
+### 2. 常用命令示例
+
+```bash
+# 1. 基础测试：探测官方默认 Endpoint (162.159.197.2) 的全部常用 MASQUE 端口 (443, 8443, 4500, 8095, 500, 1701, 4443)
+python3 test-masque.py -t 162.159.197.2
+
+# 2. 直连测试：绑定物理网卡出网 IP (宿主机开启 TUN 模式时推荐，绕过本地 TUN 代理)
+python3 test-masque.py -t 162.159.197.2 -i 172.19.4.28
+
+# 3. 指定特定端口测试 (例如 4443 和 8443)
+python3 test-masque.py -t 162.159.197.2 -p 4443,8443 -i 172.19.4.28
+
+# 4. 批量探测多个优选 Anycast IP (测速与丢包对比)
+python3 test-masque.py -t 162.159.192.1,162.159.193.10,162.159.195.1,188.114.96.1 -p 8443,4443
+
+# 5. 自定义超时时间与单端口重试次数
+python3 test-masque.py -t 162.159.197.2 -p 4443 --timeout 3.0 --retries 3
+```
+
+### 3. 命令行参数速查 (`python3 test-masque.py -h`)
+
+| 参数 | 缩写 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `--target` | `-t` | `162.159.197.2` | 目标 IP 地址（支持逗号分隔多个 IP，如 `162.159.192.1,162.159.195.1`） |
+| `--ports` | `-p` | `443,8443,4500,8095,500,1701,4443` | 待测试端口列表，逗号分隔 |
+| `--ip` | `-i` | 自动分配 | 本地绑定的源 IP 地址（用于指定物理网卡 IP 直连） |
+| `--sni` | `-s` | `engage.cloudflareclient.com` | TLS 1.3 ClientHello 伪装 SNI 域名 |
+| `--timeout` | - | `2.5` | 单次请求超时时间（单位：秒） |
+| `--retries` | - | `2` | 单端口探测重试次数 |
+
+### 4. 诊断结果解读与说明
+* **第一阶段成功 (收到 Retry，RTT 正常)**：
+  说明从当前机器到目标 Endpoint 的 UDP 路由、MTU（1200 字节大包传输）和 NAT 映射**完全正常通畅**，服务端能够正常响应 QUIC 探测；
+* **第一阶段超时 (丢包/无应答)**：
+  说明当前网络（如部分国内云服务器 IDC 机房直连出网）对境外特定 Anycast IP 或非标准 UDP 端口存在**丢包黑洞或机房边界 QoS 拦截**；
+* **第二阶段说明**：
+  Cloudflare Zero Trust MASQUE 接入网关在第二阶段会严格验证真实客户端设备私钥与 mTLS 凭据。测试脚本作为轻量探针未携带真实设备私钥，服务端在第一阶段防 DDoS 校验通过后会对未授权的第二阶段模拟包执行静默丢弃（Silent Drop），这是预期的安全机制。只要第一阶段 1200B 大包稳定收到 Retry 回包，即证明真实 WARP 容器能正常握手连接。
 
