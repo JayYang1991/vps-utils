@@ -385,7 +385,7 @@ EOF
   cat <<EOF > "$SERVICE_FILE"
 [Unit]
 Description=Cloudflare WARP + Sing-box SOCKS5 Proxy Service (Docker Container)
-Documentation=https://github.com/JayYang1991/vps-utils/tree/main/cloudflare-warp
+Documentation=https://github.com/JayYang1991/vps-utils/tree/main/cloudflare-zero-trust
 After=docker.service network-online.target
 Requires=docker.service
 Wants=network-online.target

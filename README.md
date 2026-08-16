@@ -8,11 +8,11 @@
 
 | 子项目目录 | 核心功能说明 | 推荐入口 / 关键脚本 | 详细文档链接 |
 | --- | --- | --- | --- |
-| [fhs-install-singbox](./fhs-install-singbox) | sing-box 服务端 FHS 部署与 VPS 远程/Vultr 自动化部署工具 | `setup_vps_server.sh`<br>`install-singbox-server.sh` | [fhs-install-singbox README](./fhs-install-singbox/README.md) |
+| [fhs-install-singbox](./fhs-install-singbox) | sing-box 服务端 FHS 部署、多端口 Reality 配置生成与 VPS 远程/Vultr 自动化部署工具 | `setup_vps_server.sh`<br>`install-singbox-server.sh`<br>`generate-singbox-server-config.sh` | [fhs-install-singbox README](./fhs-install-singbox/README.md) |
 | [singbox-sub-converter](./singbox-sub-converter) | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务 | `install.sh`<br>`pack.sh` | [singbox-sub-converter README](./singbox-sub-converter/README.md) |
 | [subconverter](./subconverter) | 通用代理订阅格式转换后端服务（带 Systemd 一键安装脚本） | `install.sh` | [subconverter README](./subconverter/README.md) |
 | [cloudflared-tunnel](./cloudflared-tunnel) | Cloudflare Official Agent 部署，实现 Cloudflare Tunnel 内网穿透服务 | `install.sh` | [cloudflared-tunnel README](./cloudflared-tunnel/README.md) |
-| [cloudflare-warp](./cloudflare-warp) | Cloudflare WARP 客户端容器化/原生部署、Cloudflare One VPS 出口 NAT 转发与 MASQUE 协议测试 | `docker-run.sh`<br>`install.sh`<br>`setup-cloudflare-one.sh`<br>`test-masque.py` | [cloudflare-warp README](./cloudflare-warp/README.md) |
+| [cloudflare-zero-trust](./cloudflare-zero-trust) | Cloudflare Zero Trust (Cloudflare One) 综合套件：Tunnel 穿透、VPS 出口 NAT 转发与 SOCKS5 代理 | `docker-run.sh`<br>`install.sh`<br>`setup-cloudflare-one.sh`<br>`test-masque.py` | [cloudflare-zero-trust README](./cloudflare-zero-trust/README.md) |
 | [preferred-ip-manager](./preferred-ip-manager) | Cloudflare Worker 订阅管理与 Telegram/CFST 自动化测速同步工具 | `sub-worker.js`<br>`process_ips.py` | [preferred-ip-manager README](./preferred-ip-manager/README.md) |
 
 ---
@@ -24,6 +24,7 @@
 符合 [Filesystem Hierarchy Standard (FHS)](https://en.wikipedia.org/wiki/Filesystem_Hierarchy_Standard) 标准的 `sing-box` (VLESS + Reality + Hysteria2) 服务端部署与 VPS 远程自动化运维工具包。
 
 - **`install-singbox-server.sh`**：单机/本地一键安装、更新与配置 `sing-box` 服务端。
+- **`generate-singbox-server-config.sh`**：国内中转 VPS 多端口 Reality 专用配置生成器（VLESS+Reality 伪装入站 ➜ WARP SOCKS5 落地出站）。
 - **`update-singbox-keys.sh`**：服务端各项密钥与凭证（UUID, Reality 密钥对, Short ID, Hysteria2 密码）安全更新/重置工具。
 - **`setup_vps_server.sh`**：远程 SSH 一键部署工具，支持直连 IP 部署或结合 Vultr API 自动创建 VPS 实例，自动注入公钥实现免密登录，默认一键安装全套组件。
 - **`remove_vultr_instance.sh`**：Vultr 实例交互式查询与快速清理工具。
@@ -67,15 +68,16 @@
 
 ---
 
-### 5. [cloudflare-warp](./cloudflare-warp) — Cloudflare WARP 部署与 Cloudflare One VPS 出口转发
+### 5. [cloudflare-zero-trust](./cloudflare-zero-trust) — Cloudflare Zero Trust (Cloudflare One) 综合套件
 
-官方 Cloudflare WARP 客户端部署、本地 Docker + Systemd SOCKS5 代理封装与 Cloudflare One / Zero Trust 自定义 VPS 出口节点 NAT 转发自动化工具包：
+基于 Cloudflare Zero Trust (Cloudflare One) 边缘网络架构的综合解决方案，提供 **cloudflared 入站穿透**、**VPS 出口 NAT 转发**、**本地 Docker SOCKS5 代理客户端** 与 **MASQUE 协议诊断工具**：
 
 - **`docker-run.sh`**：本地 WARP + sing-box 容器一键部署与 Systemd 系统服务封装脚本，支持自动管理策略路由、凭据隔离存储与重启保留状态。
-- **`install.sh`**：自动配置 Cloudflare 官方 Apt / Yum 软件源并安装 `cloudflare-warp` 软件包与 `warp-svc` 开机自启服务。
-- **`setup-cloudflare-one.sh`**：自动开启 VPS 内核 IP 转发 (`ip_forward`) 并配置 `iptables` NAT MASQUERADE 规则，将 VPS 设置为 Cloudflare One WARP 流量的指定出口节点，支持配置 (`--setup`) 与清除还原 (`--unset`)。
+- **`setup-cloudflare-one.sh`**：自动开启 VPS 内核 IP 转发 (`ip_forward`) 并配置 `iptables` NAT MASQUERADE 规则，将 VPS 设置为 Cloudflare Zero Trust 的指定流量出口节点 (Exit Node)，支持一键配置 (`--setup`) 与清除还原 (`--unset`)。
+- **`install.sh`**：自动配置 Cloudflare 官方 Apt / Yum 软件源并安装 `cloudflare-warp` 官方软件包与 `warp-svc` 服务。
+- **`test-masque.py`**：纯 Python 标准库零依赖的 MASQUE (QUIC v1) RFC 9000 握手连通性与时延测试工具。
 
-> 📖 **详细说明与完整选项**：参阅 [cloudflare-warp/README.md](./cloudflare-warp/README.md)
+> 📖 **详细说明与完整选项**：参阅 [cloudflare-zero-trust/README.md](./cloudflare-zero-trust/README.md)
 
 ---
 
@@ -176,6 +178,8 @@ vps-utils/
 │   ├── README.md                      # fhs-install-singbox 详细指南
 │   ├── setup_vps_server.sh            # 远程 VPS 自动化部署脚本
 │   ├── install-singbox-server.sh      # sing-box 服务端本地安装脚本
+│   ├── generate-singbox-server-config.sh # 多端口 Reality 配合 WARP 出站配置生成器
+│   ├── update-singbox-keys.sh         # 服务端凭证/密钥安全更新工具
 │   └── singbox_server_config.json     # sing-box 服务端配置模板
 ├── singbox-sub-converter/              # sing-box 自适应订阅转换服务
 │   ├── README.md                      # singbox-sub-converter 详细指南
@@ -185,8 +189,8 @@ vps-utils/
 ├── subconverter/                       # 订阅转换后端程序
 │   ├── README.md                      # subconverter 安装指南
 │   └── install.sh                     # 自动化安装与端口配置脚本
-├── cloudflare-warp/                    # Cloudflare WARP 部署与 VPS 出口配置
-│   ├── README.md                      # cloudflare-warp 详细指南
+├── cloudflare-zero-trust/              # Cloudflare Zero Trust (One) 套件与 VPS 出口配置
+│   ├── README.md                      # cloudflare-zero-trust 详细指南
 │   ├── docker-run.sh                  # 容器与 Systemd 服务管理脚本
 │   ├── install.sh                     # 客户端安装与 Systemd 服务部署脚本
 │   ├── setup-cloudflare-one.sh        # Cloudflare One VPS NAT 转发配置脚本
