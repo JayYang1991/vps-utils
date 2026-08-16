@@ -1,206 +1,261 @@
 # VPS Utils - VPS 自动化部署与订阅转换工具箱
 
-`vps-utils` 是一个面向 Linux VPS 运维、代理服务端部署（sing-box）、订阅自适应转换、内网穿透（cloudflared）以及优选 IP 管理的全套工具箱与实用项目合集。
+`vps-utils` 是一个面向 Linux VPS 运维、代理服务端部署（sing-box）、Cloudflare 边缘网络协同（Zero Trust / Tunnel / 优选 IP）、订阅自适应转换以及安全中转的全套工具箱与实用项目合集。
 
 ---
 
-## 📦 项目矩阵与组件概览
+## 🌐 整体系统与双流分离架构
 
-| 子项目目录 | 核心功能说明 | 推荐入口 / 关键脚本 | 详细文档链接 |
-| --- | --- | --- | --- |
-| [fhs-install-singbox](./fhs-install-singbox) | sing-box 服务端 FHS 部署、多端口 Reality 配置生成与 VPS 远程/Vultr 自动化部署工具 | `setup_vps_server.sh`<br>`install-singbox-server.sh`<br>`generate-singbox-server-config.sh` | [fhs-install-singbox README](./fhs-install-singbox/README.md) |
-| [singbox-sub-converter](./singbox-sub-converter) | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务 | `install.sh`<br>`pack.sh` | [singbox-sub-converter README](./singbox-sub-converter/README.md) |
-| [subconverter](./subconverter) | 通用代理订阅格式转换后端服务（带 Systemd 一键安装脚本） | `install.sh` | [subconverter README](./subconverter/README.md) |
-| [cloudflared-tunnel](./cloudflared-tunnel) | Cloudflare Official Agent 部署，实现 Cloudflare Tunnel 内网穿透服务 | `install.sh` | [cloudflared-tunnel README](./cloudflared-tunnel/README.md) |
-| [cloudflare-zero-trust](./cloudflare-zero-trust) | Cloudflare Zero Trust (Cloudflare One) 综合套件：Tunnel 穿透、VPS 出口 NAT 转发与 SOCKS5 代理 | `docker-run.sh`<br>`install.sh`<br>`setup-cloudflare-one.sh`<br>`test-masque.py` | [cloudflare-zero-trust README](./cloudflare-zero-trust/README.md) |
-| [preferred-ip-manager](./preferred-ip-manager) | Cloudflare Worker 订阅管理与 Telegram/CFST 自动化测速同步工具 | `sub-worker.js`<br>`process_ips.py` | [preferred-ip-manager README](./preferred-ip-manager/README.md) |
+整个系统在架构上清晰地划分为 **订阅管理控制流** 与 **业务数据代理流** 两套独立通道：
 
 ---
 
-## 🚀 核心子项目简介
+### 1. 订阅管理与自适应分发流程 (Subscription Workflow)
 
-### 1. [fhs-install-singbox](./fhs-install-singbox) — sing-box 服务端与 VPS 自动化部署
-
-符合 [Filesystem Hierarchy Standard (FHS)](https://en.wikipedia.org/wiki/Filesystem_Hierarchy_Standard) 标准的 `sing-box` (VLESS + Reality + Hysteria2) 服务端部署与 VPS 远程自动化运维工具包。
-
-- **`install-singbox-server.sh`**：单机/本地一键安装、更新与配置 `sing-box` 服务端。
-- **`generate-singbox-server-config.sh`**：国内中转 VPS 多端口 Reality 专用配置生成器（VLESS+Reality 伪装入站 ➜ WARP SOCKS5 落地出站）。
-- **`update-singbox-keys.sh`**：服务端各项密钥与凭证（UUID, Reality 密钥对, Short ID, Hysteria2 密码）安全更新/重置工具。
-- **`setup_vps_server.sh`**：远程 SSH 一键部署工具，支持直连 IP 部署或结合 Vultr API 自动创建 VPS 实例，自动注入公钥实现免密登录，默认一键安装全套组件。
-- **`remove_vultr_instance.sh`**：Vultr 实例交互式查询与快速清理工具。
-
-> 📖 **详细说明与完整选项**：参阅 [fhs-install-singbox/README.md](./fhs-install-singbox/README.md)
-
----
-
-### 2. [singbox-sub-converter](./singbox-sub-converter) — sing-box 自适应订阅转换服务
-
-基于 Python / FastAPI 开发的轻量级自适应订阅转换服务与 Web 管理界面：
-
-- **自适应客户端识别**：根据 HTTP `User-Agent` 自动转换并输出 Clash YAML、sing-box JSON 或 Base64 编码订阅。
-- **优选 IP 节点合并**：自动读取服务端 VLESS-gRPC 配置并动态拉取 Cloudflare 优选 IP 进行组合。
-- **一键平滑部署**：内置 `install.sh` 自动化脚本，自动从仓库 Release 拉取打包产物（`singbox-sub-converter.tar.gz`）并配置后台 Systemd 服务。
-
-> 📖 **详细说明与完整选项**：参阅 [singbox-sub-converter/README.md](./singbox-sub-converter/README.md)
+```text
+[ 用户终端 (Clash / sing-box / Surge / 移动端) ]
+                       │
+                       ▼ (1. 请求自适应订阅: https://sub.yourdomain.com/sub?token=xxx)
+[ Cloudflare Tunnel 公共域名: sub.yourdomain.com ]
+                       │
+                       ▼ (安全反向代理进入 VPS 本地)
+┌──────────────────────────────────────────────────────────────┐
+│                    singbox-sub-converter                     │
+│                   (自适应订阅核心服务, 端口 8000)               │
+└──────────────┬───────────────────────────────▲───────────────┘
+               │ (调用格式转换)                 │ (拉取实时优选 IP 节点池)
+               ▼                               │
+┌────────────────────────────┐    ┌────────────┴─────────────┐
+│        subconverter        │    │   preferred-ip-manager   │
+│ (通用转换后端引擎, 端口 25500)│    │ (Cloudflare Pages/Worker)│
+└────────────────────────────┘    └──────────────────────────┘
+               │
+               ▼ (2. 动态聚合：基础节点 + 优选 IP 节点 + 自动清理空组，分发给客户端)
+[ 代理客户端成功加载节点列表 ]
+```
 
 ---
 
-### 3. [subconverter](./subconverter) — 订阅转换后端服务
+### 2. 代理数据流量转发路径 (Data Traffic Workflow)
 
-基于 C++ 开发的高性能通用代理订阅格式转换后端，支持 Clash、Surge、Quantumult X、Loon、sing-box 等多种协议格式互转。
+系统支持 **两种独立的客户端出海代理访问路径**：
 
-- **一键安装与端口配置**：提供 `install.sh` 部署脚本，支持 `-p / --port` 自定义端口，自动生成 `pref.ini` 配置文件并注册开机自启 Systemd 服务。
+#### 模式 A：Clash / sing-box 等代理客户端访问路径 (优选 IP + Tunnel 穿透)
+```text
+[ 代理客户端 (Clash / sing-box / Shadowrocket 等) ]
+                       │
+                       ▼ (1. 客户端发起代理连接)
+[ Cloudflare 优选 IP (Anycast 全球加速节点) ]
+                       │
+                       ▼ (2. Cloudflare 骨干网络 CDN 高速路由)
+[ Cloudflare Tunnel (grpc.yourdomain.com 隧道安全穿透) ]
+                       │
+                       ▼ (3. 安全长连接送达末端 VPS)
+[ 代理末端 VPS: sing-box (vless-grpc 协议, 本地 8088 端口) ]
+                       │
+                       ▼ (4. VPS 本地出站访问外部网络)
+[ 目标国际互联网 (Google / YouTube / GitHub / AI 等) ]
+```
 
-> 📖 **详细说明与完整选项**：参阅 [subconverter/README.md](./subconverter/README.md)
+#### 模式 B：Cloudflare WARP 客户端 / 本地 SOCKS5 访问路径 (Zero Trust + VPS 出口 NAT)
 
----
+Cloudflare WARP 客户端出海访问完整拆解为以下 **4 个步骤**：
 
-### 4. [cloudflared-tunnel](./cloudflared-tunnel) — Cloudflare Tunnel 内网穿透服务
-
-官方 Cloudflare Agent (`cloudflared`) 的自动化安装与后台 Systemd 服务配置项目：
-
-- **自动化多架构安装**：自动检测 `amd64` / `arm64` / `arm` / `386` 架构并拉取 Cloudflare 官方最新二进制文件。
-- **双模式运行支持**：
-  - **命名 Tunnel 模式**（`-t TOKEN`）：连接 Cloudflare Zero Trust，稳定发布公网 HTTPS 服务。
-  - **Quick Tunnel 模式**（无 Token）：临时将本地服务（如 8000 或 25500 端口）映射为 `.trycloudflare.com` 公网域名。
-
-> 📖 **详细说明与完整选项**：参阅 [cloudflared-tunnel/README.md](./cloudflared-tunnel/README.md)
-
----
-
-### 5. [cloudflare-zero-trust](./cloudflare-zero-trust) — Cloudflare Zero Trust (Cloudflare One) 综合套件
-
-基于 Cloudflare Zero Trust (Cloudflare One) 边缘网络架构的综合解决方案，提供 **cloudflared 入站穿透**、**VPS 出口 NAT 转发**、**本地 Docker SOCKS5 代理客户端** 与 **MASQUE 协议诊断工具**：
-
-- **`docker-run.sh`**：本地 WARP + sing-box 容器一键部署与 Systemd 系统服务封装脚本，支持自动管理策略路由、凭据隔离存储与重启保留状态。
-- **`setup-cloudflare-one.sh`**：自动开启 VPS 内核 IP 转发 (`ip_forward`) 并配置 `iptables` NAT MASQUERADE 规则，将 VPS 设置为 Cloudflare Zero Trust 的指定流量出口节点 (Exit Node)，支持一键配置 (`--setup`) 与清除还原 (`--unset`)。
-- **`install.sh`**：自动配置 Cloudflare 官方 Apt / Yum 软件源并安装 `cloudflare-warp` 官方软件包与 `warp-svc` 服务。
-- **`test-masque.py`**：纯 Python 标准库零依赖的 MASQUE (QUIC v1) RFC 9000 握手连通性与时延测试工具。
-
-> 📖 **详细说明与完整选项**：参阅 [cloudflare-zero-trust/README.md](./cloudflare-zero-trust/README.md)
-
----
-
-### 6. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 管理与测速同步工具
-
-结合 Cloudflare Worker 无服务器架构与 Python 本地自动化测速同步全流程解决方案：
-
-- **Cloudflare Worker 订阅服务 (`sub-worker.js`)**：提供实时优选 IP 订阅生成 (`/sub`)、暗黑拟物风格可视化管理后台 (`/admin`) 以及历史记录备份与 API 同步接口 (`/api/update`)。
-- **Python 自动化工具链 (`process_ips.py` & `telegram_tool.py`)**：自动从 Telegram 抓取最新中转 IP，无干扰调起 `CloudflareSpeedTest` 测速，并将优选结果自动推送更新至 Worker 订阅节点。
-
-> 📖 **详细说明与完整选项**：参阅 [preferred-ip-manager/README.md](./preferred-ip-manager/README.md)
+```text
+[ 官方 WARP 客户端 / 本地 Docker SOCKS5 代理 (127.0.0.1:1080) ]
+                       │
+                       ▼ 1. 客户端通过加密隧道接入 (WireGuard / MASQUE 协议接入 Zero Trust 骨干网)
+[ Cloudflare Zero Trust 全球网络 (Gateway / Access) ]
+                       │
+                       ▼ 2. Cloudflare 通过配置的 Egress 路由策略定向转发至末端 VPS
+[ Cloudflare Tunnel / Connector (接收 Zero Trust 进站流量) ]
+                       │
+                       ▼ 3. VPS 将进入 cloudflared 的流量转发至实际出口网卡
+                            (setup-cloudflare-one.sh 自动识别物理网卡如 eth0 并配置 iptables NAT MASQUERADE)
+[ VPS 宿主机物理出口网卡 (eth0 / ens3) ]
+                       │
+                       ▼ 4. 以 VPS 原生公网 IP 访问国际互联网
+[ 目标国际互联网 (完美解锁流媒体 / ChatGPT / Claude / 区域原生 IP 验证) ]
+```
 
 ---
 
-## ⚡ 远程全套一键部署快速开始
+## 🚀 第一章：VPS 端到端自动化部署全流程
 
-只需在本地机器运行 `setup_vps_server.sh`，即可对远程 VPS（或自动创建的 Vultr 实例）完成包含 `sing-box` 服务端、`subconverter` 以及 `singbox-sub-converter` 的**全套组件自动部署**：
+遵循以下 6 个标准步骤，即可在代理末端 VPS 上搭建起一套具备 **高防封锁、多协议支持、Cloudflare Tunnel 内网穿透、Zero Trust 出口 NAT 转发与自适应订阅分发** 的完整服务闭环。
+
+> 🛡️ **核心安全设计原则**：
+> **`singbox-sub-converter`** 与 **`subconverter`** 服务在 VPS 本地仅监听内部回环/本地端口，**绝不直接在 VPS 防火墙暴露公网端口**，而是全部通过 **Cloudflare Tunnel 公共域名 (Public Hostnames)** 提供公网 HTTPS 安全访问，享有免费自动 SSL、全球 CDN 加速与 WAF 防护。
+
+---
+
+### 步骤 1：在代理末端 VPS 上部署 sing-box
+
+使用 [`fhs-install-singbox`](file:///home/jason/user_data/code/vps-utils/fhs-install-singbox) 脚本一键安装符合 FHS 规范的 `sing-box` 服务端（默认开放 VLESS+Reality `443`、Hysteria2 `123` 以及用于 CDN 优选接入的 `vless-grpc` `8088` 端口）：
 
 ```bash
-# 模式 A：直接通过 IP 部署远程 VPS
-bash fhs-install-singbox/setup_vps_server.sh --ip <VPS_IP>
+# 在 VPS 宿主机以 root 权限运行
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/fhs-install-singbox/install-singbox-server.sh)
+```
+* **多端口 Reality / WARP 落地场景**：若需要生成配合 WARP 出站的多端口 Reality 配置，可使用配套脚本：
+  ```bash
+  sudo bash fhs-install-singbox/generate-singbox-server-config.sh --apply
+  ```
 
-# 模式 B：使用 Vultr API 自动开机并部署
-export VULTR_API_KEY="your_vultr_api_key"
-bash fhs-install-singbox/setup_vps_server.sh --vultr
+---
+
+### 步骤 2：安装 cloudflared 并配置 Tunnel (为各服务绑定公网公共域名)
+
+使用 [`cloudflared-tunnel`](file:///home/jason/user_data/code/vps-utils/cloudflared-tunnel) 建立安全隧道，**singbox-sub-converter 与 subconverter 均通过 Cloudflare Tunnel 公共域名对外提供公网访问**：
+
+1. **VPS 宿主机一键安装 Tunnel 服务**：
+   ```bash
+   sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/cloudflared-tunnel/install.sh) -t <YOUR_CLOUDFLARED_TOKEN>
+   ```
+2. **在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) (`Networks` -> `Tunnels`) 配置 Public Hostnames 公共域名映射**：
+
+| 服务组件 | VPS 本地监听 | 推荐 Public Hostname 公共域名 | 对外作用与访问场景 |
+| :--- | :--- | :--- | :--- |
+| **`singbox-sub-converter`** | `HTTP://localhost:8000` | `https://sub.yourdomain.com` | **自适应订阅前端与 API**：供用户访问 Web 管理界面、各类代理客户端拉取订阅链接。 |
+| **`subconverter`** | `HTTP://localhost:25500` | `https://subapi.yourdomain.com` | **通用订阅转换后端引擎**：对外提供标准格式转换 API，供前端或外部订阅转换请求调用。 |
+| **`sing-box (vless-grpc)`** | `HTTPS://localhost:8088` | `https://grpc.yourdomain.com` | **gRPC 节点入站**：供客户端通过 Cloudflare 优选 IP 经 CDN 转发连接（开启 TLS `No TLS Verify`）。 |
+
+---
+
+### 步骤 3：在末端 VPS 上设置 NAT 转发与 Zero Trust 出口路由
+
+使用 [`cloudflare-zero-trust`](file:///home/jason/user_data/code/vps-utils/cloudflare-zero-trust) 将该 VPS 配置为 Cloudflare Zero Trust 的指定出口网关（Exit Node）：
+
+1. **VPS 宿主机一键开启 NAT 转发与双重开机持久化**：
+   ```bash
+   sudo bash cloudflare-zero-trust/setup-cloudflare-one.sh --setup
+   ```
+2. **Cloudflare Zero Trust 控制台联动配置**：
+   - **Access -> Service Tokens**：创建 Service Token 并配置 Device Enrollment 放行规则；
+   - **Settings -> WARP Client -> Split Tunnels**：配置 Exclude 模式（除局域网外全量走隧道）或 Include 模式；
+   - **Gateway -> Policies -> Egress Policies**：添加出口策略，将指定用户或设备的流量路由至该 VPS 出口。
+
+---
+
+### 步骤 4：在末端 VPS 上部署 subconverter (后端转换引擎)
+
+使用 [`subconverter`](file:///home/jason/user_data/code/vps-utils/subconverter) 一键部署高性能 C++ 订阅转换程序，监听本地 `25500` 端口。该服务通过步骤 2 中绑定的 Cloudflare Tunnel 公共域名（如 `https://subapi.yourdomain.com`）对外提供转换能力：
+
+```bash
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/subconverter/install.sh) -p 25500
 ```
 
 ---
 
-## 🌐 Cloudflare Tunnel 域名映射与网络公网发布指南
+### 步骤 5：在 Cloudflare Pages / Workers 上部署 preferred-ip-manager
 
-为了确保全套服务正常对外提供访问，以及客户端（如 Clash、sing-box）能够通过 **Cloudflare 优选 IP** 顺畅连接节点，**需要将 VPS 上的以下 3 个核心服务端口通过 Cloudflare (Tunnel) 映射至公网域名**：
+使用 [`preferred-ip-manager`](file:///home/jason/user_data/code/vps-utils/preferred-ip-manager) 管理与动态更新 Cloudflare 优选 IP 池：
 
-### 端口与映射域名对照表
-
-| 服务名称 | VPS 本地端口 | 推荐公网映射域名示例 | 说明与用途 |
-| --- | --- | --- | --- |
-| **`singbox-sub-converter`** | `8000` (HTTP) | `https://sub.yourdomain.com` | 自适应订阅转换 Frontend/API 界面，提供客户端订阅拉取与 Token 重置。 |
-| **`subconverter`** | `25500` (HTTP) | `https://subapi.yourdomain.com` | 后端高级订阅转换引擎 API，处理通用协议模板转换。 |
-| **`sing-box (vless-grpc)`** | `8088` (gRPC/HTTPS) | `https://grpc.yourdomain.com` | `vless-grpc` 协议入站端口。映射后供 Clash/sing-box 客户端通过 Cloudflare 优选 IP 直接连接中转。 |
+1. **部署 Worker / Pages**：将 `sub-worker.js` 上传部署至 Cloudflare Workers 或 Pages，提供 `/sub` 优选订阅接口与 `/admin` 可视化后台。
+2. **自动化测速与同步**：在本地或控制端运行 `process_ips.py`，从 Telegram 频道自动拉取 IP 并调用 `CloudflareSpeedTest` 测速，将最优 IP 自动推送至 Worker。
 
 ---
 
-### 1. 使用 Cloudflare Zero Trust 控制台配置 (GUI 推荐)
+### 步骤 6：在末端 VPS 上部署 singbox-sub-converter 并通过公共域名获取订阅
 
-在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) -> **Networks** -> **Tunnels** 中，点击对应的 Tunnel 并添加 **Public Hostnames**：
+使用 [`singbox-sub-converter`](file:///home/jason/user_data/code/vps-utils/singbox-sub-converter) 部署自适应订阅转换服务：
 
-1. **自适应订阅转换服务 (`singbox-sub-converter`)**：
-   - Subdomain: `sub` | Domain: `yourdomain.com`
-   - Service: `HTTP` -> `localhost:8000`
-2. **订阅转换后端服务 (`subconverter`)**：
-   - Subdomain: `subapi` | Domain: `yourdomain.com`
-   - Service: `HTTP` -> `localhost:25500`
-3. **sing-box gRPC 节点入站 (`vless-grpc`)**：
-   - Subdomain: `grpc` | Domain: `yourdomain.com`
-   - Service: `HTTPS` -> `localhost:8088`
-   - **Additional application settings**: 开启 **TLS** -> **No TLS Verify** (忽略本地自签证书校验)
+1. **一键安装服务**：
+   ```bash
+   sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/singbox-sub-converter/install.sh)
+   ```
+2. **通过 Cloudflare Tunnel 公共域名获取订阅并代理上网**：
+   - 访问公共域名 `https://sub.yourdomain.com`，配置后端 `subconverter` 地址（可填写本地 `http://127.0.0.1:25500` 或公共 API 域名 `https://subapi.yourdomain.com`）与节点源；
+   - 客户端（Clash Meta / sing-box / Shadowrocket / Loon / Surge）直接导入公共域名订阅链接（例如 `https://sub.yourdomain.com/sub?token=your_token`）；
+   - 服务端自动识别客户端 User-Agent、注入优选 IP 节点并剔除无效空测速组，客户端一键连接即可畅通出海！
 
 ---
 
-### 2. 使用 Cloudflare Tunnel 本地配置文件配置 (`config.yml`)
+## 🛠️ 第二章：子项目矩阵与各类工具功能详解
 
-若在 VPS 上使用本地 `/etc/cloudflared/config.yml` 运行，示例如下：
-
-```yaml
-tunnel: <YOUR-TUNNEL-UUID>
-credentials-file: /etc/cloudflared/<YOUR-TUNNEL-UUID>.json
-
-ingress:
-  # 1. singbox-sub-converter 自适应订阅前端与 API (端口 8000)
-  - hostname: sub.yourdomain.com
-    service: http://localhost:8000
-
-  # 2. subconverter 转换后端 API (端口 25500)
-  - hostname: subapi.yourdomain.com
-    service: http://localhost:25500
-
-  # 3. sing-box vless-grpc 节点入站 (端口 8088，用于优选 IP 节点转发)
-  - hostname: grpc.yourdomain.com
-    service: https://localhost:8088
-    originRequest:
-      noTLSVerify: true
-
-  # 默认 404 响应
-  - service: http_status:404
-```
-
-> 💡 **提示**：公网域名映射完成后，只需将域名配置填入 `singbox-sub-converter` 后端，客户端获取订阅时即可自动获得带有 Cloudflare 优选 IP 且经 CDN 加速的 `vless-grpc` 节点。
+| 子项目目录 | 核心功能定位 | 推荐入口 / 关键脚本 | 详细文档链接 |
+| :--- | :--- | :--- | :--- |
+| **[fhs-install-singbox](./fhs-install-singbox)** | sing-box 服务端 FHS 部署、多端口 Reality 配置生成与 VPS 远程/Vultr 运维 | `setup_vps_server.sh`<br>`install-singbox-server.sh`<br>`generate-singbox-server-config.sh` | [fhs-install-singbox 详细指南](./fhs-install-singbox/README.md) |
+| **[cloudflared-tunnel](./cloudflared-tunnel)** | Cloudflare Official Agent 部署，实现 Tunnel 内网穿透与公网服务发布 | `install.sh` | [cloudflared-tunnel 详细指南](./cloudflared-tunnel/README.md) |
+| **[cloudflare-zero-trust](./cloudflare-zero-trust)** | Cloudflare Zero Trust (Cloudflare One) 套件：VPS 出口 NAT 转发、SOCKS5 客户端与诊断工具 | `setup-cloudflare-one.sh`<br>`docker-run.sh`<br>`test-masque.py`<br>`install.sh` | [cloudflare-zero-trust 详细指南](./cloudflare-zero-trust/README.md) |
+| **[subconverter](./subconverter)** | 通用代理订阅格式转换后端服务（带 Systemd 一键安装与端口配置） | `install.sh` | [subconverter 详细指南](./subconverter/README.md) |
+| **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理与 Telegram/CFST 自动化测速同步工具 | `sub-worker.js`<br>`process_ips.py`<br>`telegram_tool.py` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
+| **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
 
 ---
 
-## 📂 仓库目录结构
+### 1. [fhs-install-singbox](./fhs-install-singbox) — 服务端部署与运维
+
+- **`install-singbox-server.sh`**：符合 FHS 标准（`/usr/local/bin/sing-box`, `/etc/sing-box/config.json`）的本地一键安装与升级脚本。
+- **`generate-singbox-server-config.sh`**：国内中转 VPS 专用，生成多端口 Reality 伪装入站 ➜ WARP SOCKS5 落地出站配置，防单端口封锁。
+- **`update-singbox-keys.sh`**：一键安全轮换 UUID、Reality 密钥对、Short ID 及 Hysteria2 证书密码。
+- **`setup_vps_server.sh`**：控制端远程 SSH 一键部署全套服务，支持直接指定 IP 或通过 Vultr API 自动开机。
+- **`remove_vultr_instance.sh`**：Vultr 实例交互式查询与快速销毁工具。
+
+### 2. [cloudflared-tunnel](./cloudflared-tunnel) — 内网穿透与安全发布
+
+- **`install.sh`**：自动识别 CPU 架构拉取 Cloudflare 官方最新二进制，支持 **命名 Tunnel 模式**（`-t TOKEN`）与 **Quick Tunnel 临时穿透模式**，一键注册 Systemd 服务。
+
+### 3. [cloudflare-zero-trust](./cloudflare-zero-trust) — 出口转发与本地客户端
+
+- **`setup-cloudflare-one.sh`**：自动开启 VPS 内核 IP 转发并配置 `iptables` NAT MASQUERADE 规则，支持 Systemd + netfilter 双重开机持久化。
+- **`docker-run.sh`**：本地 Docker + Systemd SOCKS5 客户端管理脚本，内置策略路由自动隔离（防 Clash TUN 环路）与凭据安全存储。
+- **`test-masque.py`**：纯 Python 标准库实现的 RFC 9000 QUIC Initial 握手与 MASQUE 连通性/时延诊断工具。
+- **`install.sh`**：原生 Linux 环境配置官方软件源并安装 `cloudflare-warp` 客户端。
+
+### 4. [subconverter](./subconverter) — 订阅转换引擎
+
+- **`install.sh`**：一键下载并配置 `subconverter` 二进制，支持自定义端口并注册开机自启服务。
+
+### 5. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 管理与同步
+
+- **`sub-worker.js`**：Cloudflare Worker 订阅分发服务端，提供暗黑拟物风格后台与历史记录备份。
+- **`process_ips.py`**：自动拉取 IP、调用 `CloudflareSpeedTest` 进行多线程测速并将最优节点同步推送到 Worker。
+
+### 6. [singbox-sub-converter](./singbox-sub-converter) — 自适应订阅转换服务
+
+- **自适应识别**：根据客户端 User-Agent 自动分发 Clash YAML、sing-box JSON 或通用 Base64 订阅。
+- **动态节点合并**：自动聚合服务端配置与 Cloudflare 优选 IP 节点，自动清理空测速组。
+- **`install.sh` & `pack.sh`**：提供一键自动化部署与 GitHub Actions 打包发布脚本。
+
+---
+
+## 📂 第三章：仓库目录结构与文件索引
 
 ```text
 vps-utils/
-├── README.md                           # 本统一说明文档
+├── README.md                           # 本统一说明文档 (部署流程与工具矩阵)
 ├── fhs-install-singbox/                # sing-box 服务端与 VPS 自动化运维脚本
 │   ├── README.md                      # fhs-install-singbox 详细指南
 │   ├── setup_vps_server.sh            # 远程 VPS 自动化部署脚本
 │   ├── install-singbox-server.sh      # sing-box 服务端本地安装脚本
 │   ├── generate-singbox-server-config.sh # 多端口 Reality 配合 WARP 出站配置生成器
 │   ├── update-singbox-keys.sh         # 服务端凭证/密钥安全更新工具
+│   ├── update-singbox-sub.sh          # 订阅链接更新与回退脚本
+│   ├── remove_vultr_instance.sh       # Vultr 实例查询与清理工具
 │   └── singbox_server_config.json     # sing-box 服务端配置模板
-├── singbox-sub-converter/              # sing-box 自适应订阅转换服务
-│   ├── README.md                      # singbox-sub-converter 详细指南
-│   ├── install.sh                     # 自动安装/更新脚本
-│   ├── pack.sh                        # 自动化打包脚本
-│   └── app/                           # FastAPI 后端与前端静态文件
-├── subconverter/                       # 订阅转换后端程序
-│   ├── README.md                      # subconverter 安装指南
-│   └── install.sh                     # 自动化安装与端口配置脚本
-├── cloudflare-zero-trust/              # Cloudflare Zero Trust (One) 套件与 VPS 出口配置
+├── cloudflared-tunnel/                 # Cloudflare Tunnel 内网穿透服务
+│   ├── README.md                      # cloudflared-tunnel 安装指南
+│   └── install.sh                     # 自动化安装与 Systemd 服务部署脚本
+├── cloudflare-zero-trust/              # Cloudflare Zero Trust 套件与 VPS 出口配置
 │   ├── README.md                      # cloudflare-zero-trust 详细指南
 │   ├── docker-run.sh                  # 容器与 Systemd 服务管理脚本
 │   ├── install.sh                     # 客户端安装与 Systemd 服务部署脚本
 │   ├── setup-cloudflare-one.sh        # Cloudflare One VPS NAT 转发配置脚本
-│   └── test-masque.py                 # MASQUE (QUIC) 协议协商与连通性测试工具
-├── cloudflared-tunnel/                 # Cloudflare Tunnel 内网穿透服务
-│   ├── README.md                      # cloudflared-tunnel 安装指南
-│   └── install.sh                     # 自动化安装与 Systemd 服务部署脚本
-└── preferred-ip-manager/               # 优选 IP 管理与测速工具
-    ├── README.md                      # preferred-ip-manager 详细指南
-    ├── sub-worker.js                  # Cloudflare Worker 订阅服务
-    ├── process_ips.py                 # 自动化测速与推送脚本
-    └── telegram_tool.py               # Telegram 资源抓取脚本
+│   ├── test-masque.py                 # MASQUE (QUIC) 协议协商与连通性测试工具
+│   ├── Dockerfile                     # WARP + sing-box 容器构建文件
+│   └── docker-entrypoint.sh           # 容器启动自愈入口脚本
+├── subconverter/                       # 订阅转换后端程序
+│   ├── README.md                      # subconverter 安装指南
+│   └── install.sh                     # 自动化安装与端口配置脚本
+├── preferred-ip-manager/               # 优选 IP 管理与测速工具
+│   ├── README.md                      # preferred-ip-manager 详细指南
+│   ├── sub-worker.js                  # Cloudflare Worker 订阅服务
+│   ├── process_ips.py                 # 自动化测速与推送脚本
+│   └── telegram_tool.py               # Telegram 资源抓取脚本
+└── singbox-sub-converter/              # sing-box 自适应订阅转换服务
+    ├── README.md                      # singbox-sub-converter 详细指南
+    ├── install.sh                     # 自动安装/更新脚本
+    ├── pack.sh                        # 自动化打包脚本
+    └── app/                           # FastAPI 后端与前端静态文件
 ```
