@@ -82,7 +82,7 @@ Cloudflare WARP 客户端出海访问完整拆解为以下 **4 个步骤**：
 
 ## 🚀 第一章：VPS 端到端自动化部署全流程
 
-遵循以下 6 个标准步骤，即可在代理末端 VPS 上搭建起一套具备 **高防封锁、多协议支持、Cloudflare Tunnel 内网穿透、Zero Trust 出口 NAT 转发与自适应订阅分发** 的完整服务闭环。
+遵循以下 7 个标准步骤，即可在代理末端 VPS 上搭建起一套具备 **高防封锁、多协议支持、Cloudflare Tunnel 内网穿透、Zero Trust 出口 NAT 转发与自适应订阅分发** 的完整服务闭环。
 
 > 🛡️ **核心安全设计原则**：
 > **`singbox-sub-converter`** 与 **`subconverter`** 服务在 VPS 本地仅监听内部回环/本地端口，**绝不直接在 VPS 防火墙暴露公网端口**，而是全部通过 **Cloudflare Tunnel 公共域名 (Public Hostnames)** 提供公网 HTTPS 安全访问，享有免费自动 SSL、全球 CDN 加速与 WAF 防护。
@@ -122,22 +122,29 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 ---
 
-### 步骤 3：在末端 VPS 上设置 NAT 转发与 Zero Trust 出口路由
+### 步骤 3：在末端 VPS 上设置 NAT 转发与双重开机持久化
 
-使用 [`cloudflare-zero-trust`](file:///home/jason/user_data/code/vps-utils/cloudflare-zero-trust) 将该 VPS 配置为 Cloudflare Zero Trust 的指定出口网关（Exit Node）：
+使用 [`cloudflare-zero-trust`](file:///home/jason/user_data/code/vps-utils/cloudflare-zero-trust) 中的 `setup-cloudflare-one.sh` 脚本，开启 VPS 内核 IP 转发并配置 `iptables` NAT MASQUERADE 规则，支持 Systemd + netfilter 双重开机自启：
 
-1. **VPS 宿主机一键开启 NAT 转发与双重开机持久化**：
-   ```bash
-   sudo bash cloudflare-zero-trust/setup-cloudflare-one.sh --setup
-   ```
-2. **Cloudflare Zero Trust 控制台联动配置**（详细图文步骤请参阅 [附录 B：Zero Trust 设备放行、分流与 Egress 出口路由配置](#附录-b-zero-trust-设备放行分流与-egress-出口路由配置)）：
-   - **Access -> Service Tokens**：创建 Service Token 并配置 Device Enrollment 放行规则；
-   - **Settings -> WARP Client -> Split Tunnels**：配置 Exclude 模式（除局域网外全量走隧道）或 Include 模式；
-   - **Gateway -> Policies -> Egress Policies**：添加出口策略，将指定用户或设备的流量路由至该 VPS 出口。
+```bash
+# 自动检测物理外网网卡，一键开启 NAT 转发并配置开机持久化
+sudo bash cloudflare-zero-trust/setup-cloudflare-one.sh --setup
+```
 
 ---
 
-### 步骤 4：在末端 VPS 上部署 subconverter (后端转换引擎)
+### 步骤 4：在 Cloudflare 控制台配置 Zero Trust CIDR 路由与 Egress 出口策略
+
+为了让加入 Zero Trust 团队的 WARP 客户端流量能够精准路由穿透至该末端 VPS 并以 VPS 原生 IP 出海，需在控制台配置私有网络 CIDR 与出口策略（详细图文步骤请参阅 [附录 A.3 CIDR 路由配置](#3-配置-private-network-私有网络-cidr-路由-让-warp-客户端流量转发至末端-vps) 与 [附录 B：Zero Trust 设备放行、分流与 Egress 出口路由配置](#附录-b-zero-trust-设备放行分流与-egress-出口路由配置)）：
+
+1. **配置 Tunnel Private Network CIDR 路由**：在 Tunnel 管理页面添加 `0.0.0.0/0`（接管 WARP 全量出海流量）或指定目标私有网段（如 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`）；
+2. **配置 Service Token 与设备注册放行规则**：在 `Access -> Service Tokens` 生成令牌，并在 `Settings -> WARP Client -> Device enrollment` 添加放行规则；
+3. **配置 Split Tunnels 分流策略**：在 `Settings -> WARP Client -> Device profiles` 中配置 Exclude 或 Include 模式；
+4. **配置 Gateway Egress 策略**：在 `Gateway -> Policies -> Egress Policies` 中添加出口规则，将流量定向匹配至该末端 VPS 出口。
+
+---
+
+### 步骤 5：在末端 VPS 上部署 subconverter (后端转换引擎)
 
 使用 [`subconverter`](file:///home/jason/user_data/code/vps-utils/subconverter) 一键部署高性能 C++ 订阅转换程序，监听本地 `25500` 端口。该服务通过步骤 2 中绑定的 Cloudflare Tunnel 公共域名（如 `https://subapi.yourdomain.com`）对外提供转换能力：
 
@@ -147,7 +154,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 ---
 
-### 步骤 5：在 Cloudflare Pages / Workers 上部署 preferred-ip-manager
+### 步骤 6：在 Cloudflare Pages / Workers 上部署 preferred-ip-manager
 
 使用 [`preferred-ip-manager`](file:///home/jason/user_data/code/vps-utils/preferred-ip-manager) 管理与动态更新 Cloudflare 优选 IP 池：
 
@@ -156,7 +163,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 ---
 
-### 步骤 6：在末端 VPS 上部署 singbox-sub-converter 并通过公共域名获取订阅
+### 步骤 7：在末端 VPS 上部署 singbox-sub-converter 并通过公共域名获取订阅
 
 使用 [`singbox-sub-converter`](file:///home/jason/user_data/code/vps-utils/singbox-sub-converter) 部署自适应订阅转换服务：
 
@@ -302,6 +309,15 @@ vps-utils/
   * **URL**：`localhost:8088`
   * **Additional application settings**：展开 **TLS** -> 勾选 **No TLS Verify**（忽略本地自签名证书校验）。
   * 点击 **Save hostname**。
+
+#### 3. 配置 Private Network 私有网络 CIDR 路由 (让 WARP 客户端流量转发至末端 VPS)
+进入已创建好的 Tunnel 管理详情页，切换至 **Private Networks** 标签页，点击 **Add a private network**：
+* **CIDR**：
+  * **全局接管模式（全量出海）**：输入 `0.0.0.0/0`（接管所有通过该团队 WARP 客户端发起的 IPv4 公网流量）；
+  * **定向分流模式（精准网段）**：输入指定的目标 CIDR 网段（例如 VPS 内网段 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16` 或指定受限目标服务 IP 段）。
+* **Description**：（可选）例如 `vps-exit-node-routing`。
+* 点击 **Save network** 保存。
+* **生效机制**：配置完成后，加入该 Zero Trust 团队的 WARP 客户端在访问该 CIDR 范围内的目标时，流量将由 Cloudflare 骨干网直接通过此 Tunnel 转发至末端 VPS，配合 VPS 本地的 `setup-cloudflare-one.sh` NAT MASQUERADE 规则完成原生 IP 出海。
 
 ---
 
