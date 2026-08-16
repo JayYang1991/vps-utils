@@ -138,11 +138,8 @@ python telegram_tool.py download --id <CHAT_ID> --mode parallel --concurrency 4 
 
 ### 方法一：通过 Cloudflare 控制台网页部署
 
-1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)。
-2. 进入 **Workers & Pages** -> **Create Application** -> **Create Worker**。
-3. 输入 Worker 名称，点击 **Deploy**。
-4. 点击 **Edit code**，将 [`sub-worker.js`](./sub-worker.js) 的代码粘贴覆盖并保存部署。
-5. 在 Worker 的 **Settings -> Variables** 中配置环境变量 `ADMIN`、`TOKEN`，并绑定 KV 命名空间（变量名为 `KV`）。
+> 📖 **控制台详细操作指引**：
+> 有关在 Cloudflare 控制台创建 Worker / Pages、粘贴 `sub-worker.js` 代码、绑定 KV 数据库、配置环境变量（`ADMIN`、`TOKEN`）与自定义域名的详细图文步骤，请参阅根目录文档 [附录：Cloudflare Zero Trust 控制台完整配置指南](../README.md#附录cloudflare-zero-trust-控制台完整配置指南)。
 
 ### 方法二：通过 Wrangler CLI 部署
 

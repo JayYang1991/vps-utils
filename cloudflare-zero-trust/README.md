@@ -33,29 +33,12 @@
 
 ---
 
-### 2. Cloudflare Zero Trust 控制台配置 (详细图文指引)
+### 2. Cloudflare Zero Trust 控制台配置说明
 
-在 VPS 部署前，需在 Cloudflare 控制台创建 Tunnel 并获取连接凭证：
+在 VPS 部署前，需在 Cloudflare Zero Trust 控制台创建 Tunnel 并获取连接凭证 Token，同时配置 Public Hostnames 域名路由。
 
-#### 步骤一：创建命名 Tunnel (Named Tunnel)
-1. 登录 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/)。
-2. 在左侧导航栏点击 **Networks** -> **Tunnels**。
-3. 点击右上角 **Add a tunnel**。
-4. 选择连接器类型为 **Cloudflare (cloudflared)**，点击 **Next**。
-5. 输入 Tunnel 名称（如 `vps-tunnel-01`），点击 **Save tunnel**。
-6. 在安装命令展示区，选择 **Debian / Ubuntu / CentOS**，在命令文本框中找到并复制 **`--token` 后面的一长串 Token 凭证密钥**（即 `<YOUR_CLOUDFLARED_TOKEN>`）。
-
-#### 步骤二：配置公共主机名路由 (Public Hostnames)
-在创建好的 Tunnel 管理页面中，切换至 **Public Hostname** 标签页，点击 **Add a public hostname**：
-* **Subdomain**：子域名前缀（例如 `sub`、`api`、`nas`）；
-* **Domain**：已托管在 Cloudflare 上的主域名（例如 `example.com`）；
-* **Path**：（可选）路径匹配；
-* **Service**：
-  * **Type**：选择服务类型（如 `HTTP`、`HTTPS`、`TCP`、`SSH`）；
-  * **URL**：输入 VPS 本地监听的内部地址与端口（例如 `localhost:8000` 用于 `singbox-sub-converter`，或 `localhost:80` 用于 Nginx）。
-* **Additional application settings (可选)**：
-  * 若后端使用自签名 HTTPS 证书，展开 **TLS** 并勾选 **No TLS Verify**。
-* 点击 **Save hostname** 完成配置。
+> 📖 **控制台详细操作指引**：
+> 有关创建 Tunnel、获取 `--token` 凭证、配置 Public Hostnames 域名映射（HTTP / HTTPS / gRPC No TLS Verify）的详细图文操作步骤，请参阅根目录文档 [附录：Cloudflare Zero Trust 控制台完整配置指南](../README.md#附录cloudflare-zero-trust-控制台完整配置指南)。
 
 ---
 
@@ -132,40 +115,12 @@ sudo bash setup-cloudflare-one.sh --unset
 
 ---
 
-### 3. Cloudflare Zero Trust 控制台侧完整联动配置
+### 3. Cloudflare Zero Trust 控制台侧完整联动配置说明
 
-完成 VPS 端的 NAT 转发配置后，需在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) 配置路由与分流策略：
+完成 VPS 端的 NAT 转发配置后，需在 Cloudflare Zero Trust 控制台完成 Service Token、设备注册放行规则、Split Tunnels 分流策略以及 Gateway Egress 出口路由策略的配置。
 
-#### 步骤一：获取团队名称与配置设备注册规则
-1. **获取 Team Name**：
-   - 团队域名格式为 `<your-team-name>.cloudflareaccess.com`，其中的 `<your-team-name>` 即为团队名称。
-2. **创建 Service Token**：
-   - 进入 **Access** -> **Service Tokens** -> 点击 **Create Service Token**；
-   - 填写名称（如 `vps-exit-node`），保存并妥善记录 `Client ID` 和 `Client Secret`。
-3. **配置设备注册放行规则**：
-   - 进入 **Settings** -> **WARP Client** -> 在 **Device enrollment** 中点击 **Manage**；
-   - 切换至 **Rules** -> 点击 **Add a rule**：
-     - **Rule action**：`Service Token`
-     - **Selector**：`Service Token`
-     - **Value**：选择刚创建的 Token 名称；
-   - 点击 **Save rule** 保存。
-
-#### 步骤二：配置 WARP Client 分流策略 (Split Tunnels)
-1. 进入 **Settings** -> **WARP Client** -> 在 **Device profiles** 中编辑 `Default` 策略。
-2. 找到 **Split Tunnels**：
-   * **Exclude 模式 (排除模式，推荐全局翻墙)**：
-     仅在排除列表中保留局域网与国内直连 IP（如 `10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12` 等），其余所有公网流量均进入 Zero Trust 隧道；
-   * **Include 模式 (包含模式，精准分流)**：
-     仅将需要代理的目标 IP / 域名段填入列表（如仅让 OpenAI / Google / 目标 VPS 网段走隧道）。
-
-#### 步骤三：配置出口路由策略 (Egress Policies / Exit Location)
-1. 进入 **Gateway** -> **Policies** -> **Egress Policies**（或 **Network Policies**）。
-2. 点击 **Add a policy** 添加出口规则：
-   - **Policy Name**：`Route-via-VPS-Exit`
-   - **Traffic**：配置匹配条件（例如 `User Email == ...` 或 `Destination IP in ...` 或全量流量匹配）；
-   - **Action**：选择 `Egress`；
-   - **Egress target**：选择该 VPS 所在的出口节点位置或专属 Tunnel 网关。
-3. 保存策略并确保优先级置顶。客户端连接 WARP 后，访问外部网站的出口 IP 将自动变为该 VPS 的公网 IP。
+> 📖 **控制台详细操作指引**：
+> 有关 Service Token 生成、Device Enrollment 放行规则、Split Tunnels 模式配置与 Egress 出口策略绑定的详细图文操作步骤，请参阅根目录文档 [附录：Cloudflare Zero Trust 控制台完整配置指南](../README.md#附录cloudflare-zero-trust-控制台完整配置指南)。
 
 ---
 

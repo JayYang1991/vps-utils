@@ -10,7 +10,7 @@
 
 ### 方式 1：命名 Tunnel 模式（推荐，使用 Zero Trust Token）
 
-在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) 接入新建的 Tunnel 并复制凭证 Token：
+在 Cloudflare Zero Trust 控制台创建 Tunnel 并获取专属 Token 凭证密钥（详细图文步骤请参阅 [根目录附录：Cloudflare Zero Trust 控制台完整配置指南](../README.md#附录cloudflare-zero-trust-控制台完整配置指南)）：
 
 ```bash
 # 远程一键安装 (将 YOUR_TOKEN 替换为您的 Cloudflare Token)

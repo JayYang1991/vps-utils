@@ -112,7 +112,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
    ```bash
    sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/cloudflared-tunnel/install.sh) -t <YOUR_CLOUDFLARED_TOKEN>
    ```
-2. **在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) (`Networks` -> `Tunnels`) 配置 Public Hostnames 公共域名映射**：
+2. **在 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/) 配置 Public Hostnames 公共域名映射**（详细图文步骤请参阅 [附录 A：Cloudflare Tunnel 创建与公共域名配置](#附录-a-cloudflare-tunnel-创建与公共域名配置-public-hostnames)）：
 
 | 服务组件 | VPS 本地监听 | 推荐 Public Hostname 公共域名 | 对外作用与访问场景 |
 | :--- | :--- | :--- | :--- |
@@ -130,7 +130,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
    ```bash
    sudo bash cloudflare-zero-trust/setup-cloudflare-one.sh --setup
    ```
-2. **Cloudflare Zero Trust 控制台联动配置**：
+2. **Cloudflare Zero Trust 控制台联动配置**（详细图文步骤请参阅 [附录 B：Zero Trust 设备放行、分流与 Egress 出口路由配置](#附录-b-zero-trust-设备放行分流与-egress-出口路由配置)）：
    - **Access -> Service Tokens**：创建 Service Token 并配置 Device Enrollment 放行规则；
    - **Settings -> WARP Client -> Split Tunnels**：配置 Exclude 模式（除局域网外全量走隧道）或 Include 模式；
    - **Gateway -> Policies -> Egress Policies**：添加出口策略，将指定用户或设备的流量路由至该 VPS 出口。
@@ -151,7 +151,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 使用 [`preferred-ip-manager`](file:///home/jason/user_data/code/vps-utils/preferred-ip-manager) 管理与动态更新 Cloudflare 优选 IP 池：
 
-1. **部署 Worker / Pages**：将 `sub-worker.js` 上传部署至 Cloudflare Workers 或 Pages，提供 `/sub` 优选订阅接口与 `/admin` 可视化后台。
+1. **部署 Worker / Pages 服务**（详细图文步骤请参阅 [附录 C：Cloudflare Workers / Pages 部署与环境变量配置](#附录-c-cloudflare-workers--pages-部署与环境变量配置)）：将 `sub-worker.js` 上传部署至 Cloudflare Workers 或 Pages，提供 `/sub` 优选订阅接口与 `/admin` 可视化后台。
 2. **自动化测速与同步**：在本地或控制端运行 `process_ips.py`，从 Telegram 频道自动拉取 IP 并调用 `CloudflareSpeedTest` 测速，将最优 IP 自动推送至 Worker。
 
 ---
@@ -259,3 +259,120 @@ vps-utils/
     ├── pack.sh                        # 自动化打包脚本
     └── app/                           # FastAPI 后端与前端静态文件
 ```
+
+---
+
+## 📖 附录：Cloudflare Zero Trust 控制台完整配置指南
+
+本附录依据 Cloudflare 官方最新管理后台标准规范编写，涵盖 **Tunnel 穿透**、**Zero Trust 设备鉴权与出口路由** 以及 **Workers / Pages 优选 IP 节点部署** 的全流程控制台操作指引。
+
+---
+
+### 附录 A：Cloudflare Tunnel 创建与公共域名配置 (Public Hostnames)
+
+#### 1. 创建命名 Tunnel 并获取 Token
+1. 登录 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/)。
+2. 在左侧导航栏依次展开 **Networks** -> **Tunnels**。
+3. 点击右上角 **Add a tunnel**。
+4. 选择连接器类型为 **Cloudflare (cloudflared)**，点击 **Next**。
+5. 输入 Tunnel 名称（例如 `vps-tunnel-main`），点击 **Save tunnel**。
+6. 在安装命令展示区选择系统类型（如 **Debian / Ubuntu / CentOS**），在给出的命令中提取 `--token` 后的长字符串密钥（即 `<YOUR_CLOUDFLARED_TOKEN>`），用于在 VPS 执行一键安装。
+
+#### 2. 配置 Public Hostnames 公共域名路由
+进入已创建好的 Tunnel 管理详情页，切换至 **Public Hostname** 标签页，依次点击 **Add a public hostname** 添加各服务路由：
+
+* **路由 1：singbox-sub-converter 订阅前端与 API**
+  * **Subdomain**：`sub`（自定义，如 `sub`）
+  * **Domain**：选择已托管在 Cloudflare 上的主域名（如 `example.com`）
+  * **Service Type**：`HTTP`
+  * **URL**：`localhost:8000`
+  * 点击 **Save hostname**。
+
+* **路由 2：subconverter 通用订阅转换后端引擎**
+  * **Subdomain**：`subapi`
+  * **Domain**：`example.com`
+  * **Service Type**：`HTTP`
+  * **URL**：`localhost:25500`
+  * 点击 **Save hostname**。
+
+* **路由 3：sing-box vless-grpc 节点入站 (用于 CDN 优选 IP 转发)**
+  * **Subdomain**：`grpc`
+  * **Domain**：`example.com`
+  * **Service Type**：`HTTPS`
+  * **URL**：`localhost:8088`
+  * **Additional application settings**：展开 **TLS** -> 勾选 **No TLS Verify**（忽略本地自签名证书校验）。
+  * 点击 **Save hostname**。
+
+---
+
+### 附录 B：Zero Trust 设备放行、分流与 Egress 出口路由配置
+
+#### 1. 获取团队名称 (Team Name)
+* 登录 [Cloudflare Zero Trust 控制台](https://one.dash.cloudflare.com/)，在控制台首页或设置中查看团队专属域名：`<your-team-name>.cloudflareaccess.com`，其中的 **`your-team-name`** 即为团队标识。
+
+#### 2. 创建 Service Token 机器认证令牌
+1. 在控制台左侧导航栏点击 **Access** -> **Service Tokens**。
+2. 点击右上角 **Create Service Token**。
+3. 填入名称（例如 `vps-warp-client`），点击 **Generate token**。
+4. 妥善保存弹出的 **Client ID** 和 **Client Secret**（Secret 仅显示一次）。
+
+#### 3. 配置设备注册放行规则 (Device Enrollment Rules)
+1. 在左侧导航栏点击 **Settings** -> **WARP Client**。
+2. 找到 **Device enrollment** 卡片，点击 **Manage** 按钮。
+3. 切换至 **Rules** 选项卡，点击 **Add a rule**：
+   - **Rule name**：`Allow-Service-Token-Enrollment`
+   - **Rule action**：选择 `Service Token`
+   - **Selector**：选择 `Service Token`
+   - **Value**：选择刚刚创建的 Service Token 名称
+4. 点击 **Save rule** 保存。
+
+#### 4. 配置 WARP Client 分流策略 (Split Tunnels)
+1. 点击 **Settings** -> **WARP Client** -> 在 **Device profiles** 卡片中点击 `Default`（或指定 Profile）的 **Configure**。
+2. 找到 **Split Tunnels** 设置项：
+   * **Exclude 模式 (排除模式，推荐全局代理)**：
+     列表中保留局域网与国内直连 IP（如 `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` 等），其余所有公网互联网流量均走 Zero Trust 隧道；
+   * **Include 模式 (包含模式，精准分流)**：
+     仅将需要通过 Zero Trust 代理的目标域名或 IP 填写进列表。
+
+#### 5. 配置 Gateway Egress 出口路由策略 (指定 Exit Node)
+1. 在左侧导航栏点击 **Gateway** -> **Policies** -> **Egress Policies**（或 **Network Policies**）。
+2. 点击 **Add a policy** 添加出口规则：
+   - **Policy Name**：`Route-via-VPS-Exit-Node`
+   - **Traffic**：配置匹配条件（例如全量匹配 `Traffic == Any`，或指定用户邮箱/IP 网段）；
+   - **Action**：选择 `Egress`；
+   - **Egress target**：选择该末端 VPS 对应的 Exit Location 或绑定的 Cloudflare Tunnel 连接器。
+3. 点击 **Save policy** 保存并确保规则置顶生效。
+
+---
+
+### 附录 C：Cloudflare Workers / Pages 部署与环境变量配置
+
+#### 1. 创建 Worker 应用程序
+1. 登录 [Cloudflare Dashboard 仪表盘](https://dash.cloudflare.com/)。
+2. 在左侧导航栏点击 **Compute (Workers & Pages)** -> 点击 **Create application** -> 选择 **Create Worker**。
+3. 输入 Worker 服务名称（例如 `preferred-ip-manager`），点击 **Deploy** 完成初始创建。
+
+#### 2. 上传与部署脚本代码
+1. 进入该 Worker 的管理页面，点击右上角 **Edit code**。
+2. 将项目 [`preferred-ip-manager/sub-worker.js`](file:///home/jason/user_data/code/vps-utils/preferred-ip-manager/sub-worker.js) 的完整代码复制并替换编辑器中的原有代码。
+3. 点击右上角 **Save and deploy** 完成部署。
+
+#### 3. 创建并绑定 KV 数据库
+1. 在左侧导航栏点击 **Storage & Databases** -> **KV** -> 点击 **Create a namespace**。
+2. 命名为 `preferred_ip_kv` 并保存。
+3. 返回刚创建的 Worker 页面，进入 **Settings** -> **Bindings**（或 **Variables and Secrets**） -> 点击 **Add binding**：
+   - **Type**：选择 `KV Namespace`
+   - **Variable name**：严格填写为 **`KV`**
+   - **KV namespace**：选择刚刚创建的 `preferred_ip_kv`
+4. 点击 **Save and deploy**。
+
+#### 4. 配置环境变量与安全密钥
+在 Worker 的 **Settings** -> **Variables and Secrets** 中添加以下变量：
+* **`ADMIN`**：管理员后台登录密码（用于访问 `/admin`）；
+* **`TOKEN`**：数据同步与订阅安全 Token（用于客户端 `/sub?token=...` 与测速工具 `/api/update` 推送）；
+* **`SUB_SOURCE`**（可选）：上游节点订阅数据源 URL。
+
+#### 5. 绑定自定义公网域名
+1. 在 Worker 的 **Settings** -> **Domains & Routes** 中点击 **Add** -> 选择 **Custom Domain**。
+2. 输入已托管在 Cloudflare 上的域名（例如 `cf-ips.yourdomain.com`），点击 **Add Custom Domain**，Cloudflare 会自动完成 DNS 解析与 SSL 证书签发。
+
