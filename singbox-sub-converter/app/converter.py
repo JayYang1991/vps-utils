@@ -456,44 +456,238 @@ def convert_via_subapi(sub_url: str, target: str, config_url: str = "", max_retr
             
     return ""
 
+def clean_clash_proxies_in_dict(data: dict) -> bool:
+    """Clean up non-standard or redundant fields in Clash Meta proxies dict."""
+    if not isinstance(data, dict):
+        return False
+    modified = False
+    proxies = data.get("proxies", [])
+    if isinstance(proxies, list):
+        for p in proxies:
+            if not isinstance(p, dict):
+                continue
+            p_type = str(p.get("type", "")).lower()
+            p_name = str(p.get("name", ""))
+            
+            # Only set skip-cert-verify: true for non-preferred Hysteria2 nodes; leave other nodes untouched
+            is_non_preferred_hy2 = (p_type == "hysteria2") and ("VPS" in p_name or "自用" in p_name or "hy2" in p_name)
+            if is_non_preferred_hy2:
+                if not p.get("skip-cert-verify"):
+                    p["skip-cert-verify"] = True
+                    modified = True
+            
+            # 1. For hysteria2: remove non-standard 'auth' field (Mihomo uses 'password')
+            if p_type == "hysteria2":
+                if "auth" in p:
+                    if not p.get("password"):
+                        p["password"] = p["auth"]
+                    del p["auth"]
+                    modified = True
+            # 2. For vless reality: remove non-standard 'network' field
+            elif p_type == "vless" and "reality-opts" in p:
+                if "network" in p:
+                    del p["network"]
+                    modified = True
+    return modified
+
 def clean_clash_proxies(yaml_content: str) -> str:
     """Clean up non-standard or redundant fields in Clash Meta proxies (remove 'auth' from hysteria2, remove 'network' from vless-reality)."""
     if not yaml_content:
         return yaml_content
     try:
         data = yaml.safe_load(yaml_content)
-        if not isinstance(data, dict):
-            return yaml_content
-            
-        proxies = data.get("proxies", [])
-        if isinstance(proxies, list):
-            for p in proxies:
-                if not isinstance(p, dict):
-                    continue
-                p_type = str(p.get("type", "")).lower()
-                p_name = str(p.get("name", ""))
-                
-                # Only set skip-cert-verify: true for non-preferred Hysteria2 nodes; leave other nodes untouched
-                is_non_preferred_hy2 = (p_type == "hysteria2") and ("VPS" in p_name or "自用" in p_name or "hy2" in p_name)
-                if is_non_preferred_hy2:
-                    p["skip-cert-verify"] = True
-                
-                # 1. For hysteria2: remove non-standard 'auth' field (Mihomo uses 'password')
-                if p_type == "hysteria2":
-                    if "auth" in p:
-                        if not p.get("password"):
-                            p["password"] = p["auth"]
-                        del p["auth"]
-                # 2. For vless reality: remove non-standard 'network' field
-                elif p_type == "vless" and "reality-opts" in p:
-                    if "network" in p:
-                        del p["network"]
-                        
-            data["proxies"] = proxies
+        if clean_clash_proxies_in_dict(data):
             return yaml.dump(data, allow_unicode=True, sort_keys=False)
     except Exception as e:
         logger.error(f"Error cleaning Clash proxies: {e}")
     return yaml_content
+
+def clean_empty_urltest_groups_from_clash_dict(data: dict) -> tuple:
+    """
+    Remove url-test proxy groups from Clash config if they only contain 'DIRECT' (or no effective proxies).
+    Cascade removal to parent groups and update references in remaining groups and rules.
+    Returns (modified: bool, deleted_group_names: set).
+    """
+    if not isinstance(data, dict):
+        return False, set()
+
+    group_key = None
+    if "proxy-groups" in data and isinstance(data["proxy-groups"], list):
+        group_key = "proxy-groups"
+    elif "Proxy Group" in data and isinstance(data["Proxy Group"], list):
+        group_key = "Proxy Group"
+
+    if not group_key:
+        return False, set()
+
+    groups = data[group_key]
+    all_deleted_group_names = set()
+
+    # Iteratively find and delete url-test groups that only contain DIRECT / REJECT or no valid proxies
+    while True:
+        deleted_in_this_round = set()
+        for g in groups:
+            if not isinstance(g, dict):
+                continue
+            name = str(g.get("name", "")).strip()
+            g_type = str(g.get("type", "")).strip().lower()
+
+            if g_type in ["url-test", "urltest", "url_test"]:
+                raw_proxies = g.get("proxies", [])
+                if not isinstance(raw_proxies, list):
+                    raw_proxies = []
+                
+                # Effective proxies: not DIRECT, not REJECT, and not already deleted
+                effective_proxies = [
+                    p for p in raw_proxies
+                    if str(p).strip().upper() not in ["DIRECT", "REJECT"] and p not in all_deleted_group_names
+                ]
+                
+                if len(effective_proxies) == 0:
+                    deleted_in_this_round.add(name)
+
+        if not deleted_in_this_round:
+            break
+
+        all_deleted_group_names.update(deleted_in_this_round)
+        groups = [g for g in groups if isinstance(g, dict) and str(g.get("name", "")).strip() not in all_deleted_group_names]
+
+        # Clean proxies inside remaining groups for next round evaluation
+        for g in groups:
+            if isinstance(g, dict) and isinstance(g.get("proxies"), list):
+                g["proxies"] = [p for p in g["proxies"] if p not in all_deleted_group_names]
+
+    if not all_deleted_group_names:
+        return False, set()
+
+    data[group_key] = groups
+
+    # Ensure no empty proxies in remaining groups to satisfy Clash syntax requirement
+    for g in groups:
+        if isinstance(g, dict) and isinstance(g.get("proxies"), list):
+            if len(g["proxies"]) == 0:
+                g["proxies"] = ["DIRECT"]
+
+    # Determine fallback target for rules referencing deleted groups
+    fallback_target = "DIRECT"
+    for g in groups:
+        if isinstance(g, dict):
+            g_name = str(g.get("name", "")).strip()
+            if any(k in g_name for k in ["节点选择", "PROXY", "Proxy", "PROXIES", "auto-selector-tcp"]):
+                fallback_target = g_name
+                break
+    else:
+        for g in groups:
+            if isinstance(g, dict) and str(g.get("type", "")).strip().lower() == "select":
+                fallback_target = str(g.get("name", "")).strip()
+                break
+        else:
+            if groups and isinstance(groups[0], dict) and groups[0].get("name"):
+                fallback_target = str(groups[0].get("name", "")).strip()
+
+    # Patch rules referencing deleted group names
+    rules = data.get("rules")
+    if isinstance(rules, list):
+        new_rules = []
+        for r in rules:
+            if isinstance(r, str):
+                parts = r.split(",")
+                if len(parts) >= 2:
+                    first_item = parts[0].strip().upper()
+                    target_idx = 1 if first_item in ["MATCH", "FINAL"] else 2
+                    if len(parts) > target_idx:
+                        curr_target = parts[target_idx].strip()
+                        if curr_target in all_deleted_group_names:
+                            parts[target_idx] = fallback_target
+                            r = ",".join(parts)
+            new_rules.append(r)
+        data["rules"] = new_rules
+
+    return True, all_deleted_group_names
+
+def clean_empty_urltest_groups(yaml_content: str) -> str:
+    """Clean up url-test proxy groups from Clash YAML if they only contain 'DIRECT'."""
+    if not yaml_content:
+        return yaml_content
+    try:
+        data = yaml.safe_load(yaml_content)
+        modified, deleted_groups = clean_empty_urltest_groups_from_clash_dict(data)
+        if modified:
+            return yaml.dump(data, allow_unicode=True, sort_keys=False)
+    except Exception as e:
+        logger.error(f"Error cleaning empty url-test groups: {e}")
+    return yaml_content
+
+def patch_clash_sniffer_in_dict(data: dict) -> bool:
+    """Patch sniffer configuration inside Clash YAML data dict."""
+    if not isinstance(data, dict):
+        return False
+
+    default_sniff = {
+        "HTTP": {
+            "ports": [80, "8080-8880"],
+            "override-destination": True
+        },
+        "TLS": {
+            "ports": [443, 8443]
+        },
+        "QUIC": {
+            "ports": [443, 8443]
+        }
+    }
+
+    default_skip_domains = [
+        "MJP.Mihomo.DEV",
+        "+.push.apple.com"
+    ]
+
+    sniffer = data.get("sniffer")
+    if not isinstance(sniffer, dict):
+        data["sniffer"] = {
+            "enable": True,
+            "force-dns-mapping": True,
+            "parse-pure-ip": True,
+            "override-destination": True,
+            "sniff": default_sniff,
+            "skip-domain": default_skip_domains
+        }
+    else:
+        sniffer["enable"] = True
+        sniffer["force-dns-mapping"] = True
+        sniffer["parse-pure-ip"] = True
+        sniffer["override-destination"] = True
+
+        sniff = sniffer.get("sniff")
+        if not isinstance(sniff, dict):
+            sniffer["sniff"] = default_sniff
+        else:
+            if "HTTP" not in sniff or not isinstance(sniff["HTTP"], dict):
+                sniff["HTTP"] = default_sniff["HTTP"]
+            else:
+                sniff["HTTP"]["override-destination"] = True
+                if "ports" not in sniff["HTTP"]:
+                    sniff["HTTP"]["ports"] = [80, "8080-8880"]
+
+            if "TLS" not in sniff or not isinstance(sniff["TLS"], dict):
+                sniff["TLS"] = default_sniff["TLS"]
+            else:
+                if "ports" not in sniff["TLS"]:
+                    sniff["TLS"]["ports"] = [443, 8443]
+
+            if "QUIC" not in sniff or not isinstance(sniff["QUIC"], dict):
+                sniff["QUIC"] = default_sniff["QUIC"]
+            else:
+                if "ports" not in sniff["QUIC"]:
+                    sniff["QUIC"]["ports"] = [443, 8443]
+
+        skip_domain = sniffer.get("skip-domain")
+        if not isinstance(skip_domain, list):
+            sniffer["skip-domain"] = default_skip_domains
+        else:
+            for domain in default_skip_domains:
+                if domain not in skip_domain:
+                    skip_domain.append(domain)
+    return True
 
 def patch_clash_sniffer(yaml_content: str) -> str:
     """Patch Clash YAML config to insert/update sniffer configuration for FakeIP domain mapping and pure IP direct routing."""
@@ -501,85 +695,36 @@ def patch_clash_sniffer(yaml_content: str) -> str:
         return yaml_content
     try:
         data = yaml.safe_load(yaml_content)
+        if patch_clash_sniffer_in_dict(data):
+            return yaml.dump(data, allow_unicode=True, sort_keys=False)
+    except Exception as e:
+        logger.error(f"Error patching Clash sniffer: {e}")
+    return yaml_content
+
+def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list = None) -> str:
+    """Clean up non-standard fields, remove empty url-test groups, and patch sniffer config in Clash YAML."""
+    if not yaml_content:
+        return yaml_content
+    try:
+        data = yaml.safe_load(yaml_content)
         if not isinstance(data, dict):
             return yaml_content
 
-        default_sniff = {
-            "HTTP": {
-                "ports": [80, "8080-8880"],
-                "override-destination": True
-            },
-            "TLS": {
-                "ports": [443, 8443]
-            },
-            "QUIC": {
-                "ports": [443, 8443]
-            }
-        }
+        # 1. Clean up proxies
+        clean_clash_proxies_in_dict(data)
 
-        default_skip_domains = [
-            "MJP.Mihomo.DEV",
-            "+.push.apple.com"
-        ]
+        # 2. Clean up url-test groups containing only DIRECT
+        modified, deleted_groups = clean_empty_urltest_groups_from_clash_dict(data)
+        if modified and deleted_groups:
+            logger.info(f"🧹 已清理 {len(deleted_groups)} 个仅包含 DIRECT 的 url-test 策略组: {sorted(list(deleted_groups))}")
 
-        sniffer = data.get("sniffer")
-        if not isinstance(sniffer, dict):
-            data["sniffer"] = {
-                "enable": True,
-                "force-dns-mapping": True,
-                "parse-pure-ip": True,
-                "override-destination": True,
-                "sniff": default_sniff,
-                "skip-domain": default_skip_domains
-            }
-        else:
-            sniffer["enable"] = True
-            sniffer["force-dns-mapping"] = True
-            sniffer["parse-pure-ip"] = True
-            sniffer["override-destination"] = True
-
-            sniff = sniffer.get("sniff")
-            if not isinstance(sniff, dict):
-                sniffer["sniff"] = default_sniff
-            else:
-                if "HTTP" not in sniff or not isinstance(sniff["HTTP"], dict):
-                    sniff["HTTP"] = default_sniff["HTTP"]
-                else:
-                    sniff["HTTP"]["override-destination"] = True
-                    if "ports" not in sniff["HTTP"]:
-                        sniff["HTTP"]["ports"] = [80, "8080-8880"]
-
-                if "TLS" not in sniff or not isinstance(sniff["TLS"], dict):
-                    sniff["TLS"] = default_sniff["TLS"]
-                else:
-                    if "ports" not in sniff["TLS"]:
-                        sniff["TLS"]["ports"] = [443, 8443]
-
-                if "QUIC" not in sniff or not isinstance(sniff["QUIC"], dict):
-                    sniff["QUIC"] = default_sniff["QUIC"]
-                else:
-                    if "ports" not in sniff["QUIC"]:
-                        sniff["QUIC"]["ports"] = [443, 8443]
-
-            skip_domain = sniffer.get("skip-domain")
-            if not isinstance(skip_domain, list):
-                sniffer["skip-domain"] = default_skip_domains
-            else:
-                for domain in default_skip_domains:
-                    if domain not in skip_domain:
-                        skip_domain.append(domain)
+        # 3. Patch sniffer
+        patch_clash_sniffer_in_dict(data)
 
         return yaml.dump(data, allow_unicode=True, sort_keys=False)
     except Exception as e:
-        logger.error(f"Error patching Clash sniffer: {e}")
+        logger.error(f"Error in ensure_reality_in_clash_yaml: {e}")
         return yaml_content
-
-def ensure_reality_in_clash_yaml(yaml_content: str, nodes: list = None) -> str:
-    """Clean up non-standard fields and patch sniffer config in Clash YAML."""
-    if not yaml_content:
-        return yaml_content
-    cleaned_yaml = clean_clash_proxies(yaml_content)
-    return patch_clash_sniffer(cleaned_yaml)
 
 def ensure_reality_utls_in_singbox_dict(data: dict) -> bool:
     """Ensure all vless reality outbounds in sing-box config have utls enabled."""
