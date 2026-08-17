@@ -1,10 +1,11 @@
 /**
- * edgetunnel 优选订阅管理 Worker
+ * edgetunnel 优选订阅与 Cloudflare WARP Endpoint 管理 Worker
  * 功能：
  * 1. /sub 接口：返回加密的节点列表（合并远程与本地 KV 优选 IP）。
- * 2. /admin 接口：美观的管理后台，用于编辑本地优选 IP 及查看历史 IP 记录。
- * 3. /api/update 接口：支持 PUT 请求配合 Token 自动更新优选 IP。
- * 4. /api/history 接口：支持 GET 请求查询历史优选 IP 记录。
+ * 2. /warp 接口：返回本地 KV 保存的最新 Cloudflare WARP 优选 Endpoint 列表。
+ * 3. /admin 接口：美观现代化的管理后台，支持编辑与切换 CDN 优选 IP、WARP 优选 Endpoint 及历史记录。
+ * 4. /api/update 接口：支持 PUT 请求配合 Token 自动更新 CDN 优选 IP 或 WARP 优选 Endpoint。
+ * 5. /api/history 接口：支持 GET 请求查询历史 IP 或 WARP Endpoint 记录。
  */
 
 // 默认配置
@@ -21,28 +22,33 @@ export default {
             return await handleSubRequest(request, env);
         }
 
-        // 2. 自动化 API 更新接口 /api/update (支持 PUT)
+        // 2. WARP Endpoint 接口 /warp
+        if (path === '/warp') {
+            return await handleWarpRequest(request, env);
+        }
+
+        // 3. 自动化 API 更新接口 /api/update (支持 PUT)
         if (path === '/api/update') {
             return await handleApiUpdate(request, env);
         }
 
-        // 3. 历史记录 API 查询接口 /api/history (支持 GET)
+        // 4. 历史记录 API 查询接口 /api/history (支持 GET)
         if (path === '/api/history') {
             return await handleApiHistory(request, env);
         }
 
-        // 4. 管理后台 /admin
+        // 5. 管理后台 /admin
         if (path === '/admin' || path === '/login') {
             return await handleAdminRequest(request, env);
         }
 
-        // 5. 默认返回
+        // 6. 默认返回
         return new Response('Not Found', { status: 404 });
     }
 };
 
 /**
- * 处理订阅请求
+ * 处理订阅请求 (/sub)
  */
 async function handleSubRequest(request, env) {
     const { searchParams } = new URL(request.url);
@@ -144,6 +150,27 @@ async function handleSubRequest(request, env) {
 }
 
 /**
+ * 处理 WARP Endpoint 查询 (/warp)
+ */
+async function handleWarpRequest(request, env) {
+    let warpContent = '';
+    if (env.KV) {
+        warpContent = await env.KV.get('WARP.txt') || '';
+    }
+
+    if (!warpContent.trim()) {
+        warpContent = '# 暂无保存的 Cloudflare WARP 优选端点，请通过 warp_tester.py 或管理后台添加\n162.159.197.2:4500#WARP-Default\n162.159.197.2:500#WARP-Default';
+    }
+
+    return new Response(warpContent, {
+        headers: {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-store'
+        }
+    });
+}
+
+/**
  * 处理 API 更新 (PUT /api/update)
  */
 async function handleApiUpdate(request, env) {
@@ -154,6 +181,7 @@ async function handleApiUpdate(request, env) {
     const url = new URL(request.url);
     const token = request.headers.get('Authorization') || url.searchParams.get('token');
     const mode = url.searchParams.get('mode'); // 'append' 或 overwrite
+    const targetType = url.searchParams.get('type') || 'ips'; // 'warp' 或 'ips'
 
     if (!env.TOKEN) {
         return new Response('Unauthorized: TOKEN environment variable not set', { status: 401 });
@@ -183,18 +211,23 @@ async function handleApiUpdate(request, env) {
             return new Response('Invalid format in lines:\n' + invalidLines.join('\n'), { status: 400 });
         }
 
+        const isWarp = targetType === 'warp';
+        const storageKey = isWarp ? 'WARP.txt' : 'ADD.txt';
+        const timeKey = isWarp ? 'WARP_UPDATE_TIME' : 'UPDATE_TIME';
+        const historyKey = isWarp ? 'WARP_HISTORY.json' : 'HISTORY.json';
+
         let finalContent = content;
         if (mode === 'append') {
-            const existing = await env.KV.get('ADD.txt') || '';
+            const existing = await env.KV.get(storageKey) || '';
             finalContent = existing + (existing && !existing.endsWith('\n') ? '\n' : '') + content;
         } else {
-            // 覆盖模式：记录原有优选 IP 到历史记录
-            const existing = await env.KV.get('ADD.txt') || '';
-            await saveHistoryRecord(env, existing);
+            // 覆盖模式：记录原有数据到历史记录
+            const existing = await env.KV.get(storageKey) || '';
+            await saveHistoryRecord(env, existing, historyKey);
         }
-        await env.KV.put('ADD.txt', finalContent);
-        await env.KV.put('UPDATE_TIME', new Date().toISOString());
-        return new Response('Updated successfully (' + (mode === 'append' ? 'Appended' : 'Overwritten') + ')', { status: 200 });
+        await env.KV.put(storageKey, finalContent);
+        await env.KV.put(timeKey, new Date().toISOString());
+        return new Response(`Updated successfully (${isWarp ? 'WARP' : 'CDN'} ${mode === 'append' ? 'Appended' : 'Overwritten'})`, { status: 200 });
     } else {
         return new Response('KV not bound', { status: 500 });
     }
@@ -213,6 +246,7 @@ async function handleApiHistory(request, env) {
     const cookie = request.headers.get('Cookie') || '';
     const isAuthByCookie = env.ADMIN && cookie.includes(`auth=${env.ADMIN}`);
     const isAuthByToken = env.TOKEN && token === env.TOKEN;
+    const targetType = url.searchParams.get('type') || 'ips';
 
     if (env.TOKEN && !isAuthByToken && !isAuthByCookie) {
         return new Response(JSON.stringify({ success: false, message: 'Unauthorized: Invalid token or login required' }), {
@@ -221,10 +255,11 @@ async function handleApiHistory(request, env) {
         });
     }
 
+    const historyKey = targetType === 'warp' ? 'WARP_HISTORY.json' : 'HISTORY.json';
     let history = [];
     if (env.KV) {
         try {
-            const raw = await env.KV.get('HISTORY.json');
+            const raw = await env.KV.get(historyKey);
             if (raw) history = JSON.parse(raw);
         } catch (e) {
             history = [];
@@ -233,6 +268,7 @@ async function handleApiHistory(request, env) {
 
     return new Response(JSON.stringify({
         success: true,
+        type: targetType,
         count: history.length,
         data: history
     }, null, 2), {
@@ -246,7 +282,7 @@ async function handleApiHistory(request, env) {
 /**
  * 保存历史记录函数 (最多支持 5 次记录，并且历史记录同一个 IP 全局去重)
  */
-async function saveHistoryRecord(env, oldContent) {
+async function saveHistoryRecord(env, oldContent, historyKey = 'HISTORY.json') {
     if (!oldContent || !oldContent.trim()) return;
 
     const oldLines = splitLines(oldContent);
@@ -258,7 +294,7 @@ async function saveHistoryRecord(env, oldContent) {
     // 2. 读取现有历史记录
     let history = [];
     try {
-        const raw = await env.KV.get('HISTORY.json');
+        const raw = await env.KV.get(historyKey);
         if (raw) history = JSON.parse(raw);
     } catch (e) {
         history = [];
@@ -294,11 +330,11 @@ async function saveHistoryRecord(env, oldContent) {
     }
 
     // 6. 保存回 KV
-    await env.KV.put('HISTORY.json', JSON.stringify(history));
+    await env.KV.put(historyKey, JSON.stringify(history));
 }
 
 /**
- * 处理后台管理
+ * 处理后台管理 (/admin)
  */
 async function handleAdminRequest(request, env) {
     const adminPassword = env.ADMIN;
@@ -328,9 +364,10 @@ async function handleAdminRequest(request, env) {
             }
         }
 
-        if (isAuth && action === 'save') {
-            const content = formData.get('content');
+        if (isAuth && (action === 'save_cdn' || action === 'save_warp' || action === 'save')) {
+            const content = formData.get('content') || '';
             const mode = formData.get('mode');
+            const targetType = (action === 'save_warp' || formData.get('type') === 'warp') ? 'warp' : 'cdn';
 
             if (env.KV) {
                 const invalidLines = validateProxyList(content);
@@ -338,18 +375,22 @@ async function handleAdminRequest(request, env) {
                     return new Response('格式错误:\n' + invalidLines.join('\n'), { status: 400 });
                 }
 
+                const isWarp = targetType === 'warp';
+                const storageKey = isWarp ? 'WARP.txt' : 'ADD.txt';
+                const timeKey = isWarp ? 'WARP_UPDATE_TIME' : 'UPDATE_TIME';
+                const historyKey = isWarp ? 'WARP_HISTORY.json' : 'HISTORY.json';
+
                 let finalContent = content;
                 if (mode === 'append') {
-                    const existing = await env.KV.get('ADD.txt') || '';
+                    const existing = await env.KV.get(storageKey) || '';
                     finalContent = existing + (existing && !existing.endsWith('\n') ? '\n' : '') + content;
                 } else {
-                    // 覆盖模式：保存旧优选 IP 到历史记录
-                    const existing = await env.KV.get('ADD.txt') || '';
-                    await saveHistoryRecord(env, existing);
+                    const existing = await env.KV.get(storageKey) || '';
+                    await saveHistoryRecord(env, existing, historyKey);
                 }
-                await env.KV.put('ADD.txt', finalContent);
-                await env.KV.put('UPDATE_TIME', new Date().toISOString());
-                return new Response('Saved successfully', { status: 200 });
+                await env.KV.put(storageKey, finalContent);
+                await env.KV.put(timeKey, new Date().toISOString());
+                return new Response(`Saved ${isWarp ? 'WARP' : 'CDN'} successfully`, { status: 200 });
             }
         }
     }
@@ -358,22 +399,44 @@ async function handleAdminRequest(request, env) {
         return new Response(renderLoginPage(), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
-    const currentIps = env.KV ? await env.KV.get('ADD.txt') || '' : 'KV not bound';
-    const updateTime = env.KV ? await env.KV.get('UPDATE_TIME') || '' : '';
-    let history = [];
+    // 获取 CDN 数据
+    const cdnIps = env.KV ? await env.KV.get('ADD.txt') || '' : '';
+    const cdnUpdateTime = env.KV ? await env.KV.get('UPDATE_TIME') || '' : '';
+    let cdnHistory = [];
     if (env.KV) {
         try {
             const raw = await env.KV.get('HISTORY.json');
-            if (raw) history = JSON.parse(raw);
+            if (raw) cdnHistory = JSON.parse(raw);
         } catch (e) {
-            history = [];
+            cdnHistory = [];
         }
     }
-    return new Response(renderAdminPage(currentIps, updateTime, history), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+
+    // 获取 WARP 数据
+    const warpEndpoints = env.KV ? await env.KV.get('WARP.txt') || '' : '';
+    const warpUpdateTime = env.KV ? await env.KV.get('WARP_UPDATE_TIME') || '' : '';
+    let warpHistory = [];
+    if (env.KV) {
+        try {
+            const raw = await env.KV.get('WARP_HISTORY.json');
+            if (raw) warpHistory = JSON.parse(raw);
+        } catch (e) {
+            warpHistory = [];
+        }
+    }
+
+    return new Response(renderAdminPage({
+        cdnIps,
+        cdnUpdateTime,
+        cdnHistory,
+        warpEndpoints,
+        warpUpdateTime,
+        warpHistory
+    }), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 }
 
 function splitLines(str) {
-    return str.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('//'));
+    return (str || '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('//'));
 }
 
 function validateProxyList(content) {
@@ -386,7 +449,7 @@ function validateProxyList(content) {
 
         const [addressPort] = line.split('#');
         if (!addressPort.includes(':')) {
-            invalidLines.push(`"${line}" (缺少端口，需为 地址:端口 格式)`);
+            invalidLines.push(`"${line}" (缺少端口，需为 IP:端口 格式)`);
             continue;
         }
 
@@ -438,7 +501,7 @@ function renderLoginPage() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>登录 - edgetunnel 优选 IP 管理后台</title>
+    <title>登录 - 优选节点与 WARP 管理后台</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -557,8 +620,8 @@ function renderLoginPage() {
         <div class="brand-icon">
             <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
         </div>
-        <h1>edgetunnel 管理后台</h1>
-        <p class="subtitle">Cloudflare Worker 优选 IP 节点聚合管理服务</p>
+        <h1>Preferred IP Manager</h1>
+        <p class="subtitle">Cloudflare CDN 优选与 WARP Endpoint 聚合管理后台</p>
         <form method="POST" action="/admin">
             <input type="hidden" name="action" value="login">
             <div class="form-group">
@@ -575,78 +638,72 @@ function renderLoginPage() {
 </html>`;
 }
 
-function renderAdminPage(currentContent, updateTime, history = []) {
-    let formattedTime = '暂无更新记录';
-    if (updateTime) {
+function renderAdminPage(data) {
+    const { cdnIps, cdnUpdateTime, cdnHistory, warpEndpoints, warpUpdateTime, warpHistory } = data;
+
+    function formatTime(isoStr) {
+        if (!isoStr) return '暂无记录';
         try {
-            const d = new Date(updateTime);
-            formattedTime = new Intl.DateTimeFormat('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
+            return new Intl.DateTimeFormat('zh-CN', {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
                 timeZone: 'Asia/Shanghai'
-            }).format(d);
-        } catch (e) {
-            formattedTime = updateTime;
+            }).format(new Date(isoStr));
+        } catch {
+            return isoStr;
         }
     }
 
-    const currentLines = splitLines(currentContent);
-    const activeIpCount = currentLines.length;
+    const cdnCount = splitLines(cdnIps).length;
+    const warpCount = splitLines(warpEndpoints).length;
 
-    const historyItemsHtml = history.map((item, index) => {
-        let itemTime = item.time;
-        try {
-            itemTime = new Intl.DateTimeFormat('zh-CN', {
-                year: 'numeric',
-                month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                timeZone: 'Asia/Shanghai'
-            }).format(new Date(item.time));
-        } catch (e) {}
+    function renderHistoryList(historyArray, type) {
+        if (!historyArray || historyArray.length === 0) {
+            return `
+            <div class="empty-history">
+                <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="opacity:0.3; margin-bottom: 0.75rem; stroke-width: 1.5;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <div style="font-weight: 600; font-size: 0.95rem; margin-bottom: 0.25rem;">暂无 ${type === 'warp' ? 'WARP' : 'CDN'} 历史备份</div>
+                <div style="font-size: 0.8rem; color: var(--text-muted);">使用覆盖模式保存时，旧记录会自动保存至此处（最多 5 份）</div>
+            </div>`;
+        }
 
-        const ipListText = (item.ips || []).join('\n');
-        const ipCount = (item.ips || []).length;
-
-        return `
-        <div class="history-card">
-            <div class="history-header">
-                <div class="history-info">
-                    <span class="history-tag">${index === 0 ? '最新备份' : `#${index + 1}`}</span>
-                    <span class="history-time">
-                        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        ${itemTime}
-                    </span>
-                    <span class="history-badge">${ipCount} 个 IP</span>
+        return historyArray.map((item, idx) => {
+            const ipListText = (item.ips || []).join('\n');
+            const ipCount = (item.ips || []).length;
+            const timeStr = formatTime(item.time);
+            return `
+            <div class="history-card">
+                <div class="history-header">
+                    <div class="history-info">
+                        <span class="history-tag">${idx === 0 ? '最新备份' : `#${idx + 1}`}</span>
+                        <span class="history-time">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            ${timeStr}
+                        </span>
+                        <span class="history-badge">${ipCount} 个 ${type === 'warp' ? '端点' : 'IP'}</span>
+                    </div>
+                    <div class="history-actions">
+                        <button class="btn btn-xs btn-outline" onclick="copyText(\`${encodeURIComponent(ipListText)}\`)">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                            复制
+                        </button>
+                        <button class="btn btn-xs btn-primary" onclick="restoreHistory('${type}', \`${encodeURIComponent(ipListText)}\`)">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                            导入至编辑器
+                        </button>
+                    </div>
                 </div>
-                <div class="history-actions">
-                    <button class="btn btn-xs btn-outline" onclick="copyHistoryText(\`${encodeURIComponent(ipListText)}\`)">
-                        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                        复制 IP
-                    </button>
-                    <button class="btn btn-xs btn-primary" onclick="restoreHistoryText(\`${encodeURIComponent(ipListText)}\`)">
-                        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                        导入至配置
-                    </button>
-                </div>
-            </div>
-            <pre class="history-code">${escapeHtml(ipListText)}</pre>
-        </div>
-        `;
-    }).join('');
+                <pre class="history-code">${escapeHtml(ipListText)}</pre>
+            </div>`;
+        }).join('');
+    }
 
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>管理后台 - edgetunnel 优选 IP</title>
+    <title>管理后台 - Preferred IP Manager</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -655,9 +712,10 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             --primary: #6366f1;
             --primary-hover: #4f46e5;
             --primary-glow: rgba(99, 102, 241, 0.35);
+            --warp-color: #f59e0b;
+            --warp-glow: rgba(245, 158, 11, 0.35);
             --success: #10b981;
             --success-glow: rgba(16, 185, 129, 0.3);
-            --warning: #f59e0b;
             --danger: #ef4444;
             --bg: #0b0f19;
             --card-bg: rgba(20, 27, 45, 0.75);
@@ -673,17 +731,12 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             background: var(--bg);
             background-image: 
                 radial-gradient(circle at 10% 10%, rgba(99, 102, 241, 0.12), transparent 35%),
-                radial-gradient(circle at 90% 90%, rgba(192, 132, 252, 0.1), transparent 35%);
+                radial-gradient(circle at 90% 90%, rgba(245, 158, 11, 0.1), transparent 35%);
             min-height: 100vh;
             color: var(--text-main);
             padding: 2rem 1.5rem;
         }
-        .container {
-            max-width: 960px;
-            margin: 0 auto;
-        }
-
-        /* Top Header Navigation */
+        .container { max-width: 1024px; margin: 0 auto; }
         header {
             display: flex;
             justify-content: space-between;
@@ -692,15 +745,11 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             flex-wrap: wrap;
             gap: 1rem;
         }
-        .brand-section {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
+        .brand-section { display: flex; align-items: center; gap: 1rem; }
         .brand-logo {
             width: 44px;
             height: 44px;
-            background: linear-gradient(135deg, #6366f1, #a855f7);
+            background: linear-gradient(135deg, #6366f1, #f59e0b);
             border-radius: 0.85rem;
             display: flex;
             align-items: center;
@@ -709,13 +758,11 @@ function renderAdminPage(currentContent, updateTime, history = []) {
         }
         .brand-logo svg { width: 24px; height: 24px; fill: none; stroke: white; stroke-width: 2.2; }
         h1 {
-            margin: 0;
             font-size: 1.4rem;
             font-weight: 800;
-            background: linear-gradient(135deg, #a5b4fc, #c084fc, #38bdf8);
+            background: linear-gradient(135deg, #a5b4fc, #fcd34d, #38bdf8);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            letter-spacing: -0.02em;
         }
         .status-pill {
             display: inline-flex;
@@ -731,11 +778,9 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             margin-top: 0.25rem;
         }
         .pulse-dot {
-            width: 6px;
-            height: 6px;
+            width: 6px; height: 6px;
             background: #10b981;
             border-radius: 50%;
-            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
             animation: pulse 2s infinite;
         }
         @keyframes pulse {
@@ -743,8 +788,6 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
             100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
         }
-
-        /* Overview Stat Grid */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -762,15 +805,11 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             justify-content: space-between;
             transition: all 0.3s ease;
         }
-        .stat-card:hover {
-            border-color: var(--border-hover);
-            transform: translateY(-2px);
-        }
+        .stat-card:hover { border-color: var(--border-hover); transform: translateY(-2px); }
         .stat-label { font-size: 0.8rem; font-weight: 500; color: var(--text-muted); margin-bottom: 0.25rem; }
         .stat-val { font-size: 1.35rem; font-weight: 800; color: white; font-family: 'Fira Code', monospace; }
         .stat-icon {
-            width: 38px;
-            height: 38px;
+            width: 38px; height: 38px;
             border-radius: 0.75rem;
             background: rgba(255, 255, 255, 0.05);
             display: flex;
@@ -778,9 +817,8 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             justify-content: center;
             color: #818cf8;
         }
+        .stat-icon.warp { color: #f59e0b; }
         .stat-icon svg { width: 20px; height: 20px; stroke-width: 2; }
-
-        /* Main Card Container */
         .card {
             background: var(--card-bg);
             backdrop-filter: blur(20px);
@@ -790,14 +828,13 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             border-radius: 1.75rem;
             box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
         }
-
-        /* Tabs Styling */
-        .tabs {
+        .main-tabs {
             display: flex;
             gap: 0.75rem;
             margin-bottom: 1.75rem;
             border-bottom: 1px solid var(--border);
             padding-bottom: 0.75rem;
+            flex-wrap: wrap;
         }
         .tab-btn {
             padding: 0.65rem 1.25rem;
@@ -813,18 +850,18 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             align-items: center;
             gap: 0.5rem;
         }
-        .tab-btn:hover {
-            color: white;
-            background: rgba(255, 255, 255, 0.05);
-        }
+        .tab-btn:hover { color: white; background: rgba(255, 255, 255, 0.05); }
         .tab-btn.active {
             color: white;
             background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.2));
             border-color: rgba(99, 102, 241, 0.4);
             box-shadow: 0 4px 12px rgba(99, 102, 241, 0.15);
         }
-
-        /* Mode Selector Pills */
+        .tab-btn.active.warp-tab {
+            background: linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(217, 119, 6, 0.2));
+            border-color: rgba(245, 158, 11, 0.4);
+            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.15);
+        }
         .label-group {
             display: flex;
             justify-content: space-between;
@@ -849,468 +886,527 @@ function renderAdminPage(currentContent, updateTime, history = []) {
             cursor: pointer;
             transition: all 0.25s ease;
             color: var(--text-muted);
-            user-select: none;
         }
         .mode-option.active {
-            background: var(--primary);
-            color: white;
-            box-shadow: 0 4px 10px rgba(99, 102, 241, 0.3);
+            background: #222c44;
+            color: #f1f5f9;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
         }
-
-        /* Textarea Editor */
-        .editor-wrapper {
-            position: relative;
-        }
+        .editor-container { position: relative; margin-bottom: 1.5rem; }
         textarea {
             width: 100%;
-            height: 380px;
+            height: 320px;
             background: var(--input-bg);
             border: 1px solid var(--border);
             border-radius: 1.25rem;
+            padding: 1.25rem 1.5rem;
             color: #e2e8f0;
-            padding: 1.25rem;
             font-family: 'Fira Code', monospace;
-            font-size: 0.875rem;
+            font-size: 0.9rem;
             line-height: 1.6;
             resize: vertical;
-            box-sizing: border-box;
             transition: all 0.25s ease;
         }
         textarea:focus {
             outline: none;
             border-color: var(--primary);
             box-shadow: 0 0 0 4px var(--primary-glow);
-            background: rgba(15, 23, 42, 0.85);
-        }
-        textarea::-webkit-scrollbar { width: 8px; height: 8px; }
-        textarea::-webkit-scrollbar-track { background: transparent; }
-        textarea::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 4px; }
-        textarea::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.3); }
-
-        /* Action Toolbar */
-        .actions {
-            margin-top: 1.25rem;
-            display: flex;
-            gap: 1rem;
-            justify-content: flex-end;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        .hint {
-            color: var(--text-muted);
-            font-size: 0.8rem;
-            flex-grow: 1;
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
         }
         .btn {
-            padding: 0.75rem 1.6rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.4rem;
             border-radius: 0.85rem;
-            border: none;
-            font-size: 0.9rem;
             font-weight: 600;
+            font-size: 0.875rem;
             cursor: pointer;
             transition: all 0.25s ease;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        .btn-xs {
-            padding: 0.35rem 0.75rem;
-            font-size: 0.775rem;
-            border-radius: 0.6rem;
-            font-weight: 600;
+            border: none;
         }
         .btn-primary {
             background: linear-gradient(135deg, #6366f1, #4f46e5);
             color: white;
-            box-shadow: 0 8px 16px -4px rgba(99, 102, 241, 0.4);
+            box-shadow: 0 4px 12px -2px rgba(99, 102, 241, 0.4);
         }
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #4f46e5, #4338ca);
-            transform: translateY(-2px);
-            box-shadow: 0 12px 20px -4px rgba(99, 102, 241, 0.6);
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 20px -4px rgba(99, 102, 241, 0.6); }
+        .btn-warp {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            color: white;
+            box-shadow: 0 4px 12px -2px var(--warp-glow);
         }
+        .btn-warp:hover { transform: translateY(-1px); box-shadow: 0 8px 20px -4px rgba(245, 158, 11, 0.6); }
         .btn-outline {
             background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--border);
             color: #cbd5e1;
-        }
-        .btn-outline:hover {
-            background: rgba(255, 255, 255, 0.1);
-            border-color: var(--border-hover);
-            color: white;
-        }
-
-        /* Toast Feedback */
-        #toast {
-            position: fixed;
-            bottom: 2rem;
-            right: 2rem;
-            padding: 0.9rem 1.75rem;
-            border-radius: 1rem;
-            background: var(--success);
-            color: white;
-            font-weight: 600;
-            font-size: 0.9rem;
-            box-shadow: 0 10px 25px -3px var(--success-glow);
-            transform: translateY(100px);
-            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            opacity: 0;
-            z-index: 1000;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-        #toast.show { transform: translateY(0); opacity: 1; }
-
-        /* History Cards */
-        .history-container {
-            display: flex;
-            flex-direction: column;
-            gap: 1.25rem;
-        }
-        .history-card {
-            background: var(--input-bg);
             border: 1px solid var(--border);
-            border-radius: 1.25rem;
-            padding: 1.1rem 1.4rem;
-            transition: all 0.25s ease;
         }
-        .history-card:hover {
-            border-color: var(--border-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px -5px rgba(0, 0, 0, 0.3);
+        .btn-outline:hover { background: rgba(255, 255, 255, 0.1); color: white; }
+        .btn-xs { padding: 0.35rem 0.75rem; font-size: 0.75rem; border-radius: 0.6rem; }
+        .action-bar { display: flex; justify-content: flex-end; gap: 0.75rem; flex-wrap: wrap; }
+        .history-card {
+            background: rgba(11, 15, 25, 0.6);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1rem;
         }
         .history-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 0.85rem;
+            margin-bottom: 0.75rem;
             flex-wrap: wrap;
-            gap: 0.75rem;
-        }
-        .history-info {
-            display: flex;
-            align-items: center;
-            gap: 0.6rem;
-        }
-        .history-tag {
-            background: rgba(99, 102, 241, 0.18);
-            color: #a5b4fc;
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            font-weight: 700;
-            padding: 0.15rem 0.55rem;
-            border-radius: 0.5rem;
-            font-size: 0.75rem;
-        }
-        .history-time {
-            color: var(--text-muted);
-            font-size: 0.825rem;
-            display: flex;
-            align-items: center;
-            gap: 0.35rem;
-        }
-        .history-badge {
-            background: rgba(16, 185, 129, 0.15);
-            color: #34d399;
-            border: 1px solid rgba(16, 185, 129, 0.25);
-            font-size: 0.75rem;
-            padding: 0.15rem 0.55rem;
-            border-radius: 0.5rem;
-            font-weight: 600;
-        }
-        .history-actions {
-            display: flex;
             gap: 0.5rem;
         }
+        .history-info { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+        .history-tag {
+            background: rgba(99, 102, 241, 0.2);
+            color: #a5b4fc;
+            padding: 0.15rem 0.5rem;
+            border-radius: 0.4rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+        .history-time { font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.3rem; }
+        .history-badge { background: rgba(255, 255, 255, 0.05); padding: 0.15rem 0.5rem; border-radius: 0.4rem; font-size: 0.75rem; color: #cbd5e1; }
         .history-code {
-            margin: 0;
-            background: rgba(0, 0, 0, 0.4);
-            border-radius: 0.75rem;
-            padding: 0.85rem 1.1rem;
+            background: rgba(0, 0, 0, 0.35);
+            padding: 0.85rem;
+            border-radius: 0.65rem;
             font-family: 'Fira Code', monospace;
-            font-size: 0.825rem;
-            color: #6ee7b7;
-            max-height: 160px;
+            font-size: 0.8rem;
+            color: #94a3b8;
+            max-height: 140px;
             overflow-y: auto;
             white-space: pre-wrap;
-            word-break: break-all;
-            line-height: 1.5;
-            border: 1px solid rgba(255, 255, 255, 0.05);
         }
-        .empty-history {
-            text-align: center;
-            padding: 3.5rem 1rem;
-            color: var(--text-muted);
-        }
-        .api-note {
-            margin-top: 1.25rem;
-            padding: 0.85rem 1.2rem;
-            background: rgba(99, 102, 241, 0.08);
+        .config-box {
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border);
             border-radius: 1rem;
+            padding: 1.25rem;
+            margin-bottom: 1.25rem;
+        }
+        .config-title { font-weight: 700; font-size: 0.95rem; margin-bottom: 0.5rem; display: flex; align-items: center; justify-content: space-between; color: #fcd34d; }
+        .api-note {
+            background: rgba(99, 102, 241, 0.08);
             border: 1px solid rgba(99, 102, 241, 0.2);
-            font-size: 0.825rem;
-            color: #a5b4fc;
+            border-radius: 1rem;
+            padding: 1rem;
+            margin-top: 1.5rem;
+            font-size: 0.85rem;
+            color: #cbd5e1;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .api-note code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.3rem;
+            color: #818cf8;
+            font-family: 'Fira Code', monospace;
+        }
+        #toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--success);
+            color: white;
+            padding: 0.85rem 1.4rem;
+            border-radius: 1rem;
+            font-weight: 600;
+            font-size: 0.875rem;
+            box-shadow: 0 10px 25px -3px var(--success-glow);
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s ease;
+            pointer-events: none;
+            z-index: 100;
             display: flex;
             align-items: center;
             gap: 0.5rem;
         }
+        #toast.show { opacity: 1; transform: translateY(0); }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Top Header Navigation -->
         <header>
             <div class="brand-section">
                 <div class="brand-logo">
                     <svg viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 </div>
                 <div>
-                    <h1>edgetunnel 优选 IP 管理</h1>
-                    <div class="status-pill">
+                    <h1>Preferred IP & WARP Manager</h1>
+                    <span class="status-pill">
                         <span class="pulse-dot"></span>
-                        <span>服务正常运行中</span>
-                    </div>
+                        Worker 运行正常
+                    </span>
                 </div>
             </div>
-            <button class="btn btn-outline" onclick="location.href='/login'">
-                <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
-                退出登录
-            </button>
+            <div>
+                <a href="/login" class="btn btn-outline btn-xs" onclick="document.cookie='auth=; Max-Age=0; path=/'; location.reload(); return false;">退出登录</a>
+            </div>
         </header>
 
-        <!-- Overview Stat Grid -->
         <div class="stats-grid">
             <div class="stat-card">
                 <div>
-                    <div class="stat-label">生效优选 IP</div>
-                    <div class="stat-val" id="activeCountVal">${activeIpCount}</div>
+                    <div class="stat-label">CDN 优选 IP 数量</div>
+                    <div class="stat-val" id="cdnCountVal">${cdnCount}</div>
                 </div>
                 <div class="stat-icon">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064"/></svg>
                 </div>
             </div>
             <div class="stat-card">
                 <div>
-                    <div class="stat-label">最近更新时间</div>
-                    <div class="stat-val" style="font-size: 0.95rem; font-family: 'Inter', sans-serif;">${formattedTime}</div>
+                    <div class="stat-label">CDN 最近同步时间</div>
+                    <div class="stat-val" style="font-size: 0.95rem;">${formatTime(cdnUpdateTime)}</div>
                 </div>
-                <div class="stat-icon" style="color: #c084fc;">
+                <div class="stat-icon">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
             </div>
             <div class="stat-card">
                 <div>
-                    <div class="stat-label">历史备份版本</div>
-                    <div class="stat-val" style="color: #38bdf8;">${history.length} <span style="font-size: 0.85rem; font-weight: normal; color: var(--text-muted);">/ 5 份</span></div>
+                    <div class="stat-label">WARP 优选端点数</div>
+                    <div class="stat-val" id="warpCountVal" style="color: #fcd34d;">${warpCount}</div>
                 </div>
-                <div class="stat-icon" style="color: #38bdf8;">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+                <div class="stat-icon warp">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div>
+                    <div class="stat-label">WARP 最近测速更新</div>
+                    <div class="stat-val" style="font-size: 0.95rem; color: #fcd34d;">${formatTime(warpUpdateTime)}</div>
+                </div>
+                <div class="stat-icon warp">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
             </div>
         </div>
 
-        <!-- Main Workspace Card -->
         <div class="card">
-            <div class="tabs">
-                <button class="tab-btn active" id="tabIps" onclick="switchTab('ips')">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                    优选 IP 配置
+            <div class="main-tabs">
+                <button class="tab-btn active" id="tabCdn" onclick="switchMainTab('cdn')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
+                    CDN 优选 IP (${cdnCount})
                 </button>
-                <button class="tab-btn" id="tabHistory" onclick="switchTab('history')">
+                <button class="tab-btn warp-tab" id="tabWarp" onclick="switchMainTab('warp')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    WARP 优选 Endpoint (${warpCount})
+                </button>
+                <button class="tab-btn" id="tabHistory" onclick="switchMainTab('history')">
                     <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    历史 IP 记录 (${history.length})
+                    历史备份记录
+                </button>
+                <button class="tab-btn" id="tabExport" onclick="switchMainTab('export')">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2"/></svg>
+                    客户端配置生成
                 </button>
             </div>
-            
-            <!-- 优选 IP 配置 TAB -->
-            <div id="panelIps">
+
+            <!-- CDN 优选 IP 面板 -->
+            <div id="panelCdn">
                 <div class="label-group">
                     <span class="label">
-                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        自定义优选 IP 列表 (格式: 地址:端口#备注)
+                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                        编辑 CDN 优选 IP 列表 (格式: IP:端口#备注)
                     </span>
-                    <div class="mode-selector" id="modeSelector">
-                        <div class="mode-option active" data-mode="overwrite" onclick="setMode('overwrite')">覆盖模式</div>
-                        <div class="mode-option" data-mode="append" onclick="setMode('append')">追加模式</div>
+                    <div class="mode-selector">
+                        <span class="mode-option active" data-mode="overwrite" onclick="setMode('cdn', 'overwrite')">覆盖模式</span>
+                        <span class="mode-option" data-mode="append" onclick="setMode('cdn', 'append')">追加模式</span>
                     </div>
                 </div>
-                <div class="editor-wrapper">
-                    <textarea id="content" placeholder="例如: 1.1.1.1:443#Cloudflare" oninput="updateCounter()">${escapeHtml(currentContent)}</textarea>
+                <div class="editor-container">
+                    <textarea id="cdnContent" placeholder="例如: 104.16.80.1:443#Cloudflare" oninput="updateCounter('cdn')">${escapeHtml(cdnIps)}</textarea>
                 </div>
-                <div class="actions">
-                    <div class="hint" id="modeHint">
-                        <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        当前模式：用输入的内容覆盖现有优选 IP 列表（旧记录自动存入历史）
-                    </div>
-                    <button class="btn btn-outline" onclick="copyCurrentContent()">
-                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                        复制全部
-                    </button>
-                    <button class="btn btn-primary" id="saveBtn" onclick="save()">
-                        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
-                        保存更改
-                    </button>
+                <div class="action-bar">
+                    <button class="btn btn-outline" onclick="copyContent('cdnContent')">复制全部</button>
+                    <button class="btn btn-primary" id="saveCdnBtn" onclick="saveData('cdn')">保存 CDN 更改</button>
+                </div>
+                <div class="api-note">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span><strong>订阅与同步:</strong> VLESS 订阅地址为 <code>/sub?host=YOUR_HOST&uuid=YOUR_UUID</code>；Python 测速脚本可通过 <code>process_ips.py --target cdn</code> 自动推送。</span>
                 </div>
             </div>
 
-            <!-- 历史 IP 记录 TAB -->
-            <div id="panelHistory" style="display: none;">
-                <div class="history-container">
-                    ${history.length > 0 ? historyItemsHtml : `
-                    <div class="empty-history">
-                        <svg width="54" height="54" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="opacity:0.3; margin-bottom: 1rem; stroke-width: 1.5;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        <div style="font-weight: 600; font-size: 1rem; margin-bottom: 0.3rem;">暂无历史 IP 备份</div>
-                        <div style="font-size: 0.85rem;">使用覆盖模式保存优选 IP 时，旧记录会自动备份至此处（支持全历史去重，最多 5 份）</div>
-                    </div>`}
+            <!-- WARP 优选 Endpoint 面板 -->
+            <div id="panelWarp" style="display: none;">
+                <div class="label-group">
+                    <span class="label" style="color: #fcd34d;">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        编辑 Cloudflare WARP 优选端点 (格式: IP:端口#备注)
+                    </span>
+                    <div class="mode-selector">
+                        <span class="mode-option active" data-mode="overwrite" onclick="setMode('warp', 'overwrite')">覆盖模式</span>
+                        <span class="mode-option" data-mode="append" onclick="setMode('warp', 'append')">追加模式</span>
+                    </div>
+                </div>
+                <div class="editor-container">
+                    <textarea id="warpContent" placeholder="例如: 162.159.197.2:4500#WARP-HK" oninput="updateCounter('warp')">${escapeHtml(warpEndpoints)}</textarea>
+                </div>
+                <div class="action-bar">
+                    <button class="btn btn-outline" onclick="copyContent('warpContent')">复制全部</button>
+                    <button class="btn btn-warp" id="saveWarpBtn" onclick="saveData('warp')">保存 WARP 更改</button>
                 </div>
                 <div class="api-note">
-                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="flex-shrink:0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    <span><strong>API 查询说明:</strong> 支持通过 HTTP GET 接口 <code>/api/history?token=YOUR_TOKEN</code> 获取 JSON 格式的历史优选 IP 记录。</span>
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    <span><strong>WARP 接口与测速:</strong> 原始端点接口为 <code>/warp</code>；本地测速推送可通过 <code>python process_ips.py --target warp</code> 或 <code>warp_tester.py</code> 一键完成。</span>
+                </div>
+            </div>
+
+            <!-- 历史备份记录面板 -->
+            <div id="panelHistory" style="display: none;">
+                <div style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem;">
+                    <button class="btn btn-xs btn-outline active" id="btnHistCdn" onclick="switchHistType('cdn')">CDN 历史记录 (${cdnHistory.length})</button>
+                    <button class="btn btn-xs btn-outline" id="btnHistWarp" onclick="switchHistType('warp')">WARP 历史记录 (${warpHistory.length})</button>
+                </div>
+                <div id="histCdnList">
+                    ${renderHistoryList(cdnHistory, 'cdn')}
+                </div>
+                <div id="histWarpList" style="display: none;">
+                    ${renderHistoryList(warpHistory, 'warp')}
+                </div>
+            </div>
+
+            <!-- 客户端配置生成面板 -->
+            <div id="panelExport" style="display: none;">
+                <div class="config-box">
+                    <div class="config-title">
+                        <span>WireGuard / WARP 客户端配置格式</span>
+                        <button class="btn btn-xs btn-outline" onclick="copyGenerated('wg')">复制 WireGuard 片段</button>
+                    </div>
+                    <pre class="history-code" id="codeWg"></pre>
+                </div>
+
+                <div class="config-box">
+                    <div class="config-title">
+                        <span>Sing-box Outbound JSON 配置片段</span>
+                        <button class="btn btn-xs btn-outline" onclick="copyGenerated('singbox')">复制 Sing-box 片段</button>
+                    </div>
+                    <pre class="history-code" id="codeSingbox"></pre>
+                </div>
+
+                <div class="config-box">
+                    <div class="config-title">
+                        <span>Clash Meta / Mihomo Proxies YAML 配置片段</span>
+                        <button class="btn btn-xs btn-outline" onclick="copyGenerated('clash')">复制 Clash 片段</button>
+                    </div>
+                    <pre class="history-code" id="codeClash"></pre>
+                </div>
+
+                <div class="config-box">
+                    <div class="config-title">
+                        <span>WARP-CLI 终端切换命令</span>
+                        <button class="btn btn-xs btn-outline" onclick="copyGenerated('warpcli')">复制 CLI 命令</button>
+                    </div>
+                    <pre class="history-code" id="codeWarpCli"></pre>
                 </div>
             </div>
         </div>
     </div>
+
     <div id="toast">
         <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
-        <span id="toastMsg">保存成功！</span>
+        <span id="toastMsg">操作成功！</span>
     </div>
 
     <script>
-        let activeTab = 'ips';
-        let currentMode = 'overwrite';
-        const initialIpsContent = document.getElementById('content').value;
+        let currentMode = { cdn: 'overwrite', warp: 'overwrite' };
 
-        function switchTab(tab) {
-            activeTab = tab;
-            document.getElementById('tabIps').classList.toggle('active', tab === 'ips');
-            document.getElementById('tabHistory').classList.toggle('active', tab === 'history');
+        function switchMainTab(tab) {
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            ['Cdn', 'Warp', 'History', 'Export'].forEach(t => {
+                const el = document.getElementById('panel' + t);
+                if (el) el.style.display = 'none';
+            });
 
-            const panelIps = document.getElementById('panelIps');
-            const panelHistory = document.getElementById('panelHistory');
-
-            if (tab === 'ips') {
-                panelIps.style.display = 'block';
-                panelHistory.style.display = 'none';
-            } else {
-                panelIps.style.display = 'none';
-                panelHistory.style.display = 'block';
+            if (tab === 'cdn') {
+                document.getElementById('tabCdn').classList.add('active');
+                document.getElementById('panelCdn').style.display = 'block';
+            } else if (tab === 'warp') {
+                document.getElementById('tabWarp').classList.add('active');
+                document.getElementById('panelWarp').style.display = 'block';
+            } else if (tab === 'history') {
+                document.getElementById('tabHistory').classList.add('active');
+                document.getElementById('panelHistory').style.display = 'block';
+            } else if (tab === 'export') {
+                document.getElementById('tabExport').classList.add('active');
+                document.getElementById('panelExport').style.display = 'block';
+                generateExportConfigs();
             }
         }
 
-        function setMode(mode) {
-            currentMode = mode;
-            document.querySelectorAll('.mode-option').forEach(opt => {
+        function switchHistType(type) {
+            document.getElementById('btnHistCdn').classList.toggle('active', type === 'cdn');
+            document.getElementById('btnHistWarp').classList.toggle('active', type === 'warp');
+            document.getElementById('histCdnList').style.display = (type === 'cdn' ? 'block' : 'none');
+            document.getElementById('histWarpList').style.display = (type === 'warp' ? 'block' : 'none');
+        }
+
+        function setMode(target, mode) {
+            currentMode[target] = mode;
+            const panel = document.getElementById(target === 'warp' ? 'panelWarp' : 'panelCdn');
+            panel.querySelectorAll('.mode-option').forEach(opt => {
                 opt.classList.toggle('active', opt.dataset.mode === mode);
             });
-            
-            const hint = document.getElementById('modeHint');
-            const textarea = document.getElementById('content');
-            
-            if (mode === 'append') {
-                hint.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>当前模式：将输入的内容追加到现有优选 IP 列表末尾';
-                textarea.placeholder = '输入要追加的 IP 列表...';
-                if (textarea.value.trim() === initialIpsContent.trim()) {
-                    textarea.value = '';
-                }
-            } else {
-                hint.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>当前模式：用输入的内容覆盖现有优选 IP 列表（旧记录自动存入历史）';
-                textarea.placeholder = '例如: 1.1.1.1:443#Cloudflare';
-                if (textarea.value.trim() === '') {
-                    textarea.value = initialIpsContent;
-                }
-            }
-            updateCounter();
         }
 
-        function updateCounter() {
-            const val = document.getElementById('content').value;
+        function updateCounter(target) {
+            const val = document.getElementById(target === 'warp' ? 'warpContent' : 'cdnContent').value;
             const lines = val.split(/\\r?\\n/).map(l => l.trim()).filter(l => l && !l.startsWith('//') && l.includes(':'));
-            document.getElementById('activeCountVal').innerText = lines.length;
+            if (target === 'warp') {
+                document.getElementById('warpCountVal').innerText = lines.length;
+            } else {
+                document.getElementById('cdnCountVal').innerText = lines.length;
+            }
         }
 
-        function copyCurrentContent() {
-            const val = document.getElementById('content').value;
+        function copyContent(elemId) {
+            const val = document.getElementById(elemId).value;
             if (!val.trim()) {
-                showToast('编辑器内容为空！', true);
+                showToast('内容为空！', true);
                 return;
             }
             navigator.clipboard.writeText(val).then(() => {
-                showToast('已复制当前列表到剪贴板！');
-            }).catch(err => {
-                showToast('复制失败: ' + err, true);
-            });
+                showToast('已复制内容到剪贴板！');
+            }).catch(e => showToast('复制失败: ' + e, true));
         }
 
-        async function save() {
-            const textarea = document.getElementById('content');
-            const content = textarea.value;
-            const btn = document.getElementById('saveBtn');
+        function copyText(encoded) {
+            const text = decodeURIComponent(encoded);
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('复制成功！');
+            }).catch(e => showToast('复制失败: ' + e, true));
+        }
+
+        function restoreHistory(target, encoded) {
+            const text = decodeURIComponent(encoded);
+            if (target === 'warp') {
+                switchMainTab('warp');
+                setMode('warp', 'overwrite');
+                document.getElementById('warpContent').value = text;
+                updateCounter('warp');
+            } else {
+                switchMainTab('cdn');
+                setMode('cdn', 'overwrite');
+                document.getElementById('cdnContent').value = text;
+                updateCounter('cdn');
+            }
+            showToast('已导入至编辑器，确认后请点击保存更改生效！');
+        }
+
+        async function saveData(target) {
+            const isWarp = (target === 'warp');
+            const textarea = document.getElementById(isWarp ? 'warpContent' : 'cdnContent');
+            const btn = document.getElementById(isWarp ? 'saveWarpBtn' : 'saveCdnBtn');
+            const mode = currentMode[target];
+
             btn.disabled = true;
-            const originalHtml = btn.innerHTML;
+            const orig = btn.innerHTML;
             btn.innerHTML = '正在保存...';
 
             try {
                 const formData = new FormData();
-                formData.append('action', 'save');
-                formData.append('content', content);
-                formData.append('mode', currentMode);
+                formData.append('action', isWarp ? 'save_warp' : 'save_cdn');
+                formData.append('type', isWarp ? 'warp' : 'ips');
+                formData.append('content', textarea.value);
+                formData.append('mode', mode);
 
-                const res = await fetch('/admin', {
-                    method: 'POST',
-                    body: formData
-                });
-
+                const res = await fetch('/admin', { method: 'POST', body: formData });
                 if (res.ok) {
-                    showToast(currentMode === 'append' ? '追加成功！' : '保存成功 (旧记录已自动备份至历史)！');
-                    localStorage.setItem('adminActiveTab', activeTab);
+                    showToast('保存成功 (旧记录已自动备份至历史)！');
                     setTimeout(() => location.reload(), 1000);
                 } else {
-                    const errorMsg = await res.text();
-                    showToast(errorMsg, true);
+                    const msg = await res.text();
+                    showToast(msg, true);
                 }
             } catch (e) {
                 showToast('保存出错: ' + e.message, true);
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = originalHtml;
+                btn.innerHTML = orig;
             }
         }
 
-        function copyHistoryText(encodedText) {
-            const text = decodeURIComponent(encodedText);
-            navigator.clipboard.writeText(text).then(() => {
-                showToast('已复制该历史 IP 列表到剪贴板！');
-            }).catch(err => {
-                showToast('复制失败: ' + err, true);
+        function generateExportConfigs() {
+            const warpVal = document.getElementById('warpContent').value;
+            const lines = warpVal.split(/\\r?\\n/).map(l => l.trim()).filter(l => l && !l.startsWith('//') && l.includes(':'));
+            
+            const parsed = lines.map((l, i) => {
+                const [addrPort, ...remarkParts] = l.split('#');
+                const lastColon = addrPort.lastIndexOf(':');
+                const ip = addrPort.substring(0, lastColon).trim();
+                const port = parseInt(addrPort.substring(lastColon + 1).trim());
+                const remark = remarkParts.join('#') || ('WARP-' + (i + 1));
+                return { ip, port, remark };
+            }).filter(e => e.ip && e.port);
+
+            // WireGuard
+            const wgLines = ['# Cloudflare WARP WireGuard Endpoints'];
+            parsed.forEach((e, i) => {
+                wgLines.push(\`# [\${i+1}] \${e.remark}\`);
+                wgLines.push(\`Endpoint = \${e.ip}:\${e.port}\`);
             });
+            document.getElementById('codeWg').innerText = wgLines.join('\\n');
+
+            // Sing-box
+            const sbOutbounds = parsed.map((e, i) => ({
+                type: "wireguard",
+                tag: e.remark || ("WARP-" + (i + 1)),
+                server: e.ip,
+                server_port: e.port,
+                system_interface: false,
+                mtu: 1280
+            }));
+            document.getElementById('codeSingbox').innerText = JSON.stringify(sbOutbounds, null, 2);
+
+            // Clash
+            const clashLines = ['# Clash Meta / Mihomo Proxies:'];
+            parsed.forEach((e, i) => {
+                clashLines.push(\`- name: "\${e.remark || ('WARP-' + (i+1))}"\`);
+                clashLines.push(\`  type: wireguard\`);
+                clashLines.push(\`  server: \${e.ip}\`);
+                clashLines.push(\`  port: \${e.port}\`);
+                clashLines.push(\`  ip: 172.16.0.2\`);
+                clashLines.push(\`  public-key: bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=\`);
+                clashLines.push(\`  udp: true\`);
+            });
+            document.getElementById('codeClash').innerText = clashLines.join('\\n');
+
+            // WARP-CLI
+            const cliLines = ['# Cloudflare WARP-CLI 切换命令:'];
+            parsed.forEach((e, i) => {
+                cliLines.push(\`# [\${i+1}] \${e.remark}\`);
+                cliLines.push(\`warp-cli tunnel endpoint set \${e.ip}:\${e.port}\`);
+            });
+            document.getElementById('codeWarpCli').innerText = cliLines.join('\\n');
         }
 
-        function restoreHistoryText(encodedText) {
-            const text = decodeURIComponent(encodedText);
-            switchTab('ips');
-            setMode('overwrite');
-            document.getElementById('content').value = text;
-            updateCounter();
-            showToast('已将历史 IP 导入至编辑器，确认无误后点击“保存更改”生效！');
-        }
+        function copyGenerated(type) {
+            let elId = 'codeWg';
+            if (type === 'singbox') elId = 'codeSingbox';
+            if (type === 'clash') elId = 'codeClash';
+            if (type === 'warpcli') elId = 'codeWarpCli';
 
-        window.addEventListener('DOMContentLoaded', () => {
-            const savedTab = localStorage.getItem('adminActiveTab') || 'ips';
-            switchTab(savedTab);
-            localStorage.removeItem('adminActiveTab');
-            updateCounter();
-        });
+            const val = document.getElementById(elId).innerText;
+            navigator.clipboard.writeText(val).then(() => {
+                showToast('已复制配置片段到剪贴板！');
+            }).catch(e => showToast('复制失败: ' + e, true));
+        }
 
         function showToast(msg, isError = false) {
             const toast = document.getElementById('toast');
             document.getElementById('toastMsg').innerText = msg;
             toast.style.background = isError ? 'var(--danger)' : 'var(--success)';
-            toast.style.boxShadow = isError ? '0 10px 25px -3px rgba(239, 68, 68, 0.4)' : '0 10px 25px -3px var(--success-glow)';
             toast.classList.add('show');
-            setTimeout(() => toast.classList.remove('show'), 4000);
+            setTimeout(() => toast.classList.remove('show'), 3500);
         }
     </script>
 </body>

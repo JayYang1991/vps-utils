@@ -181,14 +181,106 @@ def fetch_history_ips():
     return []
 
 def main():
-    parser = argparse.ArgumentParser(description="集成测速工具: 支持带宽模式和延迟模式")
-    parser.add_argument("--mode", "-m", choices=['speed', 'latency'], default='speed', 
-                        help="测速模式: speed (带宽模式, 默认), latency (延迟/httping模式)")
-    parser.add_argument("--top", "-t", type=int, default=20, help="最终保留的最优 IP 数量 (默认: 20)")
-    parser.add_argument("--min-speed", "-s", type=float, default=10.0, help="[带宽模式] 最小下载速度过滤 (MB/s, 默认: 10.0)")
+    parser = argparse.ArgumentParser(description="集成测速与优选管理工具: 支持 Cloudflare CDN 优选与 WARP Endpoint 优选")
+    parser.add_argument("--target", "-T", choices=['cdn', 'warp'], default='cdn',
+                        help="优选目标类型: cdn (Cloudflare CDN/中转 IP 测速, 默认), warp (Cloudflare WARP Anycast Endpoint 优选)")
+    
+    # CDN 模式参数
+    cdn_group = parser.add_argument_group("CDN 优选参数 (--target cdn)")
+    cdn_group.add_argument("--mode", "-m", choices=['speed', 'latency'], default='speed', 
+                           help="测速模式: speed (带宽模式, 默认), latency (延迟/httping模式)")
+    cdn_group.add_argument("--min-speed", "-s", type=float, default=10.0, help="[带宽模式] 最小下载速度过滤 (MB/s, 默认: 10.0)")
+    
+    # WARP 模式参数
+    warp_group = parser.add_argument_group("WARP 优选参数 (--target warp)")
+    warp_group.add_argument("--warp-mode", choices=['fast', 'standard', 'full'], default='fast',
+                            help="WARP 扫描模式: fast (快速抽样, 默认), standard (标准采样), full (全网段扫描)")
+    warp_group.add_argument("--warp-ports", default="443,8443,4443,8095,4500,500,1701,2408",
+                            help="WARP 待测端口列表 (默认: 443,8443,4443,8095,4500,500,1701,2408)")
+    warp_group.add_argument("--concurrency", "-c", type=int, default=100, help="WARP 并发探测线程数 (默认: 100)")
+    warp_group.add_argument("--rounds", "-r", type=int, default=3, help="WARP 单点探测轮数 (默认: 3 轮)")
+    warp_group.add_argument("--format", choices=['txt', 'wireguard', 'singbox', 'clash', 'warp-cli'], default='txt',
+                            help="WARP 结果导出格式 (默认: txt)")
+    warp_group.add_argument("--ipv6", action="store_true", help="启用 IPv6 WARP Anycast 网段探测")
+    warp_group.add_argument("--bind-ip", default="", help="本地绑定的出网源 IP 地址")
+
+    # 通用参数
+    parser.add_argument("--top", "-t", type=int, default=20, help="最终保留的最优 IP/端点数量 (默认: 20)")
     parser.add_argument("--yes", "-y", action="store_true", help="跳过确认提示，自动推送到 Cloudflare Workers 订阅服务器")
     args = parser.parse_args()
 
+    # --- 若目标为 WARP Endpoint 优选 ---
+    if args.target == 'warp':
+        import warp_tester
+        warp_output = "warp_result.txt"
+        
+        try:
+            ports = [int(p.strip()) for p in args.warp_ports.split(",") if p.strip()]
+        except ValueError:
+            print("错误: WARP 端口格式不正确，必须为数字")
+            return
+
+        candidate_ips = warp_tester.generate_candidate_ips(
+            scan_mode=args.warp_mode,
+            include_ipv6=args.ipv6
+        )
+
+        results = warp_tester.scan_warp_endpoints(
+            candidate_ips=candidate_ips,
+            ports=ports,
+            timeout=1.0,
+            rounds=args.rounds,
+            concurrency=args.concurrency,
+            sni=warp_tester.DEFAULT_SNI,
+            bind_ip=args.bind_ip
+        )
+
+        if not results:
+            print("\n未能在任何 WARP 候选端点探测到有效响应。")
+            return
+
+        top_count = min(len(results), args.top)
+        top_results = results[:top_count]
+
+        # 保存 TXT
+        txt_content = warp_tester.format_export_configs(top_results, "txt")
+        with open(warp_output, 'w', encoding='utf-8') as f:
+            f.write(txt_content + "\n")
+
+        print(f"\n✨ WARP 优选测速完成！最优前 {len(top_results)} 个 Endpoint 已保存至 {warp_output}：")
+        print("=" * 80)
+        print(f" {'排名':<4} {'Endpoint (IP:Port)':<26} {'丢包率':<8} {'平均延迟':<12} {'最小延迟':<12} {'抖动':<10} {'协议'}")
+        print("-" * 80)
+        for i, r in enumerate(top_results):
+            ip_port = f"{r['ip']}:{r['port']}"
+            print(f" [{i+1:>2}] {ip_port:<26} {r['loss_rate']:>5.1f}%   {r['avg_rtt']:>7.2f} ms   {r['min_rtt']:>7.2f} ms   {r['jitter']:>6.2f} ms   {r['type']}")
+        print("=" * 80)
+
+        if args.format != 'txt':
+            print(f"\n📋 已生成 [{args.format}] 客户端配置片段：")
+            print("-" * 65)
+            print(warp_tester.format_export_configs(top_results, args.format))
+            print("-" * 65)
+
+        # 确认并上传
+        token = os.environ.get("CF_SUB_TOKEN")
+        if not token:
+            print(f"\n⚠️ 提示: 未配置环境变量 CF_SUB_TOKEN，跳过推送操作。WARP 优选结果已保存至 {warp_output}")
+        else:
+            if not args.yes:
+                try:
+                    user_input = input(f"\n👉 是否确认将以上 {len(top_results)} 个 WARP 优选端点推送到 Cloudflare Workers 订阅服务器？ [Y/n]: ").strip().lower()
+                    if user_input not in ('', 'y', 'yes'):
+                        print(f"⏸️ 已取消推送操作。优选结果已保留在 {warp_output}")
+                        return
+                except (KeyboardInterrupt, EOFError):
+                    print(f"\n⏸️ 用户取消推送操作。优选结果已保留在 {warp_output}")
+                    return
+
+            warp_tester.upload_warp_results(warp_output)
+        return
+
+    # --- 以下为目标为 CDN 优选流程 ---
     # 1. 下载最新文件 (直接调用二进制)
     download_cmd = f"{TG_TOOL} download -n 'CF中转' --limit 1 -o {DOWNLOAD_DIR}"
     run_command(download_cmd, "从 Telegram 下载最新的 IP 列表")

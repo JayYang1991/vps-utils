@@ -8,6 +8,10 @@ venv/
 
 # Output & Log files
 ip_result.txt
+warp_result.txt
 *.log
+result_*.csv
+temp_ips_*.txt
 config.json
 fhs-install-singbox/config.json
+

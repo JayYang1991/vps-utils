@@ -186,7 +186,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 | **[cloudflared-tunnel](./cloudflared-tunnel)** | Cloudflare Official Agent 部署，实现 Tunnel 内网穿透与公网服务发布 | `install.sh` | [cloudflared-tunnel 详细指南](./cloudflared-tunnel/README.md) |
 | **[cloudflare-zero-trust](./cloudflare-zero-trust)** | Cloudflare Zero Trust (Cloudflare One) 套件：VPS 出口 NAT 转发、SOCKS5 客户端与诊断工具 | `setup-cloudflare-one.sh`<br>`docker-run.sh`<br>`test-masque.py`<br>`install.sh` | [cloudflare-zero-trust 详细指南](./cloudflare-zero-trust/README.md) |
 | **[subconverter](./subconverter)** | 通用代理订阅格式转换后端服务（带 Systemd 一键安装与端口配置） | `install.sh` | [subconverter 详细指南](./subconverter/README.md) |
-| **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理与 Telegram/CFST 自动化测速同步工具 | `sub-worker.js`<br>`process_ips.py`<br>`telegram_tool.py` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
+| **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理、CDN 测速与 WARP Endpoint 优选同步工具 | `sub-worker.js`<br>`warp_tester.py`<br>`process_ips.py`<br>`telegram_tool.py` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
 | **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
 
 ---
@@ -214,10 +214,12 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 - **`install.sh`**：一键下载并配置 `subconverter` 二进制，支持自定义端口并注册开机自启服务。
 
-### 5. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 管理与同步
+### 5. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 与 WARP Endpoint 管理
 
-- **`sub-worker.js`**：Cloudflare Worker 订阅分发服务端，提供暗黑拟物风格后台与历史记录备份。
-- **`process_ips.py`**：自动拉取 IP、调用 `CloudflareSpeedTest` 进行多线程测速并将最优节点同步推送到 Worker。
+- **`sub-worker.js`**：Cloudflare Worker 订阅分发与 WARP 端点管理服务端，提供现代化暗黑拟物后台、历史备份及客户端配置生成。
+- **`warp_tester.py`**：基于 RFC 9000 MASQUE/QUIC 的 Cloudflare WARP Anycast Endpoint 深度优选与测速引擎。
+- **`process_ips.py`**：全流程集成工具，支持一键调度 CDN IP 测速同步或 WARP Endpoint 优选同步。
+- **`telegram_tool.py`**：基于 MTProto 协议的 Telegram 文件极速多连接下载助手。
 
 ### 6. [singbox-sub-converter](./singbox-sub-converter) — 自适应订阅转换服务
 

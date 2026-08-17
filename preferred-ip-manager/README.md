@@ -1,42 +1,43 @@
-# Preferred IP Manager (edgetunnel 优选 IP / 订阅管理服务)
+# Preferred IP Manager (edgetunnel 优选 IP 与 WARP Endpoint 聚合管理服务)
 
-`preferred-ip-manager` 是一个集成了 **Cloudflare Worker 无服务器订阅管理** 与 **Python 本地自动化测速同步工具链** 的完整优选 IP 解决方案。
+`preferred-ip-manager` 是一个集成了 **Cloudflare Worker 无服务器订阅与 WARP 管理**、**Cloudflare CDN 优选测速同步** 以及 **Cloudflare WARP Anycast Endpoint 深度优选** 的全套网络加速与端点优化工具链。
 
-它专为 edgetunnel / VLESS 协议设计，一方面提供高可用的服务端聚合订阅能力与 Web 管理后台，另一方面通过 Python 脚本实现自动从 Telegram 抓取最新 IP 资源、调起 CloudflareSpeedTest (`cfst`) 测速，并自动将优选结果同步至订阅服务器。
+它专为 edgetunnel (VLESS/Trojan) 与 Cloudflare WARP (WireGuard/MASQUE) 协议设计，一方面提供高可用的服务端聚合订阅能力与现代化 Web 管理后台，另一方面通过 Python 脚本实现自动从 Telegram 抓取最新 IP 资源、调起 CloudflareSpeedTest (`cfst`) 测速、利用 RFC 9000 协议探测优选 WARP Anycast Endpoint，并自动将优选结果同步至订阅服务器。
 
 ---
 
 ## ✨ 核心特性
 
 ### ☁️ Cloudflare Worker 服务端 (`sub-worker.js`)
-- 🔗 **动态订阅生成 (`/sub`)**：自动合并远程优选源与本地 KV 保存的优选 IP，实时动态拼装生成标准 Base64 编码的 VLESS / Trojan 订阅链接。
+- 🔗 **动态 VLESS 订阅生成 (`/sub`)**：自动合并远程优选源与本地 KV 保存的优选 IP，实时动态拼装生成标准 Base64 编码的 VLESS / Trojan 订阅链接。
+- ⚡ **WARP 优选端点获取 (`/warp`)**：对外提供经过测速优选的 Cloudflare WARP Anycast Endpoint 纯文本列表。
 - 🖥️ **可视化管理后台 (`/admin`)**：
   - 现代化暗黑玻璃拟物化风格 UI。
-  - 支持优选 IP 列表 (`ADD.txt`) 编辑与 **历史 IP 记录** 展示/一键恢复。
-  - 支持 **覆盖模式** 与 **追加模式**。
-  - 覆盖模式更新时，自动将原有优选 IP 备份至历史记录（最多保存 5 次记录，全历史 IP 自动去重）。
+  - **CDN 优选 IP 管理**：支持优选 IP 列表 (`ADD.txt`) 在线编辑与历史备份一键恢复（支持覆盖/追加模式）。
+  - **WARP Endpoint 优选管理**：支持 WARP 端点列表 (`WARP.txt`) 在线编辑、覆盖/追加与历史记录备份。
+  - **客户端配置一键生成**：一键生成并复制适配 **WireGuard**、**Sing-box**、**Clash Meta / Mihomo** 以及 **WARP-CLI** 的客户端配置片段。
   - 内置在线数据格式校验，防止误填无效 IP 或端口。
 - 🤖 **自动化 API (`/api/update` & `/api/history`)**：
-  - `/api/update`：供测速脚本自动推送最新优选 IP 的 HTTP PUT 接口（支持覆盖/追加模式）。
-  - `/api/history`：获取历史优选 IP 记录列表的 HTTP GET 接口。
+  - `/api/update?type=ips`：自动推送并更新 CDN 优选 IP。
+  - `/api/update?type=warp`：自动推送并更新 WARP 优选 Endpoint。
+  - `/api/history?type=ips|warp`：获取历史优选记录列表的 HTTP GET 接口。
   - 支持 Header `Authorization` 或 URL Token 鉴权。
-  - 支持原始文本流 (`--data-binary`) 与 表单上传 (`multipart/form-data`)。
 
-### 🐍 Python 自动化工具链 (`process_ips.py` & `telegram_tool.py`)
-- 📥 **Telegram 极速下载器 (`telegram_tool.py`)**：基于 Telethon / MTProto 协议，支持多连接并发加速下载、断点续传及资源列表预览。
-- ⚡ **自动化测速与同步全流程 (`process_ips.py`)**：
-  - **自动拉取**：自动从指定的 Telegram 频道/群组下载最新的中转 IP 列表。
-  - **提示断网/断代理**：下载完 Telegram IP 列表后提示用户断掉代理，待用户确认断开后再继续后续流程。
-  - **智能合并**：解析本地 IP:Port 列表，并自动抓取现有订阅服务器中的已有 IP 进行合并去重。
-  - **无干扰测速**：调用 `cfst` 工具进行带宽模式（下载速度）或延迟模式（HTTPing）测试。
-  - **自动同步**：挑选测速表现最优的 Top N 个 IP，自动生成结果文件并通过 HTTP PUT 同步更新至订阅 Worker 服务器。
-  - **清理遗留**：测速完毕后彻底清理所有临时测速文件。
+### 🐍 Python 自动化测速与优选工具链
+- ⚡ **WARP Endpoint 优选引擎 (`warp_tester.py`)**：
+  - **RFC 9000 MASQUE/QUIC 深度探测**：向目标发送 1200 字节标准 QUIC Initial 握手报文，测量端点真实 RTT 延迟、丢包率与 1200B MTU 大包可达性。
+  - **全量 Anycast IP 段覆盖**：内置官方全量 IPv4/IPv6 Anycast 网段（`162.159.192.0/24`、`162.159.193.0/24`、`162.159.195.0/24`、`162.159.197.0/24`、`188.114.96.0/24 ~ 188.114.99.0/24` 及域名解析 IP）。
+  - **多线程高并发与多轮统计**：支持 `fast`（快速抽样）、`standard`（标准采样）、`full`（全网段扫描），支持自定义并发线程与探测轮数。
+  - **多格式导出**：支持输出 WireGuard、Sing-box JSON、Clash Meta YAML、WARP-CLI 切换命令。
+- 🌐 **CDN IP 测速与同步工具 (`process_ips.py`)**：
+  - 支持一键调度 CDN IP 测速（带宽模式/延迟模式）或 WARP Endpoint 优选（`--target warp`）。
+  - 自动从 Telegram 频道下载中转 IP，并在测速前提示断开代理确保无干扰测试。
+  - 自动调用 `cfst` 测速并筛选 Top N 个最优 IP 同步推送至 Worker。
+- 📥 **Telegram 极速下载器 (`telegram_tool.py`)**：基于 Telethon / MTProto 协议，支持多连接并发加速下载与断点续传。
 
 ---
 
 ## ⚙️ 环境变量配置说明
-
-项目包含服务端和本地脚本两套配置，请按需设置：
 
 ### 1. Cloudflare Worker 环境变量
 
@@ -48,14 +49,14 @@
 | `TOKEN` | Plain Text | **必填** | - | `/api/update` 自动化接口更新所用的 API Key / Token |
 | `SUB_SOURCE` | Plain Text | 可选 | `https://sub.cmliussss.net` | 远程优选 IP 订阅源地址 |
 
-> 🗄️ **KV 绑定要求**：须添加 KV 命名空间绑定，Variable Name 设为 `KV`。 Worker 会在 KV 中维护 `ADD.txt`、`HISTORY.json` 和 `UPDATE_TIME`。
+> 🗄️ **KV 绑定要求**：须添加 KV 命名空间绑定，Variable Name 设为 `KV`。Worker 会在 KV 中自动维护 `ADD.txt`、`HISTORY.json`、`WARP.txt`、`WARP_HISTORY.json` 及更新时间戳。
 
 ### 2. Python 自动化脚本环境变量
 
-在运行 Python 脚本前，建议在系统终端或 Shell 配置文件 (`~/.bashrc` / `~/.zshrc`) 中设置以下环境变量：
+在系统终端或 Shell 配置文件 (`~/.bashrc` / `~/.zshrc`) 中设置：
 
 ```bash
-# Telegram 客户端 API 凭证 (从 https://my.telegram.org 申请)
+# Telegram 客户端 API 凭证 (从 https://my.telegram.org 申请，仅 Telegram 下载器需要)
 export TG_API_ID="你的_TG_API_ID"
 export TG_API_HASH="你的_TG_API_HASH"
 
@@ -65,156 +66,108 @@ export CF_SUB_TOKEN="你的_WORKER_UPDATE_TOKEN"
 
 ---
 
-## 🐍 Python 自动化运维与优选工具链
+## 🚀 快速使用指南
 
-### 依赖与准备工作
-
-1. **一键智能检查并安装 Python 依赖库**：
-   项目内置了自动依赖检查与安装脚本 [`install_deps.sh`](./install_deps.sh)，会自动检查 `requests` 和 `telethon`，已存在则直接跳过：
-   ```bash
-   ./install_deps.sh
-   ```
-   也可以手动使用 pip 安装：
-   ```bash
-   pip install telethon requests
-   ```
-2. **硬件/可执行文件准备**：
-   - 确保同级目录下存在 CloudflareSpeedTest 二进制文件 `cfst`，并赋予可执行权限 (`chmod +x cfst`)。
-   - 确保存在 `origin-iplist` 目录，用于接收从 Telegram 下载的原始 IP 文件。
-
----
-
-### 1. 自动化 IP 测速与同步工具 (`process_ips.py`)
-
-`process_ips.py` 是全流程集成脚本，一键完成“下载 IP 列表 -> 提示断开代理 -> 合并已有订阅 IP -> cfst 测速 -> 筛选最优 IP -> 呈现结果并确认 -> 上传至订阅服务器”。
+### 1. Cloudflare WARP Endpoint 优选测速 (`warp_tester.py`)
 
 ```bash
-# 1. 默认带宽模式测速 (测试下载速度，保留速度 >= 10 MB/s 的前 20 个 IP，呈现结果后提示确认推送)
-python3 process_ips.py --mode speed --top 20 --min-speed 10.0
+# 1. 快速模式测速 (默认从各 Anycast 网段快速抽样，保留延迟最低、0丢包的前 10 个端点)
+python3 warp_tester.py
 
-# 2. 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
-python3 process_ips.py --mode latency --top 15
+# 2. 全量模式扫描 (对所有 WARP Anycast IPv4 /24 网段全量扫描)
+python3 warp_tester.py --mode full --top 20
 
-# 3. 自动确认模式 (无需手动输入 confirmation，直接上传，适用于 Cron 定时任务)
-python3 process_ips.py --yes
+# 3. 指定自定义端口与并发线程
+python3 warp_tester.py -p 4443,8443,4500,8095 -c 150 --top 15
+
+# 4. 生成不同客户端的配置片段
+python3 warp_tester.py --format singbox    # 生成 Sing-box Outbound JSON
+python3 warp_tester.py --format clash      # 生成 Clash Meta / Mihomo Proxies YAML
+python3 warp_tester.py --format wireguard  # 生成 WireGuard Endpoint 配置
+python3 warp_tester.py --format warp-cli   # 生成 WARP 官方客户端切换命令
+
+# 5. 自动测速并无交互推送到 Cloudflare Worker
+python3 warp_tester.py --yes
 ```
 
-#### 参数说明
-- `--mode`, `-m`：测速模式。`speed`（带宽模式，默认）或 `latency`（延迟模式）。
-- `--top`, `-t`：最终保留并同步的最优 IP 数量（默认：`20`）。
-- `--min-speed`, `-s`：[仅带宽模式] 最小下载速度过滤阈值（MB/s，默认：`10.0`）。
-- `--yes`, `-y`：跳过确认提示，自动推送优选结果到 Cloudflare Workers 订阅服务器（适合自动化或定时任务脚本）。
+#### WARP 测速参数说明
+- `--mode`, `-m`：扫描模式。`fast`（快速抽样，默认）、`standard`（标准采样）、`full`（全量扫描）。
+- `--top`, `-t`：最终保留的最优 Endpoint 数量（默认：`10`）。
+- `--ports`, `-p`：待测试端口列表，逗号分隔（默认：`443,8443,4443,8095,4500,500,1701,2408`）。
+- `--concurrency`, `-c`：并发探测线程数（默认：`100`）。
+- `--rounds`, `-r`：单端点探测轮数（默认：`3` 轮）。
+- `--timeout`：单次探测超时时间（默认：`1.0` 秒）。
+- `--format`：输出或导出格式。`txt`、`wireguard`、`singbox`、`clash`、`warp-cli`。
+- `--ipv6`：开启 IPv6 Anycast 网段探测。
+- `--yes`, `-y`：跳过确认提示，自动推送到 Worker。
 
 ---
 
-### 2. Telegram 资源下载与管理助手 (`telegram_tool.py`)
+### 2. 集成自动化测速与同步工具 (`process_ips.py`)
 
-`telegram_tool.py` 是一个通用的 Telegram 命令行助手，基于 MTProto 协议实现大文件极速并发下载与会话管理。
+`process_ips.py` 支持调度 **CDN 优选** 与 **WARP 优选**：
 
-#### 常见命令用法
-
-**查看最近的对话/频道列表**：
 ```bash
+# 1. CDN 带宽模式测速 (测试下载速度，保留速度 >= 10 MB/s 的前 20 个 IP)
+python3 process_ips.py --target cdn --mode speed --top 20 --min-speed 10.0
+
+# 2. CDN 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
+python3 process_ips.py --target cdn --mode latency --top 15
+
+# 3. WARP Endpoint 优选测速与同步
+python3 process_ips.py --target warp --warp-mode fast --top 10
+
+# 4. 自动推送模式 (适用于 Cron 定时任务)
+python3 process_ips.py --target cdn --yes
+python3 process_ips.py --target warp --yes
+```
+
+---
+
+### 3. Telegram 资源下载与管理助手 (`telegram_tool.py`)
+
+```bash
+# 查看最近的对话/频道列表
 python telegram_tool.py list
-```
 
-**展示指定聊天的消息与文件列表**：
-```bash
-python telegram_tool.py show --id <CHAT_ID> --limit 20
-```
-
-**从 Telegram 频道极速下载文件**：
-```bash
-# 按频道名称搜索并下载包含 "CF中转" 关键字的最新 1 个文件到指定目录
+# 按频道名称搜索并下载包含 "CF中转" 关键字的最新 1 个文件
 python telegram_tool.py download -n 'CF中转' --limit 1 -o ./origin-iplist
-
-# 使用并发通道模式极速下载大文件
-python telegram_tool.py download --id <CHAT_ID> --mode parallel --concurrency 4 --output ./downloads
 ```
 
 ---
 
-## 🚀 Cloudflare Worker 部署指南
+## ☁️ Cloudflare Worker 接口指南
 
-### 方法一：通过 Cloudflare 控制台网页部署
-
-> 📖 **控制台详细操作指引**：
-> 有关在 Cloudflare 控制台创建 Worker / Pages、粘贴 `sub-worker.js` 代码、绑定 KV 数据库、配置环境变量（`ADMIN`、`TOKEN`）与自定义域名的详细图文步骤，请参阅根目录文档 [附录：Cloudflare Zero Trust 控制台完整配置指南](../README.md#附录cloudflare-zero-trust-控制台完整配置指南)。
-
-### 方法二：通过 Wrangler CLI 部署
-
-创建 `wrangler.toml` 文件：
-
-```toml
-name = "preferred-ip-manager"
-main = "sub-worker.js"
-compatibility_date = "2024-01-01"
-
-[vars]
-SUB_SOURCE = "https://sub.cmliussss.net"
-
-kv_namespaces = [
-  { binding = "KV", id = "你的_KV_NAMESPACE_ID" }
-]
-```
-
-命令行设置密钥并部署：
-
-```bash
-npx wrangler secret put ADMIN
-npx wrangler secret put TOKEN
-npx wrangler deploy
-```
-
----
-
-## 📖 Worker 接口指南
-
-### 1. 订阅接口 (`/sub`)
-
-客户端请求格式：
-```http
-GET https://<your-worker-domain>/sub?host=<your-domain>&uuid=<your-uuid>
-```
-返回经过 Base64 编码的 VLESS 节点列表。
-
----
+### 1. 订阅与端点接口
+- **VLESS 节点订阅 (`/sub`)**：
+  ```http
+  GET https://<your-worker-domain>/sub?host=<your-domain>&uuid=<your-uuid>
+  ```
+  返回 Base64 编码的 VLESS / Trojan 节点列表。
+- **WARP 优选端点 (`/warp`)**：
+  ```http
+  GET https://<your-worker-domain>/warp
+  ```
+  返回纯文本格式的 WARP 优选端点列表（`IP:Port#备注`）。
 
 ### 2. Web 管理后台 (`/admin`)
-
-访问 `https://<your-worker-domain>/admin`：
-- 支持使用 `ADMIN` 密码登录。
-- **优选 IP 配置**：按 `地址:端口#备注` 格式在线编辑或追加。
-- **自定义节点配置**：支持追加或覆盖全量节点链接（如 `vless://...`）。
-
----
+- 访问 `https://<your-worker-domain>/admin` 并使用 `ADMIN` 密码登录。
+- **CDN 优选 IP 面板**：在线查看与编辑本地 CDN 优选 IP，支持历史备份恢复。
+- **WARP 优选 Endpoint 面板**：在线查看与编辑本地 WARP 优选端点，支持历史记录恢复。
+- **客户端配置生成器**：一键生成并复制 Sing-box、Clash Meta、WireGuard、WARP-CLI 配置。
 
 ### 3. 自动化更新 API (`/api/update`)
-
-HTTP `PUT` 请求样例：
-
 ```bash
-# 通过 PUT 直接更新/覆盖优选 IP 列表
+# 1. 更新 CDN 优选 IP 列表
 curl -X PUT "https://<your-worker-domain>/api/update?token=YOUR_TOKEN&type=ips&mode=overwrite" \
      -H "Content-Type: text/plain" \
      --data-binary @ip_result.txt
+
+# 2. 更新 WARP 优选端点列表
+curl -X PUT "https://<your-worker-domain>/api/update?token=YOUR_TOKEN&type=warp&mode=overwrite" \
+     -H "Content-Type: text/plain" \
+     --data-binary @warp_result.txt
 ```
-
----
-
-## 📝 数据格式说明
-
-| 数据类型 | 格式要求 | 校验规则示例 |
-| :--- | :--- | :--- |
-| **优选 IP (`ADD.txt`)** | `IP:端口#备注` 或 `域名:端口#备注` | 必须包含端口，端口范围在 `1-65535` |
-| **自定义节点 (`CUSTOM_NODES.txt`)** | 节点协议链接 | 必须为 `vless://`、`trojan://` 等 URI 格式 |
-
----
-
-## 🔐 安全规范与注意事项
-
-1. **凭证安全**：妥善保管 `ADMIN` 密码、`TOKEN` 以及 `TG_API_ID` / `TG_API_HASH`，切勿泄露或提交至公开仓库。
-2. **代理干扰说明**：`process_ips.py` 脚本在从 Telegram 下载完 IP 列表后，会交互式提示用户手动断开/关闭代理，用户确认后再开始 `cfst` 测速，以确保测速结果不受代理节点中转影响。
 
 ---
 
