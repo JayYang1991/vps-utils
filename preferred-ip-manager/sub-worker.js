@@ -99,6 +99,10 @@ async function handleSubRequest(request, env) {
             const match = line.match(/@([^?#]+)/);
             if (match) {
                 const addressPort = match[1];
+                const address = addressPort.split(':')[0].trim().toLowerCase();
+                if (address === 'example.com' || address === '0.0.0.0' || address === '127.0.0.1') {
+                    continue;
+                }
                 const remarkMatch = line.match(/#(.+)$/);
                 const remark = remarkMatch ? decodeURIComponent(remarkMatch[1]) : '';
                 allIps.add(`${addressPort}#${remark}`);
@@ -106,7 +110,10 @@ async function handleSubRequest(request, env) {
                 otherNodes.push(line);
             }
         } else if (line.includes(':')) {
-            allIps.add(line);
+            const address = line.split(':')[0].trim().toLowerCase();
+            if (address !== 'example.com' && address !== '0.0.0.0' && address !== '127.0.0.1') {
+                allIps.add(line);
+            }
         }
     }
 

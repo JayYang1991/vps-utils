@@ -7,6 +7,7 @@ import sys
 import collections
 import re
 import argparse
+import ipaddress
 import requests
 
 # --- 配置区 ---
@@ -14,6 +15,17 @@ TG_TOOL = f'"{sys.executable}" ./telegram_tool.py'
 DOWNLOAD_DIR = "./origin-iplist"
 CFST_BIN = "./cfst"
 FINAL_TXT = "ip_result.txt"
+
+def is_valid_ip(ip_str):
+    """验证是否为有效的 IPv4 或 IPv6 地址/网段（过滤域名及非法字符串）"""
+    if not ip_str or not isinstance(ip_str, str):
+        return False
+    clean_ip = ip_str.strip().strip('[]')
+    try:
+        ipaddress.ip_network(clean_ip, strict=False)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 def run_command(cmd, description):
     print(f"==> {description}...")
@@ -40,6 +52,9 @@ def parse_source_file(file_path):
                 ip = parts[0].strip()
                 full_port_str = parts[1].strip()
                 
+                if not is_valid_ip(ip):
+                    continue
+
                 numeric_port_match = re.search(r'^(\d+)', full_port_str)
                 if numeric_port_match:
                     numeric_port = numeric_port_match.group(1)
@@ -102,20 +117,27 @@ def fetch_sub_ips():
         if resp.status_code == 200:
             import base64
             import urllib.parse
-            # 订阅服务器返回的是 Base64 编码的 VLESS 列表
+            # 订阅服务器返回的是 Base64 编码的 VLESS / Trojan 列表
             content = base64.b64decode(resp.text).decode('utf-8')
             lines = content.splitlines()
             ips = []
             for line in lines:
                 line = line.strip()
-                if line.startswith("vless://"):
+                if line.startswith("vless://") or line.startswith("trojan://"):
                     # 提取 vless://uuid@address:port?...#remark
                     match = re.search(r'@([^?#]+).*#(.+)$', line)
                     if match:
                         addr_port = match.group(1)
                         # 解码 URL 编码的备注
                         remark = urllib.parse.unquote(match.group(2))
-                        ips.append(f"{addr_port}#{remark}")
+                        if ':' in addr_port:
+                            addr = addr_port.split(':', 1)[0].strip()
+                            if is_valid_ip(addr):
+                                ips.append(f"{addr_port}#{remark}")
+                elif ':' in line:
+                    addr = line.split(':', 1)[0].strip()
+                    if is_valid_ip(addr):
+                        ips.append(line)
             print(f"✅ 从订阅服务器获取到 {len(ips)} 个现有 IP")
             return ips
         else:
@@ -147,7 +169,9 @@ def fetch_history_ips():
                     if isinstance(record, dict) and "ips" in record:
                         for line in record.get("ips", []):
                             if line and ":" in line:
-                                history_ips.append(line.strip())
+                                addr = line.split(':', 1)[0].strip()
+                                if is_valid_ip(addr):
+                                    history_ips.append(line.strip())
                 print(f"✅ 从订阅服务器获取到 {len(history_ips)} 个历史 IP 记录")
                 return history_ips
         else:
@@ -206,6 +230,9 @@ def main():
             ip = parts[0].strip()
             full_port_str = parts[1].strip()
             
+            if not is_valid_ip(ip):
+                continue
+
             numeric_port_match = re.search(r'^(\d+)', full_port_str)
             if numeric_port_match:
                 port = numeric_port_match.group(1)
@@ -223,6 +250,9 @@ def main():
             ip = parts[0].strip()
             full_port_str = parts[1].strip()
             
+            if not is_valid_ip(ip):
+                continue
+
             numeric_port_match = re.search(r'^(\d+)', full_port_str)
             if numeric_port_match:
                 port = numeric_port_match.group(1)
@@ -230,6 +260,14 @@ def main():
                 if not any(ip == e[0] for e in groups[port]):
                     groups[port].append((ip, full_port_str))
                     history_added += 1
+
+    # 过滤掉没有有效 IP 的端口
+    filtered_groups = collections.defaultdict(list)
+    for port, entries in groups.items():
+        valid_entries = [e for e in entries if is_valid_ip(e[0])]
+        if valid_entries:
+            filtered_groups[port] = valid_entries
+    groups = filtered_groups
 
     total_ips = sum(len(v) for v in groups.values())
     print(f"==> 汇总 IP 数据池完成: TG 下载源 + 现有订阅 IP (新增 {sub_added} 个) + 历史 IP (新增 {history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
