@@ -742,9 +742,25 @@ function getAdminHTML(host, adminPath) {
       const token = localStorage.getItem('vless_token');
       const upstream = document.getElementById('cfg-upstream').value.trim();
       const resBox = document.getElementById('upstream-test-res');
+      const btn = document.querySelector("button[onclick='testUpstreamLive()']");
+
+      if (!upstream) {
+        resBox.className = 'test-result-box';
+        resBox.style.display = 'block';
+        resBox.innerText = 'ℹ️ 未填写住宅代理地址（留空表示直连模式，无需测试）。';
+        return;
+      }
+
       resBox.className = 'test-result-box';
       resBox.style.display = 'block';
-      resBox.innerText = '正在向住宅代理发起握手测试，请稍候...';
+      resBox.innerText = '⏳ 正在向住宅代理发起握手与连通性测试 (限时 60 秒)，请稍候...';
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = '⏳ 测试中...';
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 65000);
 
       try {
         const res = await fetch('${adminPath}/api/test-upstream', {
@@ -753,19 +769,31 @@ function getAdminHTML(host, adminPath) {
             'Content-Type': 'application/json',
             'Authorization': 'Bearer ' + token
           },
-          body: JSON.stringify({ upstreamProxy: upstream })
+          body: JSON.stringify({ upstreamProxy: upstream }),
+          signal: controller.signal
         });
+        clearTimeout(timeoutId);
         const data = await res.json();
         if (data.success) {
           resBox.className = 'test-result-box success';
           resBox.innerText = '✅ ' + data.message;
         } else {
           resBox.className = 'test-result-box error';
-          resBox.innerText = '❌ ' + data.message;
+          resBox.innerText = '❌ ' + (data.message || data.error || '测试失败');
         }
       } catch (e) {
+        clearTimeout(timeoutId);
         resBox.className = 'test-result-box error';
-        resBox.innerText = '❌ 测试接口异常: ' + e.message;
+        if (e.name === 'AbortError') {
+          resBox.innerText = '❌ 连接超时：住宅代理服务器未在规定时间内响应，请检查 IP/域名/端口 是否开放或防火墙策略。';
+        } else {
+          resBox.innerText = '❌ 请求异常: ' + e.message;
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = '⚡ 测试连通性';
+        }
       }
     }
 

@@ -283,8 +283,14 @@ async function connectViaHttpConnect(proxy, targetHost, targetPort) {
     let responseBuffer = new Uint8Array(0);
     let headerEndIndex = -1;
 
+    // 异步安全读取
     while (headerEndIndex === -1) {
-      const { value, done } = await reader.read();
+      const readPromise = reader.read();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('HTTP 代理握手读取超时 (60s)')), 60000)
+      );
+
+      const { value, done } = await Promise.race([readPromise, timeoutPromise]);
       if (done || !value) {
         throw new Error('HTTP proxy closed connection during CONNECT handshake');
       }
@@ -334,14 +340,19 @@ async function connectViaHttpConnect(proxy, targetHost, targetPort) {
 }
 
 /**
- * 精确从 Reader 中读取指定长度的字节
+ * 精确从 Reader 中读取指定长度的字节 (支持 60 秒超时保护)
  */
-async function readExactBytes(reader, length) {
+async function readExactBytes(reader, length, timeoutMs = 60000) {
   const result = new Uint8Array(length);
   let offset = 0;
 
   while (offset < length) {
-    const { value, done } = await reader.read();
+    const readPromise = reader.read();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`读取响应超时 (${timeoutMs / 1000}s)`)), timeoutMs)
+    );
+
+    const { value, done } = await Promise.race([readPromise, timeoutPromise]);
     if (done || !value) {
       throw new Error(`Stream closed unexpectedly while reading ${length} bytes (got ${offset} bytes)`);
     }
@@ -353,8 +364,6 @@ async function readExactBytes(reader, length) {
     } else {
       result.set(value.subarray(0, needed), offset);
       offset += needed;
-      // 注意：由于 reader.read() 流式特性，握手阶段多余字节通常不会出现，
-      // 若出现会被丢弃；对于 CONNECT 复杂情况在 HTTP 中单独处理。
     }
   }
 
@@ -408,11 +417,12 @@ function getSocks5ErrorMessage(code) {
 }
 
 /**
- * 测试上游代理可用性与延迟（连接到测试目标 cloudflare.com:80）
+ * 测试上游代理可用性与延迟（连接到测试目标 www.google.com:80，自带全局 60 秒超时拦截）
  * @param {string} proxyString 代理配置
+ * @param {number} timeoutMs 超时时间（默认 60000ms）
  * @returns {Promise<{ success: boolean, latencyMs?: number, message: string }>}
  */
-export async function testUpstreamProxy(proxyString) {
+export async function testUpstreamProxy(proxyString, timeoutMs = 60000) {
   const start = Date.now();
   try {
     const proxy = parseProxyString(proxyString);
@@ -420,18 +430,27 @@ export async function testUpstreamProxy(proxyString) {
       return { success: false, message: '无法解析代理配置格式，请检查语法' };
     }
 
-    const { socket } = await createUpstreamConnection('1.1.1.1', 80, proxyString, false);
-    const latency = Date.now() - start;
+    const testExecution = (async () => {
+      // 使用中立的外部公网目标（避免使用 1.1.1.1 / Cloudflare 自身 IP 触发自环路阻断）
+      const { socket } = await createUpstreamConnection('www.google.com', 80, proxyString, false);
+      const latency = Date.now() - start;
 
-    try {
-      socket.close();
-    } catch (_) {}
+      try {
+        socket.close();
+      } catch (_) {}
 
-    return {
-      success: true,
-      latencyMs: latency,
-      message: `代理握手成功！类型: ${proxy.protocol.toUpperCase()}, 延迟: ${latency}ms, 主机: ${proxy.host}:${proxy.port}`,
-    };
+      return {
+        success: true,
+        latencyMs: latency,
+        message: `代理握手成功！类型: ${proxy.protocol.toUpperCase()}, 延迟: ${latency}ms, 代理服务器: ${proxy.host}:${proxy.port}`,
+      };
+    })();
+
+    const timeoutExecution = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`握手超时 (${timeoutMs / 1000}s)，代理服务器未响应或连接受阻`)), timeoutMs)
+    );
+
+    return await Promise.race([testExecution, timeoutExecution]);
   } catch (err) {
     return {
       success: false,
@@ -439,3 +458,4 @@ export async function testUpstreamProxy(proxyString) {
     };
   }
 }
+
