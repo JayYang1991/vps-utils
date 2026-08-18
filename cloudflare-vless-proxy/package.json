@@ -1,0 +1,26 @@
+{
+  "name": "cloudflare-vless-proxy",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker providing VLESS over WebSocket with Residential Proxy Upstream, KV path management, and Web Admin UI.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "cloudflare-worker",
+    "vless",
+    "residential-proxy",
+    "socks5",
+    "http-proxy",
+    "websocket"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.111.0"
+  }
+}
