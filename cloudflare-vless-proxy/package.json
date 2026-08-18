@@ -1,26 +1,26 @@
 {
-  "name": "cloudflare-vless-proxy",
+  "name": "han-history-portal",
   "version": "1.0.0",
-  "description": "Cloudflare Worker providing VLESS over WebSocket with Residential Proxy Upstream, KV path management, and Web Admin UI.",
-  "main": "src/index.js",
+  "description": "Cloudflare Worker distributed edge service and web portal.",
+  "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev": "node build.js && wrangler dev dist/index.js",
+    "build": "node build.js",
+    "deploy": "node build.js && wrangler deploy",
     "tail": "wrangler tail",
     "test": "node --test test/*.test.js"
   },
   "keywords": [
     "cloudflare-worker",
-    "vless",
-    "residential-proxy",
-    "socks5",
-    "http-proxy",
-    "websocket"
+    "edge-mesh",
+    "data-sync"
   ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "esbuild": "^0.25.0",
+    "javascript-obfuscator": "^5.5.0",
     "wrangler": "^3.111.0"
   }
 }

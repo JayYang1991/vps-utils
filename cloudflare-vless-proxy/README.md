@@ -129,9 +129,10 @@ id = "4a5b6c7d8e9f0123456789abcdef0123"
 
 ```toml
 name = "han-history-portal"
-main = "src/index.js"
+main = "dist/index.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
+minify = true
 
 [vars]
 DEFAULT_UUID = "d342d11e-d424-4583-b36e-524ab1f0afa4"
@@ -153,11 +154,16 @@ id = "4a5b6c7d8e9f0123456789abcdef0123" # <--- 替换为你实际生成的 KV ID
 
 ---
 
-### 步骤 5：一键部署上线
+### 步骤 5：代码自动混淆并一键部署上线
+
+项目已配置好自动化编译与深度代码混淆管线（自动将所有协议逻辑、字符串进行 AST 混淆、十六进制变量重命名与 Base64 编码，生成纯净脱敏的 `dist/index.js` 上传至 Cloudflare 边缘）：
 
 在终端执行部署命令：
 ```bash
-npx wrangler deploy
+npm run deploy
+# 或者分步执行：
+# npm run build    # 生成深度混淆产物 dist/index.js
+# npx wrangler deploy
 ```
 
 部署成功后，终端将输出你的 Worker 公网服务地址，例如：
