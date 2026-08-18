@@ -256,10 +256,14 @@ async function connectViaSocks5(proxy, targetHost, targetPort) {
  */
 async function connectViaHttpConnect(proxy, targetHost, targetPort) {
   const connect = await getConnectFn();
-  const socket = connect({
+  const socketOpts = {
     hostname: proxy.host,
     port: proxy.port,
-  });
+  };
+  if (proxy.protocol === 'https' || proxy.secureTransport === 'on') {
+    socketOpts.secureTransport = 'on';
+  }
+  const socket = connect(socketOpts);
 
   const reader = socket.readable.getReader();
   const writer = socket.writable.getWriter();
@@ -431,8 +435,8 @@ export async function testUpstreamProxy(proxyString, timeoutMs = 60000) {
     }
 
     const testExecution = (async () => {
-      // 使用中立的外部公网目标（避免使用 1.1.1.1 / Cloudflare 自身 IP 触发自环路阻断）
-      const { socket } = await createUpstreamConnection('www.google.com', 80, proxyString, false);
+      // 使用 443 (HTTPS) 作为探测目标，满足 HTTP 代理对 CONNECT 必须为 SSL/443 安全端口的规范
+      const { socket } = await createUpstreamConnection('www.google.com', 443, proxyString, false);
       const latency = Date.now() - start;
 
       try {
