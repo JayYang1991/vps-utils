@@ -7,9 +7,14 @@ and saves the TOP 20 residential proxy endpoints into result files.
 """
 
 import sys
+import os
 import argparse
 import logging
 from typing import List
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
 from fetcher import fetch_vpngate_csv, parse_vpngate_csv, VpnGateServer
 from filter import filter_servers

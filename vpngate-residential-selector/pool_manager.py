@@ -9,10 +9,15 @@ Maintains TOP 20 residential proxies for US, JP, HK, SG, KR, DE, and AU with:
 """
 
 import os
+import sys
 import json
 import logging
 from typing import Dict, List, Set, Any, Optional
 from datetime import datetime
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
 from fetcher import fetch_vpngate_csv, parse_vpngate_csv, VpnGateServer
 from filter import filter_servers
@@ -47,7 +52,11 @@ class ResidentialPoolManager:
         threads: int = 30,
         strict_residential: bool = False,
     ):
-        self.output_dir = output_dir
+        if not os.path.isabs(output_dir):
+            self.output_dir = os.path.join(SCRIPT_DIR, output_dir)
+        else:
+            self.output_dir = output_dir
+
         self.top_per_country = top_per_country
         self.proxy_type = proxy_type
         self.timeout = timeout

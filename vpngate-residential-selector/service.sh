@@ -28,77 +28,58 @@ check_root() {
     fi
 }
 
+INSTALL_DIR="/usr/local/bin/vpngate-residential-selector"
+BIN_DIR="/usr/local/bin"
+SYSTEMD_DIR="/etc/systemd/system"
+if [ "$EUID" -ne 0 ]; then
+    INSTALL_DIR="${HOME}/.local/bin/vpngate-residential-selector"
+    BIN_DIR="${HOME}/.local/bin"
+    SYSTEMD_DIR="${HOME}/.config/systemd/user"
+fi
+
 install_service() {
-    check_root "install"
-    info "正在安装 ${SERVICE_NAME} Systemd 守护服务..."
-
-    # 替换服务文件中的工作目录与执行路径为当前脚本所在绝对路径
-    mkdir -p "${SCRIPT_DIR}/results"
-    
-    cat << SERVICE_EOF > "${SYSTEMD_DIR}/${SERVICE_FILE}"
-[Unit]
-Description=VPNGATE Multi-Country Residential Proxy Selector & Health Daemon
-After=network.target network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=${SCRIPT_DIR}
-ExecStart=$(which python3) ${SCRIPT_DIR}/daemon.py --interval 300 --top-per-country 20
-Restart=always
-RestartSec=10
-KillMode=process
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-SERVICE_EOF
-
-    systemctl daemon-reload
-    systemctl enable "${SERVICE_NAME}"
-    systemctl restart "${SERVICE_NAME}"
-
-    info "✅ ${SERVICE_NAME} 服务已成功安装并已设置为开机自启！"
-    echo ""
-    systemctl status "${SERVICE_NAME}" --no-pager || true
+    "${SCRIPT_DIR}/install.sh"
 }
 
+SYSTEMCTL_CMD="systemctl"
+JOURNALCTL_CMD="journalctl"
+if [ "$EUID" -ne 0 ]; then
+    SYSTEMCTL_CMD="systemctl --user"
+    JOURNALCTL_CMD="journalctl --user"
+fi
+
 start_service() {
-    check_root "start"
-    systemctl start "${SERVICE_NAME}"
+    ${SYSTEMCTL_CMD} start "${SERVICE_NAME}"
     info "✅ ${SERVICE_NAME} 服务已启动"
 }
 
 stop_service() {
-    check_root "stop"
-    systemctl stop "${SERVICE_NAME}"
+    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}"
     info "🛑 ${SERVICE_NAME} 服务已停止"
 }
 
 restart_service() {
-    check_root "restart"
-    systemctl restart "${SERVICE_NAME}"
+    ${SYSTEMCTL_CMD} restart "${SERVICE_NAME}"
     info "🔄 ${SERVICE_NAME} 服务已重启"
 }
 
 status_service() {
-    systemctl status "${SERVICE_NAME}" --no-pager
+    ${SYSTEMCTL_CMD} status "${SERVICE_NAME}" --no-pager
 }
 
 show_logs() {
-    journalctl -u "${SERVICE_NAME}" -f -n 50
+    ${JOURNALCTL_CMD} -u "${SERVICE_NAME}" -f -n 50
 }
 
 uninstall_service() {
-    check_root "uninstall"
     info "正在卸载 ${SERVICE_NAME} 服务..."
-    systemctl stop "${SERVICE_NAME}" || true
-    systemctl disable "${SERVICE_NAME}" || true
+    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" || true
+    ${SYSTEMCTL_CMD} disable "${SERVICE_NAME}" || true
     rm -f "${SYSTEMD_DIR}/${SERVICE_FILE}"
-    systemctl daemon-reload
-    info "✅ ${SERVICE_NAME} 服务已彻底卸载！"
+    rm -f "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-service"
+    rm -rf "${INSTALL_DIR}"
+    ${SYSTEMCTL_CMD} daemon-reload
+    info "✅ ${SERVICE_NAME} 服务与 ${BIN_DIR} 依赖文件已彻底清理卸载！"
 }
 
 usage() {

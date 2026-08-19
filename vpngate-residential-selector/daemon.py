@@ -7,11 +7,16 @@ across 7 target countries (US, JP, HK, SG, KR, DE, AU).
 """
 
 import sys
+import os
 import time
 import signal
 import argparse
 import logging
 from datetime import datetime
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
 from pool_manager import ResidentialPoolManager, TARGET_COUNTRIES
 
