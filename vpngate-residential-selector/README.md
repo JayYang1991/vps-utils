@@ -32,18 +32,56 @@
 6. **🪶 零第三方依赖 (Zero External Dependencies)**：
    - 基于 Python 3.10+ 标准库构建，无需 `pip install` 任何第三方包，开箱即用。
 
+## 🔄 Systemd 后台服务与 7 国智能保活守护 (Daemon Service)
+
+针对生产运维场景，项目内置了 **7国住宅代理智能保活守护进程 (`daemon.py`)** 与 **Systemd 服务管理脚本 (`service.sh`)**：
+
+### 🎯 核心守护逻辑
+1. **7大核心国家独立池 (每国维护 TOP 20)**：
+   - 包含：**美国 (US)**、**日本 (JP)**、**香港 (HK)**、**新加坡 (SG)**、**韩国 (KR)**、**德国 (DE)**、**澳大利亚 (AU)**。
+2. **每隔 5 分钟 (300s) 周期性巡检**：
+   - **全量可用跳过拉取**：每次检测开始先快速探活当前池中所有 IP，若全部可用，**立即跳过从 VPNGATE API 刷新**，极大节省带宽并维持长连接稳定。
+   - **失效 1 对 1 热替换**：若某个国家的某个代理失活断连，自动拉取 VPNGATE 最新列表，在该国家候选节点中**挑选最优且不与已有 IP 重复的 1 个节点完成热替换**。
+3. **分国独立文件输出**：
+   - 自动生成 `results/proxies_US.txt`、`results/proxies_JP.txt`、`results/proxies_HK.txt`、`results/proxies_SG.txt`、`results/proxies_KR.txt`、`results/proxies_DE.txt`、`results/proxies_AU.txt` 及全量 `results/proxies.txt`。
+
 ---
 
-## 🚀 快速上手
+### 🛠️ Systemd 服务一键管理
 
-### 1. 直接运行 (默认选出 TOP 20 住宅代理)
+使用配套的 [`service.sh`](file:///home/jason/code/vps-utils/vpngate-residential-selector/service.sh) 脚本管理系统后台服务：
 
 ```bash
-cd vpngate-residential-selector
-python3 main.py
+# 1. 一键安装并配置为开机自启系统服务
+sudo ./service.sh install
+
+# 2. 查看服务状态与当前 7 国节点统计
+./service.sh status
+
+# 3. 实时追踪查看 5 分钟巡检与替换日志
+./service.sh logs
+
+# 4. 重启 / 停止 / 卸载
+sudo ./service.sh restart
+sudo ./service.sh stop
+sudo ./service.sh uninstall
 ```
 
-### 2. 命令行参数详解
+---
+
+## 🚀 快速上手 (手动运行与单次测试)
+
+### 1. 运行 7 国守护进程 (单次测试模式)
+```bash
+python3 daemon.py --run-once
+```
+
+### 2. 运行常规 CLI 单次测速与优选
+```bash
+python3 main.py -n 20
+```
+
+### 3. 命令行参数详解 (main.py / daemon.py)
 
 ```bash
 python3 main.py [选项]
@@ -64,23 +102,6 @@ python3 main.py [选项]
 | `--save-ovpn` | - | `False` | 是否同时导出 OpenVPN `.ovpn` 配置文件 |
 | `--strict-residential` | - | `False` | 启用严格住宅 ISP 签名匹配 |
 
-### 3. 常用示例
-
-#### 示例 A：仅筛选日本 (JP) 和韩国 (KR) 的高带宽住宅节点
-```bash
-python3 main.py -c JP,KR --min-speed 50 -n 10
-```
-
-#### 示例 B：导出 OpenVPN 配置文件并输出 HTTP 代理格式
-```bash
-python3 main.py -n 20 --save-ovpn -p http -o my_proxies
-```
-
-#### 示例 C：生成 Cloudflare Worker 上游直连格式 (`ip:port`)
-```bash
-python3 main.py -p direct -f ../cloudflare-vless-proxy/residential_upstream.txt
-```
-
 ---
 
 ## 🔗 与 Cloudflare VLESS 代理联动
@@ -88,20 +109,6 @@ python3 main.py -p direct -f ../cloudflare-vless-proxy/residential_upstream.txt
 本项目生成的住宅 SOCKS5 / HTTP 代理全路径，可直接复制填入 `cloudflare-vless-proxy` 项目的管理后台（`/admin`）中的 **上游中继网关 (`DEFAULT_UPSTREAM_GATEWAY`)**。
 
 这样 Cloudflare Worker 会将所有客户端流量通过选出的日本/韩国等住宅宽带中继落地，实现**真实住宅家庭宽带出口 IP**，彻底规避数据中心机房 IP 限制！
-
----
-
-## ⏰ Linux 定时任务自动更新 (Crontab)
-
-设置每天凌晨或每 6 小时自动运行测速更新住宅代理列表：
-
-```bash
-# 编辑 crontab
-crontab -e
-
-# 每 6 小时自动执行一次并更新结果
-0 */6 * * * cd /home/jason/code/vps-utils/vpngate-residential-selector && python3 main.py -n 20 >> /tmp/vpngate_cron.log 2>&1
-```
 
 ---
 

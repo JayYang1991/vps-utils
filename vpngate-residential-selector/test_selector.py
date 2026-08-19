@@ -146,6 +146,44 @@ class TestVpnGateSelector(unittest.TestCase):
         self.assertEqual(get_country_flag("JP"), "🇯🇵")
         self.assertEqual(get_country_flag("KR"), "🇰🇷")
 
+    def test_pool_manager_state_and_skip_refresh(self):
+        import shutil
+        from pool_manager import ResidentialPoolManager, TARGET_COUNTRIES
+        test_dir = "/home/jason/code/vps-utils/vpngate-residential-selector/results/test_pool"
+        if os.path.exists(test_dir):
+            shutil.rmtree(test_dir, ignore_errors=True)
+        os.makedirs(test_dir, exist_ok=True)
+
+        manager = ResidentialPoolManager(output_dir=test_dir, top_per_country=2)
+        self.assertEqual(len(manager.pools), len(TARGET_COUNTRIES))
+        self.assertEqual(len(manager.pools["JP"]), 0)
+
+        # Add a dummy node to JP
+        s_jp = VpnGateServer(
+            hostname="jp1", ip="219.100.37.13", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+            country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+            total_users=1, total_traffic=1, operator="", message=""
+        )
+        r_jp = BenchmarkResult(
+            server=s_jp, reachable=True, real_latency_ms=10.0, min_latency_ms=9.0,
+            max_latency_ms=11.0, jitter_ms=2.0, packet_loss_rate=0.0,
+            tested_port=443, composite_score=1000.0
+        )
+        manager.pools["JP"].append(r_jp)
+        manager.save_state_and_export()
+
+        # Reload manager from saved state
+        manager2 = ResidentialPoolManager(output_dir=test_dir, top_per_country=2)
+        self.assertEqual(len(manager2.pools["JP"]), 1)
+        self.assertEqual(manager2.pools["JP"][0].server.ip, "219.100.37.13")
+
+        # Verify active IPs set
+        active_ips = manager2.get_all_active_ips()
+        self.assertIn("219.100.37.13", active_ips)
+
+        if os.path.exists(test_dir):
+            shutil.rmtree(test_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

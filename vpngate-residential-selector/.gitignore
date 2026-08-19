@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 results/test_output/
 .venv/
+results/test_pool/

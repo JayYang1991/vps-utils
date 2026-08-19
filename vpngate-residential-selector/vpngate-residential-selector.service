@@ -1,0 +1,24 @@
+[Unit]
+Description=VPNGATE Multi-Country Residential Proxy Selector & Health Daemon
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/jason/code/vps-utils/vpngate-residential-selector
+ExecStart=/usr/bin/python3 /home/jason/code/vps-utils/vpngate-residential-selector/daemon.py --interval 300 --top-per-country 20
+Restart=always
+RestartSec=10
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+# Sandboxing & Security hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/jason/code/vps-utils/vpngate-residential-selector/results
+
+[Install]
+WantedBy=multi-user.target
