@@ -59,8 +59,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--top-per-country", "-n",
         type=int,
-        default=20,
-        help="每个国家精选维护的最优节点数 (默认: 20)"
+        default=5,
+        help="每个国家精选维护的最优节点数 (默认: 5)"
     )
 
     parser.add_argument(

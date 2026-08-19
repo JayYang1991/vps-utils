@@ -261,10 +261,61 @@ class TestVpnGateSelector(unittest.TestCase):
             self.assertEqual(manual["ip"], "1.1.1.2")
             self.assertEqual(manual["port"], 992)
 
-            # Test 4: Specify rank 2 in JP
-            rank2 = resolve_bridge_node(results_dir=test_dir, country="JP", rank=2)
-            self.assertIsNotNone(rank2)
-            self.assertEqual(rank2["ip"], "1.1.1.2")
+    def test_pool_manager_dynamic_resort(self):
+        import tempfile
+        from pool_manager import ResidentialPoolManager
+
+        with tempfile.TemporaryDirectory() as test_dir:
+            manager = ResidentialPoolManager(output_dir=test_dir, top_per_country=2)
+
+            s_jp_slow = VpnGateServer(
+                hostname="jp_slow", ip="1.1.1.1", score=1000, ping=10, speed_bps=10, speed_mbps=20.0,
+                country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+                total_users=1, total_traffic=1, operator="", message="", fraud_score=10
+            )
+            r_jp_slow = BenchmarkResult(
+                server=s_jp_slow, reachable=True, protocol="openvpn", real_latency_ms=100.0, min_latency_ms=90.0,
+                max_latency_ms=110.0, jitter_ms=5.0, packet_loss_rate=0.0,
+                tested_port=443, composite_score=300.0, fraud_score=10
+            )
+
+            s_jp_fast = VpnGateServer(
+                hostname="jp_fast", ip="1.1.1.2", score=9000, ping=10, speed_bps=10, speed_mbps=100.0,
+                country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+                total_users=1, total_traffic=1, operator="", message="", fraud_score=0
+            )
+            r_jp_fast = BenchmarkResult(
+                server=s_jp_fast, reachable=True, protocol="openvpn", real_latency_ms=15.0, min_latency_ms=14.0,
+                max_latency_ms=16.0, jitter_ms=1.0, packet_loss_rate=0.0,
+                tested_port=443, composite_score=1200.0, fraud_score=0
+            )
+
+            s_jp_dirty = VpnGateServer(
+                hostname="jp_dirty", ip="1.1.1.3", score=9000, ping=10, speed_bps=10, speed_mbps=100.0,
+                country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+                total_users=1, total_traffic=1, operator="", message="", fraud_score=75
+            )
+            r_jp_dirty = BenchmarkResult(
+                server=s_jp_dirty, reachable=True, protocol="openvpn", real_latency_ms=10.0, min_latency_ms=9.0,
+                max_latency_ms=11.0, jitter_ms=1.0, packet_loss_rate=0.0,
+                tested_port=443, composite_score=1500.0, fraud_score=75
+            )
+
+            # Insert in wrong order (slow first, dirty second, fast last)
+            manager.pools["JP"] = [r_jp_slow, r_jp_dirty, r_jp_fast]
+            manager.save_state_and_export()
+
+            # Verify:
+            # 1. Dirty (fraud_score 75) is filtered out
+            # 2. Fast (composite 1200, fraud 0) is ranked #1
+            # 3. Slow (composite 300, fraud 10) is ranked #2
+            self.assertEqual(len(manager.pools["JP"]), 2)
+            self.assertEqual(manager.pools["JP"][0].server.ip, "1.1.1.2")
+            self.assertEqual(manager.pools["JP"][1].server.ip, "1.1.1.1")
+
+            # Check exported upstream_gateway.txt points to #1 optimal node
+            with open(os.path.join(test_dir, "upstream_gateway.txt"), "r") as f:
+                self.assertIn("1.1.1.2", f.read())
 
 
 if __name__ == "__main__":

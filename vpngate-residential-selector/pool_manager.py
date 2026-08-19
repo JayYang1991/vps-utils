@@ -46,7 +46,7 @@ class ResidentialPoolManager:
     def __init__(
         self,
         output_dir: str = "results",
-        top_per_country: int = 20,
+        top_per_country: int = 5,
         proxy_type: str = "socks5",
         timeout: float = 2.5,
         samples: int = 2,
@@ -137,8 +137,30 @@ class ResidentialPoolManager:
             logger.warning(f"⚠️ 读取历史状态文件失败: {e}")
             return False
 
+    def resort_and_trim_pools(self) -> None:
+        """
+        Strictly re-ranks every country's pool according to the standard composite rules:
+        1. Only keep nodes with fraud_score < 20 (or -1 if not checked).
+        2. Re-sort by: (-composite_score, fraud_score, real_latency_ms) where low threat score gets heavy bonus.
+        3. Trim each country's pool to top_per_country (e.g. TOP 5).
+        """
+        for country_code in list(self.pools.keys()):
+            valid_nodes = [
+                r for r in self.pools[country_code]
+                if r.fraud_score < 20 or r.fraud_score < 0
+            ]
+            valid_nodes.sort(key=lambda x: (
+                -x.composite_score,
+                x.fraud_score if x.fraud_score >= 0 else 999,
+                x.real_latency_ms
+            ))
+            self.pools[country_code] = valid_nodes[:self.top_per_country]
+
     def save_state_and_export(self) -> None:
         """Saves current pool state to JSON and exports all per-country and aggregated proxy files."""
+        # Ensure pools are strictly re-sorted and trimmed before exporting
+        self.resort_and_trim_pools()
+
         timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # 1. Prepare JSON state
@@ -230,17 +252,40 @@ class ResidentialPoolManager:
 
         # 4. Export top 1 upstream gateway for cloudflare-vless-proxy: results/upstream_gateway.txt
         if all_flattened_nodes:
-            best_node = min(all_flattened_nodes, key=lambda x: x.real_latency_ms)
+            all_flattened_nodes.sort(key=lambda x: (
+                -x.composite_score,
+                x.fraud_score if x.fraud_score >= 0 else 999,
+                x.real_latency_ms
+            ))
+            best_node = all_flattened_nodes[0]
             gateway_path = os.path.join(self.output_dir, "upstream_gateway.txt")
             with open(gateway_path, "w", encoding="utf-8") as f:
                 f.write(f"{best_node.socks5_url}\n")
 
-        # 5. Export Markdown summary: results/summary.md
+        # 5. Export Sing-box Outbounds configuration: singbox_outbounds.json
+        singbox_path = os.path.join(self.output_dir, "singbox_outbounds.json")
+        singbox_outbounds = []
+        for i, res in enumerate(all_flattened_nodes, 1):
+            flag = get_country_flag(res.server.country_short)
+            tag = f"{flag} {res.server.country_short} - {res.server.ip}"
+            singbox_outbounds.append({
+                "type": "socks",
+                "tag": tag,
+                "server": res.server.ip,
+                "server_port": res.tested_port,
+                "version": "5",
+                "username": "vpn",
+                "password": "vpn"
+            })
+        with open(singbox_path, "w", encoding="utf-8") as f:
+            json.dump({"outbounds": singbox_outbounds}, f, indent=2, ensure_ascii=False)
+
+        # 6. Export Markdown summary: results/summary.md
         md_path = os.path.join(self.output_dir, "summary.md")
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(f"# 🌐 VPNGATE 7国住宅 IP 代理池状态看板\n\n")
             f.write(f"> ⏱️ **最后巡检更新时间**：`{timestamp_str}`  \n")
-            f.write(f"> 📊 **当前活跃代理总数**：`{len(all_flattened_nodes)}` 个优质住宅节点\n\n")
+            f.write(f"> 📊 **当前活跃代理总数**：`{len(all_flattened_nodes)}` 个优质纯净住宅节点 (Scamalytics威胁分<20)\n\n")
 
             for country_code, country_zh in TARGET_COUNTRIES.items():
                 res_list = self.pools.get(country_code, [])
@@ -250,17 +295,18 @@ class ResidentialPoolManager:
                     f.write("*(暂无在线节点)*\n\n")
                     continue
 
-                f.write("| 排名 | IP:端口 | 实测延迟 | 官方带宽 | 综合评分 | SOCKS5 代理全路径 |\n")
-                f.write("| :---: | :--- | :---: | :---: | :---: | :--- |\n")
+                f.write("| 排名 | IP:端口 | 威胁分 | 实测握手延迟 | 官方带宽 | 综合评分 | SOCKS5 代理全路径 |\n")
+                f.write("| :---: | :--- | :---: | :---: | :---: | :---: | :--- |\n")
                 for i, res in enumerate(res_list, 1):
+                    fscore_str = f"`{res.fraud_score}/100`" if res.fraud_score >= 0 else "`N/A`"
                     f.write(
-                        f"| {i} | `{res.server.ip}:{res.tested_port}` | "
+                        f"| **{i}** | `{res.server.ip}:{res.tested_port}` | {fscore_str} | "
                         f"**{res.real_latency_ms:.2f} ms** | {res.server.speed_mbps:.2f} Mbps | "
                         f"{res.composite_score:.1f} | `{res.socks5_url}` |\n"
                     )
                 f.write("\n")
 
-        # 6. Export text status report
+        # 7. Export text status report
         status_path = os.path.join(self.output_dir, "status_report.txt")
         with open(status_path, "w", encoding="utf-8") as f:
             f.write(f"=========================================================================================\n")

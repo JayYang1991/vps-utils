@@ -208,7 +208,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${python_bin} ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 20
+ExecStart=${python_bin} ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 5
 Restart=always
 RestartSec=10
 TimeoutStopSec=3s
@@ -236,7 +236,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=${python_bin} ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 20
+ExecStart=${python_bin} ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 5
 Restart=always
 RestartSec=10
 TimeoutStopSec=3s
