@@ -317,6 +317,105 @@ class TestVpnGateSelector(unittest.TestCase):
             with open(os.path.join(test_dir, "upstream_gateway.txt"), "r") as f:
                 self.assertIn("1.1.1.2", f.read())
 
+    def test_pusher_unconfigured(self):
+        import tempfile
+        from pusher import CloudflareVlessPusher
+
+        with tempfile.TemporaryDirectory() as test_dir:
+            pusher = CloudflareVlessPusher(push_url="", api_token="", state_dir=test_dir)
+            self.assertFalse(pusher.is_configured())
+
+            s = VpnGateServer(
+                hostname="s1", ip="219.100.37.13", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+                country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+                total_users=1, total_traffic=1, operator="", message=""
+            )
+            r = BenchmarkResult(
+                server=s, reachable=True, protocol="openvpn", real_latency_ms=15.0, min_latency_ms=14.0,
+                max_latency_ms=16.0, jitter_ms=1.0, packet_loss_rate=0.0,
+                tested_port=443, composite_score=1000.0
+            )
+
+            res = pusher.push_best_node_if_changed(r)
+            self.assertEqual(res["status"], "unconfigured")
+
+    def test_pusher_ovpn_generation_and_change_detection(self):
+        import tempfile
+        from unittest.mock import patch, MagicMock
+        from pusher import CloudflareVlessPusher
+
+        with tempfile.TemporaryDirectory() as test_dir:
+            pusher = CloudflareVlessPusher(
+                push_url="https://worker.domain.com/api/upstream",
+                api_token="cf-push-secret-token-123",
+                state_dir=test_dir
+            )
+            self.assertTrue(pusher.is_configured())
+
+            # 节点 A
+            s_a = VpnGateServer(
+                hostname="node_a", ip="219.100.37.13", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+                country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+                total_users=1, total_traffic=1, operator="", message=""
+            )
+            r_a = BenchmarkResult(
+                server=s_a, reachable=True, protocol="openvpn", real_latency_ms=15.0, min_latency_ms=14.0,
+                max_latency_ms=16.0, jitter_ms=1.0, packet_loss_rate=0.0,
+                tested_port=443, composite_score=1000.0
+            )
+
+            # 1. 验证 .ovpn 内容生成
+            ovpn = pusher.generate_ovpn_content(r_a)
+            self.assertIn("remote 219.100.37.13 443", ovpn)
+            self.assertIn("client", ovpn)
+
+            # 2. 模拟第 1 次推送节点 A (Mock urllib.request.urlopen 返回 200)
+            mock_resp = MagicMock()
+            mock_resp.getcode.return_value = 200
+            mock_resp.read.return_value = json.dumps({"success": True, "message": "Updated"}).encode("utf-8")
+            mock_resp.__enter__.return_value = mock_resp
+
+            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+                push_res1 = pusher.push_best_node_if_changed(r_a)
+                self.assertEqual(push_res1["status"], "success")
+                self.assertEqual(push_res1["node_key"], "219.100.37.13:443")
+                self.assertEqual(mock_urlopen.call_count, 1)
+
+            # 验证本地状态文件已生成
+            state = pusher.get_last_pushed_state()
+            self.assertIsNotNone(state)
+            self.assertEqual(state["node_key"], "219.100.37.13:443")
+
+            # 3. 第 2 次推送相同的节点 A (约束 1: 相同节点跳过推送)
+            with patch("urllib.request.urlopen") as mock_urlopen_2:
+                push_res2 = pusher.push_best_node_if_changed(r_a)
+                self.assertEqual(push_res2["status"], "skipped")
+                self.assertEqual(push_res2["reason"], "unchanged")
+                # 确认未发起任何网络请求！
+                mock_urlopen_2.assert_not_called()
+
+            # 4. 出现新的更优节点 B -> 触发推送
+            s_b = VpnGateServer(
+                hostname="node_b", ip="125.132.8.21", score=9000, ping=5, speed_bps=10, speed_mbps=200.0,
+                country_short="KR", country_long="Korea", sessions=1, uptime_seconds=10,
+                total_users=1, total_traffic=1, operator="", message=""
+            )
+            r_b = BenchmarkResult(
+                server=s_b, reachable=True, protocol="openvpn", real_latency_ms=8.0, min_latency_ms=7.0,
+                max_latency_ms=9.0, jitter_ms=0.5, packet_loss_rate=0.0,
+                tested_port=995, composite_score=1500.0
+            )
+
+            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen_3:
+                push_res3 = pusher.push_best_node_if_changed(r_b)
+                self.assertEqual(push_res3["status"], "success")
+                self.assertEqual(push_res3["node_key"], "125.132.8.21:995")
+                self.assertEqual(mock_urlopen_3.call_count, 1)
+
+            # 验证状态更新为节点 B
+            state_updated = pusher.get_last_pushed_state()
+            self.assertEqual(state_updated["node_key"], "125.132.8.21:995")
+
 
 if __name__ == "__main__":
     unittest.main()

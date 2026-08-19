@@ -144,6 +144,7 @@ install_files() {
     cp -f "${SCRIPT_DIR}/fraud_checker.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/tester.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/exporter.py" "${INSTALL_DIR}/"
+    cp -f "${SCRIPT_DIR}/pusher.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/pool_manager.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/daemon.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/bridge.py" "${INSTALL_DIR}/"
@@ -160,6 +161,12 @@ install_files() {
         fi
         if [ -f "${tmp_backup_dir}/scamalytics_cache.json" ]; then
             cp -f "${tmp_backup_dir}/scamalytics_cache.json" "${INSTALL_DIR}/results/"
+        fi
+        if [ -f "${tmp_backup_dir}/cf_push_state.json" ]; then
+            cp -f "${tmp_backup_dir}/cf_push_state.json" "${INSTALL_DIR}/results/"
+        fi
+        if [ -f "${tmp_backup_dir}/cf_push_config.json" ]; then
+            cp -f "${tmp_backup_dir}/cf_push_config.json" "${INSTALL_DIR}/results/"
         fi
         rm -rf "${tmp_backup_dir}" 2>/dev/null || true
     fi

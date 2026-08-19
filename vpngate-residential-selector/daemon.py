@@ -111,6 +111,20 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--cf-url",
+        type=str,
+        default=os.environ.get("CF_VLESS_PUSH_URL", os.environ.get("CF_PUSH_URL", "")),
+        help="Cloudflare VLESS Proxy 代理修改推送 REST 接口 URL (例如: https://<worker>/api/upstream)"
+    )
+
+    parser.add_argument(
+        "--cf-token",
+        type=str,
+        default=os.environ.get("CF_VLESS_API_TOKEN", os.environ.get("CF_PUSH_TOKEN", "")),
+        help="Cloudflare VLESS Proxy 专属推送鉴权 API Token"
+    )
+
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="打印详细调试日志"
@@ -136,6 +150,10 @@ def main() -> int:
     logging.info(f"   • 每国配额: TOP {args.top_per_country}")
     logging.info(f"   • 代理格式: {args.proxy_type.upper()}")
     logging.info(f"   • 输出目录: {args.output}/")
+    if args.cf_url and args.cf_token:
+        logging.info(f"   • CF 自动推送: 已开启 (推送地址: {args.cf_url})")
+    else:
+        logging.info("   • CF 自动推送: 未配置 (可通过 --cf-url / --cf-token 或环境变量开启)")
     logging.info("=" * 80)
 
     manager = ResidentialPoolManager(
@@ -145,7 +163,9 @@ def main() -> int:
         timeout=args.timeout,
         samples=args.samples,
         threads=args.threads,
-        strict_residential=args.strict_residential
+        strict_residential=args.strict_residential,
+        cf_push_url=args.cf_url,
+        cf_api_token=args.cf_token,
     )
 
     cycle_count = 0

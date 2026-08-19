@@ -242,17 +242,67 @@ vpngate-daemon --interval 600 --top-per-country 10
 
 ---
 
-## 🔗 与 Cloudflare VLESS 代理联动
+## 🔗 与 Cloudflare VLESS 代理联动 (自动推送与变更检测 ✨)
 
-本项目生成的纯净住宅代理全路径，可直接填入 `cloudflare-vless-proxy` 项目的管理后台（`/admin`）的 **上游中继网关 (`DEFAULT_UPSTREAM_GATEWAY`)** 或本地网桥 `socks5://127.0.0.1:10808`。
+本项目与 `cloudflare-vless-proxy` 项目已实现**全自动联动与热更新**：
 
-Cloudflare Worker 会自动通过选出的纯净家庭住宅宽带中继落地，实现**真实住宅宽带出口 IP**，彻底解除数据中心机房 IP 限制！
+### 1. 工作机制
+- **最优节点自动提取**：周期性巡检（每 5 分钟）或手动优选后，自动提取综合得分最高（威胁分最低 + 延迟最低）的 **TOP 1 最优住宅节点**。
+- **生成完整 OpenVPN 配置文件**：自动解析该节点的原生 `.ovpn` 配置文件（含证书与加密套件），保存至 `results/best_upstream.ovpn`。
+- **智能变更检测（约束机制）**：
+  - **仅在节点变动时推送**：系统自动比对当前最优节点与上一次成功推送的节点（记录于 `results/cf_push_state.json`）。
+  - **若节点未发生变化**：自动跳过网络请求保持不变，杜绝无意义的重复推送与 KV 频繁写入。
+  - **若节点发生轮换/失效替换**：自动通过 REST API 发起 HTTP POST 请求并更新 Cloudflare Worker 上游网关。
+
+### 2. 配置方式 (任选其一)
+
+#### 方式一：环境变量配置 (推荐)
+```bash
+export CF_VLESS_PUSH_URL="https://<你的Worker域名>/api/upstream"
+export CF_VLESS_API_TOKEN="<在Worker后台生成的专属API_TOKEN>"
+```
+
+#### 方式二：配置文件 `cf_push_config.json`
+在项目目录或 `results/` 目录下创建 `cf_push_config.json`：
+```json
+{
+  "push_url": "https://<你的Worker域名>/api/upstream",
+  "api_token": "cf-push-xxxxxxxxxxxxxxxxxxxxxxxx"
+}
+```
+
+#### 方式三：命令行参数
+```bash
+# 启动守护进程并配置自动推送
+vpngate-daemon --cf-url "https://<你的Worker域名>/api/upstream" --cf-token "cf-push-xxx"
+
+# 单次测速并推送
+vpngate-selector --cf-url "https://<你的Worker域名>/api/upstream" --cf-token "cf-push-xxx"
+```
+
+---
+
+## 📁 生成文件位置与说明
+
+所有生成的文件保存在安装目录的 `results/` 下（默认 `/usr/local/bin/vpngate-residential-selector/results/` 或 `~/.local/bin/vpngate-residential-selector/results/`）：
+
+| 文件路径 | 说明 |
+| :--- | :--- |
+| `results/proxies.txt` | 全量通过协议验证与纯净筛选的代理全路径列表 |
+| `results/proxies_US.txt` 等 | 各国独立代理列表 (`_JP.txt`, `_KR.txt`, `_HK.txt`, `_SG.txt`, `_DE.txt`, `_AU.txt`) |
+| `results/upstream_gateway.txt` | 当前最优 TOP 1 节点 SOCKS5 路径 |
+| `results/best_upstream.ovpn` | 当前最优 TOP 1 节点的完整 OpenVPN 配置文件 |
+| `results/cf_push_state.json` | Cloudflare 上次成功推送的节点状态与时间记录 |
+| `results/residential_pool.json`| 7 国保活节点状态数据库 (含延迟、威胁分、端口等) |
+| `results/singbox_outbounds.json` | 适配 sing-box 客户端的原生 Outbound 配置 |
+| `results/ovpn/*.ovpn` | 选出节点的独立 OpenVPN 配置文件 |
+| `results/summary.md` | 7 国保活看板与实时评分明细 |
 
 ---
 
 ## 🧪 单元测试
 
-项目内置完整的单元测试集（覆盖多源聚合、Scamalytics威胁分筛选、协议握手及保活逻辑）：
+项目内置完整的单元测试集（覆盖多源聚合、Scamalytics威胁分筛选、协议握手、保活逻辑及 Cloudflare 推送变更检测）：
 
 ```bash
 python3 -m unittest test_selector.py

@@ -24,6 +24,7 @@ from fetcher import fetch_all_vpngate_servers, VpnGateServer
 from filter import filter_servers, filter_by_fraud_score
 from tester import test_single_server, benchmark_servers, select_top_servers, BenchmarkResult
 from exporter import get_country_flag
+from pusher import CloudflareVlessPusher
 
 logger = logging.getLogger("vpngate.pool")
 
@@ -52,6 +53,8 @@ class ResidentialPoolManager:
         samples: int = 2,
         threads: int = 30,
         strict_residential: bool = False,
+        cf_push_url: Optional[str] = None,
+        cf_api_token: Optional[str] = None,
     ):
         if not os.path.isabs(output_dir):
             self.output_dir = os.path.join(SCRIPT_DIR, output_dir)
@@ -68,6 +71,12 @@ class ResidentialPoolManager:
         self.pool_file = os.path.join(self.output_dir, "residential_pool.json")
         self.pools: Dict[str, List[BenchmarkResult]] = {c: [] for c in TARGET_COUNTRIES}
         os.makedirs(self.output_dir, exist_ok=True)
+
+        self.pusher = CloudflareVlessPusher(
+            push_url=cf_push_url,
+            api_token=cf_api_token,
+            state_dir=self.output_dir
+        )
 
         self.load_state()
 
@@ -250,7 +259,7 @@ class ResidentialPoolManager:
                     else:
                         f.write(f"{res.socks5_url}\n")
 
-        # 4. Export top 1 upstream gateway for cloudflare-vless-proxy: results/upstream_gateway.txt
+        # 4. Export top 1 upstream gateway and push to Cloudflare VLESS Proxy if changed
         if all_flattened_nodes:
             all_flattened_nodes.sort(key=lambda x: (
                 -x.composite_score,
@@ -261,6 +270,12 @@ class ResidentialPoolManager:
             gateway_path = os.path.join(self.output_dir, "upstream_gateway.txt")
             with open(gateway_path, "w", encoding="utf-8") as f:
                 f.write(f"{best_node.socks5_url}\n")
+
+            # 自动推送变更至 Cloudflare VLESS 代理网关 (仅在最优节点变更时发起推送)
+            try:
+                self.pusher.push_best_node_if_changed(best_node)
+            except Exception as pe:
+                logger.warning(f"⚠️ [CF 代理推送异常]: {pe}")
 
         # 5. Export Sing-box Outbounds configuration: singbox_outbounds.json
         singbox_path = os.path.join(self.output_dir, "singbox_outbounds.json")

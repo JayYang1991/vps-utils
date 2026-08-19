@@ -22,6 +22,7 @@ from fetcher import fetch_all_vpngate_servers, VpnGateServer
 from filter import filter_servers, filter_by_fraud_score
 from tester import benchmark_servers, select_top_servers, select_top_servers_by_country, BenchmarkResult
 from exporter import export_results, get_country_flag
+from pusher import CloudflareVlessPusher
 
 
 def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
@@ -367,6 +368,20 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--cf-url",
+        type=str,
+        default=os.environ.get("CF_VLESS_PUSH_URL", os.environ.get("CF_PUSH_URL", "")),
+        help="Cloudflare VLESS Proxy 代理修改推送 REST 接口 URL (例如: https://<worker>/api/upstream)"
+    )
+
+    parser.add_argument(
+        "--cf-token",
+        type=str,
+        default=os.environ.get("CF_VLESS_API_TOKEN", os.environ.get("CF_PUSH_TOKEN", "")),
+        help="Cloudflare VLESS Proxy 专属推送鉴权 API Token"
+    )
+
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="静默模式 (仅输出最终简要信息)"
@@ -493,6 +508,14 @@ def main() -> int:
         if top_servers:
             print(f"\n🚀 最优节点推荐 (可直接用于 Cloudflare VLESS 住宅中继网关):")
             print(f"   👉 {top_servers[0].socks5_url}\n")
+
+            # 自动推送最优节点 OpenVPN 格式至 Cloudflare VLESS 网关 (若已配置且最优节点有变动)
+            pusher = CloudflareVlessPusher(
+                push_url=args.cf_url,
+                api_token=args.cf_token,
+                state_dir=args.output
+            )
+            pusher.push_best_node_if_changed(top_servers[0])
 
         return 0
 
