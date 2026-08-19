@@ -379,7 +379,11 @@ class ResidentialPoolManager:
                 max_fraud_score=20,
                 cache_path=cache_file
             )
-            nodes_to_benchmark = clean_candidates if clean_candidates else filtered_candidates
+            if not clean_candidates:
+                logger.info(f"ℹ️ [{country_code}] VPNGATE 暂无符合 Scamalytics 威胁分 < 20 的纯净住宅节点 (已过滤机房与高危节点)")
+                continue
+
+            nodes_to_benchmark = clean_candidates
 
             # Benchmark candidate nodes
             logger.info(f"🚀 [{country_code}] 正在对 {len(nodes_to_benchmark)} 个纯净候选节点进行协议测速以补充节点...")

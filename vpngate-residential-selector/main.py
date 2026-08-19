@@ -443,7 +443,8 @@ def main() -> int:
             if clean_servers:
                 candidate_servers = clean_servers
             else:
-                logging.warning(f"⚠️ 未找到 Scamalytics 威胁分 < {args.max_fraud_score} 的纯净节点，保留全部基础候选节点继续测速。")
+                logging.error(f"❌ 未找到任何 Scamalytics 威胁分 < {args.max_fraud_score} 的纯净住宅节点。")
+                return 1
 
         # 4. 对纯净住宅节点执行高并发协议层握手连通性与时延测速
         benchmark_results = benchmark_servers(
