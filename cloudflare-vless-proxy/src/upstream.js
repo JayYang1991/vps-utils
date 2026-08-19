@@ -15,15 +15,89 @@ async function getConnectFn() {
 
 
 /**
+ * 解析 OpenVPN 配置文件文本或 Base64 编码字符串
+ * 提取 remote 主机、端口、协议与默认认证信息
+ * @param {string} content 
+ * @returns {object|null}
+ */
+export function parseOpenVpnConfig(content) {
+  if (!content || typeof content !== 'string') return null;
+  let text = content.trim();
+
+  // 如果字符串为 Base64 编码的 ovpn，尝试解码
+  if (!text.includes('\n') && text.length > 20) {
+    try {
+      let decoded = '';
+      if (typeof atob === 'function') {
+        decoded = atob(text.replace(/\s/g, ''));
+      } else if (typeof Buffer !== 'undefined') {
+        decoded = Buffer.from(text.replace(/\s/g, ''), 'base64').toString('utf-8');
+      }
+      if (decoded && (decoded.includes('remote ') || decoded.includes('client') || decoded.includes('dev tun') || decoded.includes('<ca>'))) {
+        text = decoded;
+      }
+    } catch (_) {}
+  }
+
+  // 必须包含 remote 指令或 client 特征
+  if (!text.includes('remote ') && !text.includes('client') && !text.includes('dev tun')) {
+    return null;
+  }
+
+  let host = '';
+  let port = 443;
+  let username = 'vpn';
+  let password = 'vpn';
+  let proto = 'tcp';
+
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('#') || trimmed.startsWith(';')) continue;
+
+    if (trimmed.startsWith('proto ')) {
+      const parts = trimmed.split(/\s+/);
+      if (parts.length >= 2) {
+        proto = parts[1].toLowerCase();
+      }
+    } else if (trimmed.startsWith('remote ')) {
+      const parts = trimmed.split(/\s+/);
+      if (parts.length >= 2 && !host) {
+        host = parts[1].trim();
+        if (parts.length >= 3) {
+          const parsedPort = parseInt(parts[2].trim(), 10);
+          if (!isNaN(parsedPort) && parsedPort > 0) {
+            port = parsedPort;
+          }
+        }
+      }
+    }
+  }
+
+  if (!host) return null;
+
+  return {
+    protocol: 'openvpn',
+    host,
+    port,
+    username,
+    password,
+    proto,
+  };
+}
+
+/**
  * 解析各种格式的代理字符串
  * 支持格式：
- * 1. socks5://user:pass@host:port
- * 2. socks5://host:port
- * 3. http://user:pass@host:port
- * 4. http://host:port
- * 5. user:pass@host:port (默认为 socks5)
- * 6. host:port:user:pass (默认为 socks5)
- * 7. host:port (默认为 socks5)
+ * 1. socks5://user:pass@host:port 或 socks5://host:port
+ * 2. http://user:pass@host:port 或 http://host:port
+ * 3. openvpn://user:pass@host:port 或 openvpn://host:port (默认凭据 vpn:vpn)
+ * 4. ovpn://user:pass@host:port 或 ovpn://host:port (默认凭据 vpn:vpn)
+ * 5. OpenVPN .ovpn 原始配置文件文本 (包含 remote host port)
+ * 6. Base64 编码的 .ovpn 配置文件内容
+ * 7. user:pass@host:port (默认为 socks5)
+ * 8. host:port:user:pass (默认为 socks5)
+ * 9. host:port (默认为 socks5)
  * @param {string} rawProxy
  * @returns {object|null}
  */
@@ -33,7 +107,26 @@ export function parseProxyString(rawProxy) {
   if (!str) return null;
 
   try {
-    // 包含协议头的情况
+    // 1. OpenVPN / OVPN 协议头
+    if (str.startsWith('openvpn://') || str.startsWith('ovpn://')) {
+      const cleanStr = str.replace(/^ovpn:\/\//i, 'openvpn://');
+      const url = new URL(cleanStr);
+      return {
+        protocol: 'openvpn',
+        host: url.hostname,
+        port: parseInt(url.port, 10) || 443,
+        username: decodeURIComponent(url.username || '') || 'vpn',
+        password: decodeURIComponent(url.password || '') || 'vpn',
+      };
+    }
+
+    // 2. OpenVPN .ovpn 文本或 Base64 字符串
+    const ovpnParsed = parseOpenVpnConfig(str);
+    if (ovpnParsed) {
+      return ovpnParsed;
+    }
+
+    // 3. SOCKS5 / HTTP 协议头
     if (str.startsWith('socks5://') || str.startsWith('http://') || str.startsWith('https://')) {
       const url = new URL(str);
       const protocol = url.protocol.replace(':', '').toLowerCase();
@@ -46,7 +139,7 @@ export function parseProxyString(rawProxy) {
       };
     }
 
-    // host:port:user:pass 格式
+    // 4. host:port:user:pass 格式
     const parts = str.split(':');
     if (parts.length === 4 && !str.includes('@')) {
       return {
@@ -58,7 +151,7 @@ export function parseProxyString(rawProxy) {
       };
     }
 
-    // user:pass@host:port 格式
+    // 5. user:pass@host:port 格式
     if (str.includes('@')) {
       const atSplit = str.split('@');
       const authParts = atSplit[0].split(':');
@@ -72,15 +165,18 @@ export function parseProxyString(rawProxy) {
       };
     }
 
-    // host:port 格式
+    // 6. host:port 格式
     if (parts.length === 2) {
-      return {
-        protocol: 'socks5',
-        host: parts[0].trim(),
-        port: parseInt(parts[1].trim(), 10),
-        username: '',
-        password: '',
-      };
+      const parsedPort = parseInt(parts[1].trim(), 10);
+      if (!isNaN(parsedPort) && parsedPort > 0) {
+        return {
+          protocol: 'socks5',
+          host: parts[0].trim(),
+          port: parsedPort,
+          username: '',
+          password: '',
+        };
+      }
     }
   } catch (err) {
     console.error('Error parsing proxy string:', rawProxy, err);
@@ -119,7 +215,7 @@ export async function createUpstreamConnection(targetHost, targetPort, upstreamP
   // 通过住宅代理转发
   console.log(`[Upstream:Proxy] 正在通过住宅代理转发 -> 目标: ${targetHost}:${targetPort} | 代理服务器: ${proxy.protocol.toUpperCase()}://${proxy.host}:${proxy.port}`);
   try {
-    if (proxy.protocol === 'socks5') {
+    if (proxy.protocol === 'socks5' || proxy.protocol === 'openvpn' || proxy.protocol === 'ovpn') {
       return await connectViaSocks5(proxy, targetHost, targetPort);
     } else if (proxy.protocol === 'http') {
       return await connectViaHttpConnect(proxy, targetHost, targetPort);

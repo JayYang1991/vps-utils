@@ -259,31 +259,105 @@ Current Deployment ID: a1b2c3d4-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 ---
 
+### 4.5 🔑 REST 代理修改推送接口 (`/api/upstream`)
+
+系统提供了专用于外部程序、保活守护进程（如 `vpngate-residential-selector`）或定时任务自动化推送/修改上游代理的 REST API 接口。
+
+#### 1. 鉴权机制（KV 动态初始化与独立 Token 鉴权）
+- **自动初始化存储**：`API_TOKEN` 不在 `wrangler.toml` 中硬编码生成，而是在系统初次运行初始化时自动生成高强度安全随机 Token 并直接持久化存储至 **Cloudflare KV**。
+- **界面随时修改与重新生成**：进入 `/admin` 管理后台的“⚙️ 代理路径与住宅IP配置”选项卡，可通过“🎲 生成随机 Token”按钮随时生成新 Token 或手动输入，保存至 KV 即刻生效。
+- **多途径鉴权支持**：支持以下三种方式携带 Token 调用 REST 接口：
+  - **HTTP Header**：`Authorization: Bearer <API_TOKEN>` 或 `X-API-Token: <API_TOKEN>`
+  - **Query Parameter**：`?token=<API_TOKEN>` 或 `?api_token=<API_TOKEN>`
+
+#### 2. 接口端点与调用示例
+
+##### A. 修改/推送新代理 (`POST /api/upstream` 或 `PUT /api/upstream`)
+
+- **方式一：纯文本单行直接推送 (cURL)**：
+```bash
+# 推送 OpenVPN 住宅代理
+curl -X POST https://<你的Worker域名>/api/upstream \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -d "openvpn://vpn:vpn@219.100.37.13:443"
+
+# 推送 SOCKS5 代理
+curl -X POST https://<你的Worker域名>/api/upstream \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -d "socks5://vpn:vpn@1.2.3.4:1080"
+```
+
+- **方式二：JSON 格式推送（支持同步在线测速与直连回退开关）**：
+```bash
+curl -X POST https://<你的Worker域名>/api/upstream \
+  -H "Authorization: Bearer YOUR_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "upstreamProxy": "openvpn://vpn:vpn@219.100.37.13:443",
+    "enableDirectFallback": true,
+    "test": true
+  }'
+```
+
+- **方式三：Python 自动化保活守护进程对接代码**：
+```python
+import requests
+
+API_URL = "https://<你的Worker域名>/api/upstream"
+API_TOKEN = "YOUR_API_TOKEN"
+
+def push_upstream_proxy(proxy_url: str):
+    resp = requests.post(
+        API_URL,
+        headers={"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"},
+        json={"upstreamProxy": proxy_url, "test": True},
+        timeout=15
+    )
+    print("Push Result:", resp.json())
+
+# 示例：推送 VPNGATE 优选选出的纯净住宅节点
+push_upstream_proxy("openvpn://vpn:vpn@219.100.37.13:443")
+```
+
+##### B. 查询当前代理状态 (`GET /api/upstream`)
+```bash
+curl -X GET https://<你的Worker域名>/api/upstream \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
+```
+
+---
+
 ## 5. 🌍 主流住宅代理提供商配置范例
 
-系统支持 SOCKS5 与 HTTP 两种代理协议及多种格式输入，可直接填入管理控制台：
+系统全面支持 **SOCKS5**、**HTTP** 与 **OpenVPN** 三种代理协议及多种格式输入，可直接填入管理控制台或通过 REST 接口推送：
 
-### 1. IPRoyal 住宅代理
+### 1. OpenVPN / VPNGATE 住宅节点 (全新支持 ✨)
+- 标准 URL 格式：`openvpn://vpn:vpn@219.100.37.13:443` 或 `ovpn://219.100.37.13:443`（缺省自动使用 `vpn:vpn` 凭据）
+- 自定义凭据：`openvpn://username:password@remote.host.com:1194`
+- 原始 `.ovpn` 配置文件文本：直接粘贴包含 `remote <host> <port>` 的 ovpn 文本内容
+- Base64 编码的 `.ovpn`：直接填入 VPNGATE API 导出的 base64 字符串
+
+### 2. IPRoyal 住宅代理
 ```text
 socks5://your_username:your_password@geo.iproyal.com:12321
 ```
 
-### 2. Bright Data (Luminati)
+### 3. Bright Data (Luminati)
 ```text
 http://brd-customer-c_xxxx-zone-residential:your_password@brd.superproxy.io:22225
 ```
 
-### 3. Oxylabs 动态住宅代理
+### 4. Oxylabs 动态住宅代理
 ```text
 http://customer-your_user:your_pass@pr.oxylabs.io:7777
 ```
 
-### 4. Smartproxy 住宅网络
+### 5. Smartproxy 住宅网络
 ```text
 socks5://user-sp12345678:password123@gate.smartproxy.com:7000
 ```
 
-### 5. 标准无密码 / 简写格式
+### 6. 标准无密码 / 简写格式
 - `socks5://192.168.1.100:1080`
 - `http://192.168.1.100:8080`
 - `ip:port:username:password`（自动按 SOCKS5 解析）

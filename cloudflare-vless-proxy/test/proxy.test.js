@@ -28,6 +28,75 @@ describe('Upstream Proxy String Parser', () => {
     });
   });
 
+  it('should parse openvpn:// and ovpn:// url with user/pass', () => {
+    const res1 = parseProxyString('openvpn://vpn:vpn@219.100.37.13:443');
+    assert.deepEqual(res1, {
+      protocol: 'openvpn',
+      host: '219.100.37.13',
+      port: 443,
+      username: 'vpn',
+      password: 'vpn'
+    });
+
+    const res2 = parseProxyString('ovpn://customuser:custompass@104.28.1.2:1194');
+    assert.deepEqual(res2, {
+      protocol: 'openvpn',
+      host: '104.28.1.2',
+      port: 1194,
+      username: 'customuser',
+      password: 'custompass'
+    });
+  });
+
+  it('should parse openvpn:// without user/pass using default vpn:vpn credentials', () => {
+    const res = parseProxyString('openvpn://219.100.37.13:443');
+    assert.deepEqual(res, {
+      protocol: 'openvpn',
+      host: '219.100.37.13',
+      port: 443,
+      username: 'vpn',
+      password: 'vpn'
+    });
+  });
+
+  it('should parse raw .ovpn configuration text', () => {
+    const ovpnText = `
+client
+dev tun
+proto tcp
+remote 219.100.37.13 443
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+auth-user-pass
+verb 2
+<ca>
+-----BEGIN CERTIFICATE-----
+MIIB...
+-----END CERTIFICATE-----
+</ca>
+    `;
+    const res = parseProxyString(ovpnText);
+    assert.ok(res);
+    assert.equal(res.protocol, 'openvpn');
+    assert.equal(res.host, '219.100.37.13');
+    assert.equal(res.port, 443);
+    assert.equal(res.username, 'vpn');
+    assert.equal(res.password, 'vpn');
+  });
+
+  it('should parse Base64 encoded .ovpn configuration string', () => {
+    const ovpnText = `client\ndev tun\nproto tcp\nremote 133.242.18.25 995\n`;
+    const b64 = Buffer.from(ovpnText).toString('base64');
+    const res = parseProxyString(b64);
+    assert.ok(res);
+    assert.equal(res.protocol, 'openvpn');
+    assert.equal(res.host, '133.242.18.25');
+    assert.equal(res.port, 995);
+    assert.equal(res.username, 'vpn');
+  });
+
   it('should parse host:port:user:pass format', () => {
     const res = parseProxyString('192.168.1.100:1080:testuser:testpass');
     assert.deepEqual(res, {
@@ -54,6 +123,7 @@ describe('Upstream Proxy String Parser', () => {
     assert.equal(parseProxyString(''), null);
     assert.equal(parseProxyString(null), null);
     assert.equal(parseProxyString(undefined), null);
+    assert.equal(parseProxyString('not a valid proxy format!'), null);
   });
 });
 
@@ -341,6 +411,206 @@ describe('Worker Request Routing & API Endpoints', () => {
   });
 });
 
+describe('REST API Proxy Management & Dedicated Token Auth', () => {
+  const customApiToken = 'my-custom-push-token-123456';
+  
+  // 创建一个模拟的 KV Storage 内存对象
+  function createMockKV() {
+    const store = new Map();
+    return {
+      async get(key, opts) {
+        const val = store.get(key);
+        if (!val) return null;
+        if (opts && opts.type === 'json') {
+          return JSON.parse(val);
+        }
+        return val;
+      },
+      async put(key, value) {
+        store.set(key, typeof value === 'string' ? value : JSON.stringify(value));
+      }
+    };
+  }
+
+  const mockKV = createMockKV();
+  const env = {
+    DEFAULT_UUID: 'd342d11e-d424-4583-b36e-524ab1f0afa4',
+    DEFAULT_DATA_PATH: '/test-ws',
+    ADMIN_PASSWORD: 'AdminPassword123!',
+    API_TOKEN: customApiToken,
+    CONFIG_KV: mockKV,
+  };
+
+  it('should verify dedicated API Token correctly via Header and Query Param', async () => {
+    const { verifyApiToken } = await import('../src/config.js');
+    const config = { apiToken: customApiToken, adminPassword: 'AdminPassword123!' };
+
+    // 1. Bearer Token
+    const reqBearer = new Request('https://domain/api/upstream', {
+      headers: { 'Authorization': `Bearer ${customApiToken}` }
+    });
+    assert.equal(await verifyApiToken(reqBearer, config), true);
+
+    // 2. X-API-Token
+    const reqXApi = new Request('https://domain/api/upstream', {
+      headers: { 'X-API-Token': customApiToken }
+    });
+    assert.equal(await verifyApiToken(reqXApi, config), true);
+
+    // 3. Query Param ?token=
+    const reqQuery = new Request(`https://domain/api/upstream?token=${customApiToken}`);
+    assert.equal(await verifyApiToken(reqQuery, config), true);
+
+    // 4. Query Param ?api_token=
+    const reqQuery2 = new Request(`https://domain/api/upstream?api_token=${customApiToken}`);
+    assert.equal(await verifyApiToken(reqQuery2, config), true);
+
+    // 5. Invalid Token
+    const reqInvalid = new Request('https://domain/api/upstream', {
+      headers: { 'Authorization': 'Bearer wrong-token' }
+    });
+    assert.equal(await verifyApiToken(reqInvalid, config), false);
+
+    // 6. Missing Token
+    const reqMissing = new Request('https://domain/api/upstream');
+    assert.equal(await verifyApiToken(reqMissing, config), false);
+  });
+
+  it('should reject unauthenticated request with 401 Unauthorized', async () => {
+    const worker = (await import('../src/index.js')).default;
+    const req = new Request('https://my-worker.workers.dev/api/upstream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ upstreamProxy: 'openvpn://vpn:vpn@219.100.37.13:443' })
+    });
+    const res = await worker.fetch(req, env, {});
+    assert.equal(res.status, 401);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.ok(data.error.includes('Unauthorized'));
+  });
+
+  it('should query upstream proxy info via GET /api/upstream with token', async () => {
+    const worker = (await import('../src/index.js')).default;
+    const req = new Request('https://my-worker.workers.dev/api/upstream', {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${customApiToken}` }
+    });
+    const res = await worker.fetch(req, env, {});
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(typeof data.upstreamProxy, 'string');
+  });
+
+  it('should update upstream proxy with OpenVPN URL format via POST /api/upstream', async () => {
+    const worker = (await import('../src/index.js')).default;
+    const openvpnUrl = 'openvpn://vpn:vpn@219.100.37.13:443';
+
+    const req = new Request('https://my-worker.workers.dev/api/upstream', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${customApiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        upstreamProxy: openvpnUrl,
+        enableDirectFallback: true
+      })
+    });
+    const res = await worker.fetch(req, env, {});
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(data.upstreamProxy, openvpnUrl);
+    assert.equal(data.parsed.protocol, 'openvpn');
+    assert.equal(data.parsed.host, '219.100.37.13');
+    assert.equal(data.parsed.port, 443);
+    assert.equal(data.parsed.username, 'vpn');
+
+    // 验证 GET /api/upstream 读取到更新后的 OpenVPN 配置
+    const checkReq = new Request('https://my-worker.workers.dev/api/upstream', {
+      headers: { 'X-API-Token': customApiToken }
+    });
+    const checkRes = await worker.fetch(checkReq, env, {});
+    const checkData = await checkRes.json();
+    assert.equal(checkData.upstreamProxy, openvpnUrl);
+    assert.equal(checkData.parsed.protocol, 'openvpn');
+  });
+
+  it('should update upstream proxy with raw .ovpn configuration text via text/plain payload', async () => {
+    const worker = (await import('../src/index.js')).default;
+    const ovpnConfig = 'client\ndev tun\nproto tcp\nremote 133.242.18.25 995\nauth-user-pass\n';
+
+    const req = new Request('https://my-worker.workers.dev/api/upstream', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${customApiToken}`,
+        'Content-Type': 'text/plain',
+      },
+      body: ovpnConfig
+    });
+    const res = await worker.fetch(req, env, {});
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(data.parsed.protocol, 'openvpn');
+    assert.equal(data.parsed.host, '133.242.18.25');
+    assert.equal(data.parsed.port, 995);
+  });
+
+  it('should reject invalid proxy format with 400 Bad Request', async () => {
+    const worker = (await import('../src/index.js')).default;
+    const req = new Request('https://my-worker.workers.dev/api/upstream', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${customApiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        upstreamProxy: 'invalid-nonexistent-protocol-xyz'
+      })
+    });
+    const res = await worker.fetch(req, env, {});
+    assert.equal(res.status, 400);
+    const data = await res.json();
+    assert.equal(data.success, false);
+    assert.ok(data.error.includes('无法解析'));
+  });
+
+  it('should auto-generate API_TOKEN and persist to KV when not present', async () => {
+    const { getConfig } = await import('../src/config.js');
+    const freshKV = createMockKV();
+    const freshEnv = {
+      CONFIG_KV: freshKV,
+      ADMIN_PASSWORD: 'Password123!',
+    };
+
+    // 首次获取配置，未提供 API_TOKEN
+    const cfg1 = await getConfig(freshEnv);
+    assert.ok(cfg1.apiToken);
+    assert.ok(cfg1.apiToken.startsWith('cf-push-'));
+
+    // 验证 KV 中已被持久化存储
+    const storedInKV = await freshKV.get('app_config', { type: 'json' });
+    assert.ok(storedInKV);
+    assert.equal(storedInKV.apiToken, cfg1.apiToken);
+
+    // 再次调用 getConfig，获取到的是同一个持久化的 API_TOKEN
+    const cfg2 = await getConfig(freshEnv);
+    assert.equal(cfg2.apiToken, cfg1.apiToken);
+  });
+
+  it('should generate random API tokens with proper format', async () => {
+    const { generateRandomApiToken } = await import('../src/config.js');
+    const t1 = generateRandomApiToken();
+    const t2 = generateRandomApiToken();
+    assert.notEqual(t1, t2);
+    assert.ok(t1.startsWith('cf-push-'));
+    assert.ok(t1.length >= 20);
+  });
+});
+
 describe('Static Landing Page', () => {
   it('should render Han Wudi biography landing page with proper DOM structure', async () => {
     const { renderLandingPage } = await import('../src/landing.js');
@@ -353,5 +623,6 @@ describe('Static Landing Page', () => {
     assert.ok(html.includes('<!DOCTYPE html>'));
   });
 });
+
 
 

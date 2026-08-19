@@ -16,7 +16,7 @@ DEFAULT_DATA_PATH = "/api-data-sync"
 ADMIN_PATH = "/admin"
 ADMIN_PASSWORD = "test1234!"
 
-# 上游中继网关（留空代表直连，支持 SOCKS5 / HTTP 格式上游住宅网络节点）
+# 上游中继网关（留空代表直连，支持 SOCKS5 / HTTP / OpenVPN 格式住宅网络节点）
 DEFAULT_UPSTREAM_GATEWAY = ""
 
 # 优选 CDN 域名与节点列表（英文逗号或换行分隔）

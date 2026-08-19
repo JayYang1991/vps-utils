@@ -60,11 +60,18 @@ export async function handleAdmin(request, env, url, config) {
       vless: `${url.origin}/v2ray?token=${token}`,
     };
 
+    const restApi = {
+      endpoint: `${url.origin}/api/upstream`,
+      testEndpoint: `${url.origin}/api/upstream/test`,
+      apiToken: config.apiToken,
+    };
+
     return jsonResponse({
       config: {
         uuid: config.uuid,
         proxyPath: config.proxyPath,
         adminPath: config.adminPath,
+        apiToken: config.apiToken,
         upstreamProxy: config.upstreamProxy,
         cleanIPs: config.cleanIPs,
         nodeName: config.nodeName,
@@ -80,7 +87,21 @@ export async function handleAdmin(request, env, url, config) {
       singbox,
       clash,
       subscriptions,
+      restApi,
     });
+  }
+
+  // 4.1 API: 生成新随机 API Token (POST /admin/api/generate-token)
+  if (path.endsWith('/api/generate-token') && method === 'POST') {
+    const isAuthed = await verifyAdminAuth(request, config);
+    if (!isAuthed) {
+      return jsonResponse({ error: 'Unauthorized' }, 401);
+    }
+    const bytes = new Uint8Array(20);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    const newToken = `cf-push-${hex}`;
+    return jsonResponse({ success: true, apiToken: newToken });
   }
 
   // 5. API: 保存配置 (POST /admin/api/config)
@@ -592,17 +613,33 @@ function getAdminHTML(host, adminPath) {
         <div class="form-group">
           <label class="form-label">住宅 IP / 上游代理 (Upstream Residential Proxy)</label>
           <div class="input-with-action">
-            <input type="text" id="cfg-upstream" class="form-control" placeholder="例如: socks5://user:pass@res-proxy.com:1080 或 http://user:pass@host:8080">
+            <input type="text" id="cfg-upstream" class="form-control" placeholder="例如: socks5://user:pass@host:1080 或 openvpn://vpn:vpn@ip:443 或 http://user:pass@host:8080">
             <button class="btn btn-secondary" onclick="testUpstreamLive()">⚡ 测试连通性</button>
           </div>
           <div id="upstream-test-res" class="test-result-box"></div>
           <p class="help-text">
-            支持 <b>SOCKS5</b> 与 <b>HTTP</b> 代理格式：<br>
+            支持 <b>SOCKS5</b>、<b>HTTP</b> 与 <b>OpenVPN</b> 代理格式：<br>
             • <code>socks5://username:password@ip:port</code><br>
+            • <code>openvpn://username:password@ip:port</code> 或 <code>ovpn://ip:port</code>（默认凭据 vpn:vpn）<br>
             • <code>http://username:password@ip:port</code><br>
-            • <code>ip:port:username:password</code><br>
+            • OpenVPN <code>.ovpn</code> 配置文件完整文本或 Base64 编码字符串（自动解析 remote 节点）<br>
+            • <code>ip:port:username:password</code> 或 <code>ip:port</code><br>
             • 留空则代表直接由 Cloudflare 边缘节点直连目标。
           </p>
+        </div>
+
+        <!-- 代理修改推送专属 REST API Token -->
+        <div class="form-group" style="padding: 14px; background: #090d16; border-radius: var(--radius); border: 1px solid rgba(59, 130, 246, 0.3);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+            <label class="form-label" style="margin-bottom:0; font-weight:600; color:#38bdf8;">🔑 代理修改推送专属 REST API Token (独立鉴权)</label>
+            <span style="font-size:0.75rem; color:var(--text-muted);">供外部程序/守护进程自动推送修改</span>
+          </div>
+          <div class="input-with-action">
+            <input type="text" id="cfg-api-token" class="form-control" placeholder="输入或生成 API 推送 Token..." oninput="updateRestSnippets(this.value)">
+            <button class="btn btn-secondary" onclick="generateRandomAPIToken()">🎲 生成随机 Token</button>
+            <button class="btn btn-secondary btn-sm" onclick="copyInputText('cfg-api-token')">复制</button>
+          </div>
+          <p class="help-text">外部程序可通过 <code>POST /api/upstream</code> 携带该 Token 自动推送更新代理，无需管理员密码。</p>
         </div>
 
         <div class="form-group">
@@ -641,6 +678,31 @@ function getAdminHTML(host, adminPath) {
 
         <div style="margin-top: 20px;">
           <button class="btn btn-success" style="width: 100%; justify-content: center;" onclick="saveAllConfig()">💾 确认并立即保存所有配置</button>
+        </div>
+      </div>
+
+      <!-- REST API 外部调用指南卡片 -->
+      <div class="card">
+        <div class="card-title">
+          <span>🚀 代理自动推送 REST 接口使用指南</span>
+        </div>
+        <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">
+          接口地址：<code id="rest-endpoint-url" style="color:#38bdf8; font-weight:600;">https://<domain>/api/upstream</code>
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label">1. cURL 快速推送 OpenVPN / SOCKS5 代理示例 (纯文本/单行)</label>
+          <div class="code-block" id="curl-text-example"></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">2. cURL JSON 推送示例 (支持同时连通性测速)</label>
+          <div class="code-block" id="curl-json-example"></div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">3. Python 自动化保活脚本推送代码片段</label>
+          <div class="code-block" id="python-push-example"></div>
         </div>
       </div>
     </div>
@@ -866,6 +928,9 @@ function getAdminHTML(host, adminPath) {
       document.getElementById('cfg-uuid').value = appData.config.uuid || '';
       document.getElementById('cfg-proxy-path').value = appData.config.proxyPath || '';
       document.getElementById('cfg-upstream').value = appData.config.upstreamProxy || '';
+      if (document.getElementById('cfg-api-token')) {
+        document.getElementById('cfg-api-token').value = appData.config.apiToken || '';
+      }
       document.getElementById('cfg-clean-ips').value = appData.config.cleanIPs || '';
       document.getElementById('cfg-node-name').value = appData.config.nodeName || '';
       if (document.getElementById('cfg-config-url')) {
@@ -877,6 +942,9 @@ function getAdminHTML(host, adminPath) {
       if (document.getElementById('cfg-subapi-url')) {
         document.getElementById('cfg-subapi-url').value = appData.config.subapiUrl || '';
       }
+
+      // 渲染 REST API 指南
+      updateRestSnippets(appData.config.apiToken || '');
 
       // 渲染节点列表
       const nodesDiv = document.getElementById('nodes-container');
@@ -904,12 +972,60 @@ function getAdminHTML(host, adminPath) {
       document.getElementById('clash-code').innerText = appData.clash;
     }
 
+    function updateRestSnippets(token) {
+      const restEndpoint = (appData.restApi && appData.restApi.endpoint) || (window.location.origin + '/api/upstream');
+      const curToken = (token || (appData.config && appData.config.apiToken) || 'YOUR_API_TOKEN').trim();
+      if (document.getElementById('rest-endpoint-url')) {
+        document.getElementById('rest-endpoint-url').innerText = restEndpoint;
+      }
+      if (document.getElementById('curl-text-example')) {
+        document.getElementById('curl-text-example').innerText = 
+          '# 推送 OpenVPN 格式或 SOCKS5 代理：\n' +
+          'curl -X POST ' + restEndpoint + ' \\\n' +
+          '  -H "Authorization: Bearer ' + curToken + '" \\\n' +
+          '  -d "openvpn://vpn:vpn@219.100.37.13:443"';
+      }
+      if (document.getElementById('curl-json-example')) {
+        document.getElementById('curl-json-example').innerText = 
+          '# JSON 格式推送并执行在线握手测速：\n' +
+          'curl -X POST ' + restEndpoint + ' \\\n' +
+          '  -H "Authorization: Bearer ' + curToken + '" \\\n' +
+          '  -H "Content-Type: application/json" \\\n' +
+          '  -d \'{"upstreamProxy":"openvpn://vpn:vpn@219.100.37.13:443","test":true}\'';
+      }
+      if (document.getElementById('python-push-example')) {
+        document.getElementById('python-push-example').innerText =
+          'import requests\n\n' +
+          'API_URL = "' + restEndpoint + '"\n' +
+          'API_TOKEN = "' + curToken + '"\n\n' +
+          '# 推送最优住宅代理 (支持 SOCKS5 / HTTP / OpenVPN 格式)\n' +
+          'resp = requests.post(\n' +
+          '    API_URL,\n' +
+          '    headers={"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"},\n' +
+          '    json={"upstreamProxy": "openvpn://vpn:vpn@219.100.37.13:443", "test": True},\n' +
+          '    timeout=15\n' +
+          ')\n' +
+          'print("Response:", resp.json())';
+      }
+    }
+
+    async function generateRandomAPIToken() {
+      const bytes = new Uint8Array(20);
+      crypto.getRandomValues(bytes);
+      const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+      const newToken = 'cf-push-' + hex;
+      document.getElementById('cfg-api-token').value = newToken;
+      updateRestSnippets(newToken);
+      showToast('🎲 已生成新 Token，点击下方保存即可持久化生效', 'success');
+    }
+
     async function saveAllConfig() {
       const token = localStorage.getItem('vless_token');
       const payload = {
         uuid: document.getElementById('cfg-uuid').value.trim(),
         proxyPath: document.getElementById('cfg-proxy-path').value.trim(),
         upstreamProxy: document.getElementById('cfg-upstream').value.trim(),
+        apiToken: document.getElementById('cfg-api-token') ? document.getElementById('cfg-api-token').value.trim() : '',
         cleanIPs: document.getElementById('cfg-clean-ips').value.trim(),
         nodeName: document.getElementById('cfg-node-name').value.trim(),
         configUrl: document.getElementById('cfg-config-url') ? document.getElementById('cfg-config-url').value.trim() : '',

@@ -6,6 +6,7 @@
 import { getConfig, verifyAdminAuth, hashPassword, DEFAULT_CONFIG_URL, DEFAULT_SINGBOX_CONFIG_URL } from './config.js';
 import { handleVlessWebSocket } from './vless.js';
 import { handleAdmin } from './admin.js';
+import { handleRestApi } from './api.js';
 import { renderLandingPage } from './landing.js';
 import { generateAllVlessNodes, generateBase64Sub, generateClashFullProfile, generateSingboxFullProfile, convertViaSubapi } from './sub.js';
 
@@ -48,6 +49,13 @@ export default {
       const isAdminPathMatch = pathname === config.adminPath || pathname.startsWith(`${config.adminPath}/`);
       if (isAdminPathMatch) {
         return await handleAdmin(request, env, url, config);
+      }
+
+      // 4. 路由 C：代理修改推送与状态 REST API (/api/upstream, /api/proxy)
+      const isRestApiMatch = pathname === '/api/upstream' || pathname.startsWith('/api/upstream/') ||
+        pathname === '/api/proxy' || pathname.startsWith('/api/proxy/');
+      if (isRestApiMatch) {
+        return await handleRestApi(request, env, url, config);
       }
 
       // 4. 路由 C：订阅聚合接口 (/sub, /clash, /singbox, /v2ray, /base64)
