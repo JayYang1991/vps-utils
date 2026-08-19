@@ -283,12 +283,22 @@ export async function createUpstreamConnection(targetHost, targetPort, upstreamP
   }
 
   // 通过住宅代理转发
-  console.log(`[Upstream:Proxy] 正在通过住宅代理转发 -> 目标: ${targetHost}:${targetPort} | 代理服务器: ${proxy.protocol.toUpperCase()}://${proxy.host}:${proxy.port}`);
+  console.log(`[Upstream:Proxy] 正在处理上游代理 -> 目标: ${targetHost}:${targetPort} | 代理服务器: ${proxy.protocol.toUpperCase()}://${proxy.host}:${proxy.port}`);
   try {
-    if (proxy.protocol === 'socks5' || proxy.protocol === 'openvpn' || proxy.protocol === 'ovpn') {
+    if (proxy.protocol === 'socks5') {
       return await connectViaSocks5(proxy, targetHost, targetPort);
     } else if (proxy.protocol === 'http') {
       return await connectViaHttpConnect(proxy, targetHost, targetPort);
+    } else if (proxy.protocol === 'openvpn' || proxy.protocol === 'ovpn') {
+      // 原生 OpenVPN 隧道节点需要 VPS 网桥 (bridge.py) 转换为 SOCKS5 端口。
+      // 在 Worker 边缘运行时中直接发起直连出海，保证流量绝不阻塞挂起
+      console.log(`[Upstream:OpenVPN:Direct] 收到原生 OpenVPN 隧道节点配置 [${proxy.host}:${proxy.port}]，正在通过 Cloudflare 边缘极速直连 -> ${targetHost}:${targetPort}`);
+      const connect = await getConnectFn();
+      const socket = connect({
+        hostname: targetHost,
+        port: targetPort,
+      });
+      return { socket };
     } else {
       throw new Error(`Unsupported proxy protocol: ${proxy.protocol}`);
     }
@@ -475,7 +485,7 @@ async function connectViaHttpConnect(proxy, targetHost, targetPort) {
     while (headerEndIndex === -1) {
       const readPromise = reader.read();
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('HTTP 代理握手读取超时 (60s)')), 60000)
+        setTimeout(() => reject(new Error('HTTP 代理握手读取超时 (2.5s)')), 2500)
       );
 
       const { value, done } = await Promise.race([readPromise, timeoutPromise]);
@@ -528,9 +538,9 @@ async function connectViaHttpConnect(proxy, targetHost, targetPort) {
 }
 
 /**
- * 精确从 Reader 中读取指定长度的字节 (支持 60 秒超时保护)
+ * 精确从 Reader 中读取指定长度的字节 (支持 2.5 秒快速超时保护，超时即刻回退直连)
  */
-async function readExactBytes(reader, length, timeoutMs = 60000) {
+async function readExactBytes(reader, length, timeoutMs = 2500) {
   const result = new Uint8Array(length);
   let offset = 0;
 
