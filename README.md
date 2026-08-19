@@ -233,11 +233,14 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 - **动态优选与在线转换**：动态从 `sub.19910417.xyz` 拉取优选 IP，并通过 `subapi.19910417.xyz` 在线生成 Clash Meta 与 Sing-box 订阅。
 - **KV 动态管理后台**：内置 `/admin` 控制台，支持可视化热更新 UUID、中继住宅网关、优选 IP 列表与密码。
 
-### 8. [vpngate-residential-selector](./vpngate-residential-selector) — VPNGATE 住宅 IP 优选与高并发测速工具
+### 8. [vpngate-residential-selector](./vpngate-residential-selector) — VPNGATE 纯净住宅 IP 优选与全自动保活系统
 
-- **实时动态拉取**：自动从 VPNGATE API 获取全球志愿与住宅网络节点，内置多镜像容灾。
-- **高并发多轮测速**：多线程并发测试 TCP 握手平均延迟（RTT）、抖动及丢包率，自动加权评分精选 TOP 20 节点。
-- **全格式全路径输出**：自动导出 SOCKS5 / HTTP 代理全路径 (`proxies.txt`)、JSON 元数据、Markdown 报表及 OpenVPN 配置。
+- **多源全量聚合与历史沉淀**：突破单接口 ~100 限制，并发聚合官方、每日镜像（`sites.aspx`）与社区节点池（180+ 全球节点），并在后台持续沉淀扩展。
+- **Scamalytics 威胁分筛选 (<20分)**：自动并发查询 `scamalytics.com` 威胁分，严格剔除机房/被标记 IP，仅保留 0~19 分纯净家庭宽带住宅 IP。
+- **真实应用层协议握手测速**：发送 OpenVPN 真实握手帧验证服务端状态，计算真实时延与丢包率，剔除假活节点。
+- **7 国 Systemd 5 分钟自愈保活**：独立维护 US、JP、HK、SG、KR、DE、AU 7 国 TOP 20 节点池，支持全量可用跳过刷新与失效 1 对 1 热替换。
+- **本地住宅代理中继网桥**：提供 `vpngate-bridge` 快速在本地开启 `socks5://127.0.0.1:10808` 与 `http://127.0.0.1:10809` 双协议中继网关。
+- **全局快捷命令体系**：`vpngate-service`、`vpngate-selector`、`vpngate-bridge`、`vpngate-daemon`。
 
 ---
 

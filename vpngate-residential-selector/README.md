@@ -1,120 +1,204 @@
-# 🌐 VPNGATE 住宅 IP 优选与高并发测速工具 (VPNGATE Residential Selector)
+# 🌐 VPNGATE 纯净住宅 IP 优选与全自动保活系统 (VPNGATE Residential Selector)
 
-自动化从 **VPNGATE (筑波大学学术网络项目)** 动态拉取全球志愿节点与住宅 IP 列表，通过多轮高并发 TCP 握手延迟与带宽质量基准测速，自动计算综合评分并精选出**最优 TOP 20 住宅代理**，全路径格式化输出至多种文件格式，无缝直连中继代理网络。
+自动化从 **VPNGATE (筑波大学学术网络项目)** 全量并发采集全球志愿者节点，通过 **Scamalytics 威胁风控分纯净筛选 (<20分)**，执行多轮高并发**应用层协议握手测速 (OpenVPN / SOCKS5 / HTTP)**，精选最优纯净家庭住宅代理，提供 7 国 Systemd 后台自动愈合保活守护与本地代理网桥服务。
 
 ---
 
 ## 🌟 核心特性
 
-1. **⚡ 实时动态数据获取与多镜像容灾**：
-   - 自动请求 VPNGATE 官方 API (`http://www.vpngate.net/api/iphone/`)。
-   - 内置智能多镜像自动故障切换机制，保障无论在何种网络环境下均能秒级拉取最新数据。
+1. **🌐 全量多源并发采集与历史沉淀**：
+   - 自动并发采集 VPNGATE 官方主站、每日动态镜像（`sites.aspx`）与社区同步源，彻底突破单接口 ~100 节点限制，瞬间聚合 **180+ 全球节点**。
+   - 内置历史沉淀库（`all_discovered_nodes.json`），随着守护进程周期性运行持续捕获轮换节点，节点库自动滚雪球式累积扩展。
 
-2. **🏡 智能住宅 IP / 宽带运营商识别过滤**：
-   - 识别日本 (NTT, KDDI, SoftBank, OCN, So-net)、韩国 (KT, SK Telecom, LG U+)、东南亚、欧美等主流住宅宽带 ISP 签名。
-   - 自动过滤内网保留地址、局域网 IP 及离线失活节点。
+2. **🛡️ Scamalytics 威胁分纯净筛选 (`Fraud Score < 20`)**：
+   - 自动批量并发查询 `scamalytics.com` 威胁风控分（0~100）。
+   - 严格剔除机房、云服务商及被标记的公开代理网段（70+分），仅保留 **0~19 分的极度纯净家庭宽带住宅 IP**（如 NTT、KDDI、SoftBank 等 0~5 分纯净宽带）。
 
-3. **🚀 高并发多轮网络测速算法 (Multi-Sample TCP RTT)**：
-   - 支持 30+ 线程高并发探测，可在 1 秒内完成全网近百个服务器的连通性与多轮平均延迟（RTT）、抖动（Jitter）及丢包率计算。
-   - 多端口自适应探测：自动提取并探测 OpenVPN/SSL/SSTP 端口（如 443, 992, 995, 1194 等）。
+3. **⚡ 真实应用层协议握手测速 (Protocol Handshake Benchmark)**：
+   - 摒弃单纯的 TCP 端口扫描，向节点发送真实 **OpenVPN 握手帧 (`P_CONTROL_HARD_RESET_CLIENT_V2`)** 与 SOCKS5 握手报文，验证服务端真实响应报文（Opcode 8 / Reset Server V2）。
+   - 毫秒级计算真实握手时延（RTT）、抖动（Jitter）及丢包率，剔除“端口开放但协议不可用”的假活节点。
 
-4. **🏆 多维度加权综合评分排序 (Composite Scoring)**：
-   - 综合平衡 **实测握手延迟（低延迟权重最大）**、**官方实测带宽（Mbps）**、**稳定性/丢包惩罚** 及 **VPNGATE 历史活跃质量得分**，精准挑出体验最佳的节点。
+4. **🌉 本地 SOCKS5 / HTTP 住宅代理中继网桥 (`vpngate-bridge`)**：
+   - 一键启动本地双协议代理网关：`socks5://127.0.0.1:10808` 与 `http://127.0.0.1:10809`。
+   - 自动将流量加密中继至最优住宅 OpenVPN 节点，供 Cloudflare Worker VLESS、浏览器、curl 等直接连通出海。
 
-5. **📁 全格式全路径自动导出**：
-   - `results/proxies.txt`：纯代理全路径 URL 列表（支持 `socks5://vpn:vpn@ip:port`、`http://...` 或 `ip:port` 格式）。
-   - `results/upstream_gateway.txt`：精选第一名最优节点，可直接作为 Cloudflare Worker VLESS 的上游中继网关。
-   - `results/vpngate_top20.txt`：排版整齐的控制台报表。
-   - `results/residential_nodes.json`：包含完整元数据、国旗、运营商、各协议连接串的结构化 JSON。
-   - `results/summary.md`：美观的 GitHub Markdown 表格。
-   - `results/ovpn/`：一键提取并保存选出节点的 `.ovpn` OpenVPN 客户端配置文件。
+5. **🔄 7 国 Systemd 后台 5 分钟自愈保活守护**：
+   - 独立维护 **美国 (US)**、**日本 (JP)**、**香港 (HK)**、**新加坡 (SG)**、**韩国 (KR)**、**德国 (DE)**、**澳大利亚 (AU)** 7 国 TOP 20 节点池。
+   - **全量可用跳过刷新**：池内节点健康时跳过网络拉取，保持长连接稳定。
+   - **失效 1 对 1 热替换**：若某个 IP 失活，自动从最新候选池挑选最优且不重复的 1 个纯净节点替补。
 
-6. **🪶 零第三方依赖 (Zero External Dependencies)**：
-   - 基于 Python 3.10+ 标准库构建，无需 `pip install` 任何第三方包，开箱即用。
-
-## 🔄 Systemd 后台服务与 7 国智能保活守护 (Daemon Service)
-
-针对生产运维场景，项目内置了 **7国住宅代理智能保活守护进程 (`daemon.py`)** 与 **Systemd 服务管理脚本 (`service.sh`)**：
-
-### 🎯 核心守护逻辑
-1. **7大核心国家独立池 (每国维护 TOP 20)**：
-   - 包含：**美国 (US)**、**日本 (JP)**、**香港 (HK)**、**新加坡 (SG)**、**韩国 (KR)**、**德国 (DE)**、**澳大利亚 (AU)**。
-2. **每隔 5 分钟 (300s) 周期性巡检**：
-   - **全量可用跳过拉取**：每次检测开始先快速探活当前池中所有 IP，若全部可用，**立即跳过从 VPNGATE API 刷新**，极大节省带宽并维持长连接稳定。
-   - **失效 1 对 1 热替换**：若某个国家的某个代理失活断连，自动拉取 VPNGATE 最新列表，在该国家候选节点中**挑选最优且不与已有 IP 重复的 1 个节点完成热替换**。
-3. **分国独立文件输出**：
-   - 自动生成 `results/proxies_US.txt`、`results/proxies_JP.txt`、`results/proxies_HK.txt`、`results/proxies_SG.txt`、`results/proxies_KR.txt`、`results/proxies_DE.txt`、`results/proxies_AU.txt` 及全量 `results/proxies.txt`。
+6. **📁 全格式全客户端配置文件自动导出**：
+   - `results/proxies.txt`：标准代理 URL 列表（`socks5://vpn:vpn@ip:port`）。
+   - `results/upstream_gateway.txt`：TOP 1 最优节点（直接适配 Cloudflare VLESS 上游中继）。
+   - `results/singbox_outbounds.json`：sing-box 客户端原生出站配置。
+   - `results/ovpn/*.ovpn`：各节点的独立 OpenVPN 配置文件（内嵌证书）。
+   - `results/summary.md`：7 国代理看板与威胁分明细。
 
 ---
 
-### 🛠️ Systemd 服务一键管理
+## 📦 一键安装 (Install)
 
-使用配套的 [`service.sh`](file:///home/jason/code/vps-utils/vpngate-residential-selector/service.sh) 脚本管理系统后台服务：
+在 VPS 终端执行一键安装脚本（自动跨发行版安装 `openvpn` 依赖并配置全局命令）：
 
 ```bash
-# 1. 一键安装并配置为开机自启系统服务
-sudo ./service.sh install
+cd ~/vps-utils/vpngate-residential-selector
+git pull
+sudo ./install.sh
+```
 
-# 2. 查看服务状态与当前 7 国节点统计
-./service.sh status
+> **说明**：
+> - **以 root 身份运行**：自动安装到系统全局 `/usr/local/bin`，并注册系统级 `systemd` 服务。
+> - **以普通用户运行**：自动安装到 `~/.local/bin`，无需 `sudo`。
 
-# 3. 实时追踪查看 5 分钟巡检与替换日志
-./service.sh logs
+---
 
-# 4. 重启 / 停止 / 卸载
-sudo ./service.sh restart
-sudo ./service.sh stop
-sudo ./service.sh uninstall
+## 💻 服务安装后的全局命令用法 (Command Usage)
+
+安装完成后，系统已注册以下 4 个全局快捷命令，可在任意目录下直接调用：
+
+```
+• vpngate-service   -> 管理后台 Systemd 自动保活服务 (状态/日志/启停)
+• vpngate-selector  -> 手动单次运行全量测速与纯净住宅节点提取
+• vpngate-bridge    -> 启动本地 SOCKS5 (10808) / HTTP (10809) 住宅中继网桥
+• vpngate-daemon    -> 前台直接运行 7 国保活守护进程
 ```
 
 ---
 
-## 🚀 快速上手 (手动运行与单次测试)
+### 1️⃣ `vpngate-service` — 管理后台 Systemd 保活服务
 
-### 1. 运行 7 国守护进程 (单次测试模式)
-```bash
-python3 daemon.py --run-once
-```
-
-### 2. 运行常规 CLI 单次测速与优选
-```bash
-python3 main.py -n 20
-```
-
-### 3. 命令行参数详解 (main.py / daemon.py)
+用于查看守护进程运行状态、监控 5 分钟健康检查与节点热替换日志：
 
 ```bash
-python3 main.py [选项]
+# 查看服务运行状态及当前 7 国保活节点统计看板
+vpngate-service status
+
+# 实时追踪守护进程日志 (5 分钟自动巡检与 1 对 1 热替换过程)
+vpngate-service logs
+
+# 重启守护服务
+vpngate-service restart
+
+# 停止守护服务
+vpngate-service stop
+
+# 启动守护服务
+vpngate-service start
+
+# 卸载守护服务
+vpngate-service uninstall
 ```
+
+---
+
+### 2️⃣ `vpngate-selector` — 手动执行全量测速与提取
+
+用于手动触发全网节点抓取、Scamalytics 威胁分过滤与深度协议测速：
+
+```bash
+# 1. 默认精选全球 TOP 20 纯净住宅节点 (威胁分 < 20)
+vpngate-selector
+
+# 2. 指定提取数量 (如精选最优 TOP 10)
+vpngate-selector -n 10
+
+# 3. 指定筛选特定国家 (如仅筛选日本、韩国、美国)
+vpngate-selector -c JP,KR,US -n 10
+
+# 4. 自定义 Scamalytics 威胁分阈值 (如严格筛选低于 5 分的极致纯净节点)
+vpngate-selector --max-fraud-score 5 -n 10
+
+# 5. 指定输出格式 (socks5 / http / direct / noauth)
+vpngate-selector -p socks5 -o /tmp/my_results
+
+# 6. 同时导出所有选出节点的独立 .ovpn 配置文件
+vpngate-selector --save-ovpn
+```
+
+#### 常用参数速查表 (`vpngate-selector`)：
 
 | 参数 | 简写 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `--top` | `-n` | `20` | 精选出的最优节点数量 |
-| `--output` | `-o` | `results` | 结果输出目录 |
-| `--file` | `-f` | *(空)* | 单独指定纯代理列表的输出文件路径 |
-| `--proxy-type` | `-p` | `socks5` | 输出代理格式: `socks5` (带认证), `http`, `direct` (ip:port), `noauth`, `all` |
 | `--country` | `-c` | *(空)* | 按国家代码过滤，如 `JP,KR,US` (留空代表全球) |
-| `--min-speed` | - | `0.0` | 过滤官方带宽低于该值的节点 (单位: Mbps) |
-| `--threads` | `-t` | `30` | 并发测速线程数 |
-| `--timeout` | - | `2.5` | 单次 TCP 连接超时时间 (秒) |
-| `--samples` | - | `3` | 每个节点的采样测试次数 |
-| `--sort-by` | - | `composite` | 排序规则: `composite` (综合评分), `latency` (延迟优先), `speed` (带宽优先) |
-| `--save-ovpn` | - | `False` | 是否同时导出 OpenVPN `.ovpn` 配置文件 |
-| `--strict-residential` | - | `False` | 启用严格住宅 ISP 签名匹配 |
+| `--max-fraud-score` | - | `20` | Scamalytics 威胁分上限 (低于该值判定为纯净住宅) |
+| `--skip-fraud-check` | - | `False`| 跳过 Scamalytics 在线查询 (直接测试全部节点) |
+| `--output` | `-o` | `results` | 结果与配置文件输出目录 |
+| `--proxy-type` | `-p` | `socks5` | 输出代理格式: `socks5`, `http`, `direct`, `noauth`, `all` |
+| `--threads` | `-t` | `30` | 并发协议测速线程数 |
+| `--timeout` | - | `2.5` | 单次协议握手超时时间 (秒) |
+| `--save-ovpn` | - | `False`| 是否将各节点的 OpenVPN `.ovpn` 配置文件导出至 `ovpn/` |
+
+---
+
+### 3️⃣ `vpngate-bridge` — 启动本地 SOCKS5 / HTTP 代理中继网桥
+
+自动读取当前选出的最优住宅 OpenVPN 节点，并在本地开启 SOCKS5 / HTTP 网关：
+
+```bash
+# 1. 默认桥接全球延迟最低的纯净住宅节点 (监听 10808 / 10809 端口)
+vpngate-bridge
+
+# 2. 桥接指定国家的最优住宅节点 (如日本 JP)
+vpngate-bridge -c JP
+
+# 3. 自定义本地监听端口
+vpngate-bridge --socks-port 10808 --http-port 10809
+```
+
+#### 启动后测试本地网桥连通性：
+
+```bash
+# 测试本地 HTTP 代理通道
+curl -x http://127.0.0.1:10809 https://api.ip.sb/ip
+
+# 测试本地 SOCKS5 代理通道
+curl -x socks5h://127.0.0.1:10808 https://api.ip.sb/ip
+```
+
+---
+
+### 4️⃣ `vpngate-daemon` — 前台运行 7 国保活守护进程
+
+可在终端前台调试或测试 7 国轮询保活逻辑：
+
+```bash
+# 单次运行 7 国全量巡检与池构建后退出
+vpngate-daemon --run-once
+
+# 自定义巡检周期 (如每 600 秒巡检一次，每国维持 TOP 10)
+vpngate-daemon --interval 600 --top-per-country 10
+```
+
+---
+
+## 📁 生成文件位置与说明
+
+所有生成的文件保存在安装目录的 `results/` 下（默认 `/usr/local/bin/vpngate-residential-selector/results/` 或 `~/.local/bin/vpngate-residential-selector/results/`）：
+
+| 文件路径 | 说明 |
+| :--- | :--- |
+| `results/proxies.txt` | 全量通过协议验证与纯净筛选的代理全路径列表 |
+| `results/proxies_US.txt` 等 | 各国独立代理列表 (`_JP.txt`, `_KR.txt`, `_HK.txt`, `_SG.txt`, `_DE.txt`, `_AU.txt`) |
+| `results/upstream_gateway.txt` | 当前最优 TOP 1 节点，用于 Cloudflare VLESS 上游中继 |
+| `results/residential_pool.json`| 7 国保活节点状态数据库 (含延迟、威胁分、端口等) |
+| `results/singbox_outbounds.json` | 适配 sing-box 客户端的原生 Outbound 配置 |
+| `results/ovpn/*.ovpn` | 选出节点的独立 OpenVPN 配置文件 |
+| `results/summary.md` | 7 国保活看板与实时评分明细 |
 
 ---
 
 ## 🔗 与 Cloudflare VLESS 代理联动
 
-本项目生成的住宅 SOCKS5 / HTTP 代理全路径，可直接复制填入 `cloudflare-vless-proxy` 项目的管理后台（`/admin`）中的 **上游中继网关 (`DEFAULT_UPSTREAM_GATEWAY`)**。
+本项目生成的纯净住宅代理全路径，可直接填入 `cloudflare-vless-proxy` 项目的管理后台（`/admin`）的 **上游中继网关 (`DEFAULT_UPSTREAM_GATEWAY`)** 或本地网桥 `socks5://127.0.0.1:10808`。
 
-这样 Cloudflare Worker 会将所有客户端流量通过选出的日本/韩国等住宅宽带中继落地，实现**真实住宅家庭宽带出口 IP**，彻底规避数据中心机房 IP 限制！
+Cloudflare Worker 会自动通过选出的纯净家庭住宅宽带中继落地，实现**真实住宅宽带出口 IP**，彻底解除数据中心机房 IP 限制！
 
 ---
 
 ## 🧪 单元测试
 
-项目内置完整的单元测试集：
+项目内置完整的单元测试集（覆盖多源聚合、Scamalytics威胁分筛选、协议握手及保活逻辑）：
 
 ```bash
 python3 -m unittest test_selector.py
