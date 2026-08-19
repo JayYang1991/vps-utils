@@ -126,63 +126,58 @@ class TestVpnGateSelector(unittest.TestCase):
             tested_port=443, composite_score=850.0
         )
 
-        test_dir = "/home/jason/code/vps-utils/vpngate-residential-selector/results/test_output"
-        files = export_results([r], output_dir=test_dir, proxy_type="socks5")
+        import tempfile
+        with tempfile.TemporaryDirectory() as test_dir:
+            files = export_results([r], output_dir=test_dir, proxy_type="socks5")
 
-        self.assertTrue(os.path.exists(files["proxies_txt"]))
-        self.assertTrue(os.path.exists(files["nodes_json"]))
-        self.assertTrue(os.path.exists(files["summary_md"]))
-        self.assertTrue(os.path.exists(files["report_txt"]))
+            self.assertTrue(os.path.exists(files["proxies_txt"]))
+            self.assertTrue(os.path.exists(files["nodes_json"]))
+            self.assertTrue(os.path.exists(files["summary_md"]))
+            self.assertTrue(os.path.exists(files["report_txt"]))
 
-        with open(files["proxies_txt"], "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            self.assertEqual(content, "socks5://vpn:vpn@219.100.37.13:443")
+            with open(files["proxies_txt"], "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                self.assertEqual(content, "socks5://vpn:vpn@219.100.37.13:443")
 
-        with open(files["nodes_json"], "r", encoding="utf-8") as f:
-            data = json.load(f)
-            self.assertEqual(data["total_selected"], 1)
-            self.assertEqual(data["nodes"][0]["ip"], "219.100.37.13")
+            with open(files["nodes_json"], "r", encoding="utf-8") as f:
+                data = json.load(f)
+                self.assertEqual(data["total_selected"], 1)
+                self.assertEqual(data["nodes"][0]["ip"], "219.100.37.13")
 
         self.assertEqual(get_country_flag("JP"), "🇯🇵")
         self.assertEqual(get_country_flag("KR"), "🇰🇷")
 
     def test_pool_manager_state_and_skip_refresh(self):
-        import shutil
+        import tempfile
         from pool_manager import ResidentialPoolManager, TARGET_COUNTRIES
-        test_dir = "/home/jason/code/vps-utils/vpngate-residential-selector/results/test_pool"
-        if os.path.exists(test_dir):
-            shutil.rmtree(test_dir, ignore_errors=True)
-        os.makedirs(test_dir, exist_ok=True)
 
-        manager = ResidentialPoolManager(output_dir=test_dir, top_per_country=2)
-        self.assertEqual(len(manager.pools), len(TARGET_COUNTRIES))
-        self.assertEqual(len(manager.pools["JP"]), 0)
+        with tempfile.TemporaryDirectory() as test_dir:
+            manager = ResidentialPoolManager(output_dir=test_dir, top_per_country=2)
+            self.assertEqual(len(manager.pools), len(TARGET_COUNTRIES))
+            self.assertEqual(len(manager.pools["JP"]), 0)
 
-        # Add a dummy node to JP
-        s_jp = VpnGateServer(
-            hostname="jp1", ip="219.100.37.13", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
-            country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
-            total_users=1, total_traffic=1, operator="", message=""
-        )
-        r_jp = BenchmarkResult(
-            server=s_jp, reachable=True, protocol="openvpn", real_latency_ms=10.0, min_latency_ms=9.0,
-            max_latency_ms=11.0, jitter_ms=2.0, packet_loss_rate=0.0,
-            tested_port=443, composite_score=1000.0
-        )
-        manager.pools["JP"].append(r_jp)
-        manager.save_state_and_export()
+            # Add a dummy node to JP
+            s_jp = VpnGateServer(
+                hostname="jp1", ip="219.100.37.13", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+                country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+                total_users=1, total_traffic=1, operator="", message=""
+            )
+            r_jp = BenchmarkResult(
+                server=s_jp, reachable=True, protocol="openvpn", real_latency_ms=10.0, min_latency_ms=9.0,
+                max_latency_ms=11.0, jitter_ms=2.0, packet_loss_rate=0.0,
+                tested_port=443, composite_score=1000.0
+            )
+            manager.pools["JP"].append(r_jp)
+            manager.save_state_and_export()
 
-        # Reload manager from saved state
-        manager2 = ResidentialPoolManager(output_dir=test_dir, top_per_country=2)
-        self.assertEqual(len(manager2.pools["JP"]), 1)
-        self.assertEqual(manager2.pools["JP"][0].server.ip, "219.100.37.13")
+            # Reload manager from saved state
+            manager2 = ResidentialPoolManager(output_dir=test_dir, top_per_country=2)
+            self.assertEqual(len(manager2.pools["JP"]), 1)
+            self.assertEqual(manager2.pools["JP"][0].server.ip, "219.100.37.13")
 
-        # Verify active IPs set
-        active_ips = manager2.get_all_active_ips()
-        self.assertIn("219.100.37.13", active_ips)
-
-        if os.path.exists(test_dir):
-            shutil.rmtree(test_dir, ignore_errors=True)
+            # Verify active IPs set
+            active_ips = manager2.get_all_active_ips()
+            self.assertIn("219.100.37.13", active_ips)
 
 
 if __name__ == "__main__":
