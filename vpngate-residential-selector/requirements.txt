@@ -1,0 +1,4 @@
+# VPNGATE Residential IP Selector
+# This project uses Python 3.10+ standard libraries and has ZERO required external dependencies.
+# Optional utilities for enhanced color output:
+# rich>=13.0.0

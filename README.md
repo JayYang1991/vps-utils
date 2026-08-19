@@ -227,6 +227,18 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 - **动态节点合并**：自动聚合服务端配置与 Cloudflare 优选 IP 节点，自动清理空测速组。
 - **`install.sh` & `pack.sh`**：提供一键自动化部署与 GitHub Actions 打包发布脚本。
 
+### 7. [cloudflare-vless-proxy](./cloudflare-vless-proxy) — Cloudflare Worker VLESS 住宅中继代理与管理门户
+
+- **VLESS 边缘中继**：基于 Cloudflare Worker 实现高性能 VLESS over WebSocket 代理，支持 SOCKS5 / HTTP 住宅代理中继出口。
+- **动态优选与在线转换**：动态从 `sub.19910417.xyz` 拉取优选 IP，并通过 `subapi.19910417.xyz` 在线生成 Clash Meta 与 Sing-box 订阅。
+- **KV 动态管理后台**：内置 `/admin` 控制台，支持可视化热更新 UUID、中继住宅网关、优选 IP 列表与密码。
+
+### 8. [vpngate-residential-selector](./vpngate-residential-selector) — VPNGATE 住宅 IP 优选与高并发测速工具
+
+- **实时动态拉取**：自动从 VPNGATE API 获取全球志愿与住宅网络节点，内置多镜像容灾。
+- **高并发多轮测速**：多线程并发测试 TCP 握手平均延迟（RTT）、抖动及丢包率，自动加权评分精选 TOP 20 节点。
+- **全格式全路径输出**：自动导出 SOCKS5 / HTTP 代理全路径 (`proxies.txt`)、JSON 元数据、Markdown 报表及 OpenVPN 配置。
+
 ---
 
 ## 📂 第三章：仓库目录结构与文件索引
@@ -262,11 +274,24 @@ vps-utils/
 │   ├── sub-worker.js                  # Cloudflare Worker 订阅服务
 │   ├── process_ips.py                 # 自动化测速与推送脚本
 │   └── telegram_tool.py               # Telegram 资源抓取脚本
-└── singbox-sub-converter/              # sing-box 自适应订阅转换服务
-    ├── README.md                      # singbox-sub-converter 详细指南
-    ├── install.sh                     # 自动安装/更新脚本
-    ├── pack.sh                        # 自动化打包脚本
-    └── app/                           # FastAPI 后端与前端静态文件
+├── singbox-sub-converter/              # sing-box 自适应订阅转换服务
+│   ├── README.md                      # singbox-sub-converter 详细指南
+│   ├── install.sh                     # 自动安装/更新脚本
+│   ├── pack.sh                        # 自动化打包脚本
+│   └── app/                           # FastAPI 后端与前端静态文件
+├── cloudflare-vless-proxy/             # Cloudflare Worker VLESS 住宅中继代理与管理门户
+│   ├── README.md                      # cloudflare-vless-proxy 部署指南
+│   ├── src/                           # Worker 源代码 (VLESS, KV Admin, 优选聚合)
+│   ├── wrangler.toml                  # Cloudflare Worker 配置文件
+│   └── build.js                       # 自动化打包与 AST 代码混淆管线
+└── vpngate-residential-selector/       # VPNGATE 住宅 IP 优选与高并发测速工具
+    ├── README.md                      # vpngate-residential-selector 说明指南
+    ├── main.py                        # CLI 调度入口
+    ├── fetcher.py                     # VPNGATE API 拉取与 CSV 解析
+    ├── filter.py                      # 住宅网络与公网 IP 过滤器
+    ├── tester.py                      # 高并发多轮 TCP 延迟与质量测速引擎
+    ├── exporter.py                    # 结果文件与代理全路径导出器
+    └── test_selector.py               # 自动化单元测试集
 ```
 
 ---

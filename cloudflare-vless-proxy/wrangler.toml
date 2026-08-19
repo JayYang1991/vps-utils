@@ -14,7 +14,7 @@ DEFAULT_DATA_PATH = "/api-data-sync"
 
 # 控制台路径与登录密码
 ADMIN_PATH = "/admin"
-ADMIN_PASSWORD = "AdminPassword123!"
+ADMIN_PASSWORD = "yangjie1991!"
 
 # 上游中继网关（留空代表直连，支持 SOCKS5 / HTTP 格式上游住宅网络节点）
 DEFAULT_UPSTREAM_GATEWAY = ""
