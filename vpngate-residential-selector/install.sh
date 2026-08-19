@@ -42,6 +42,34 @@ check_dependencies() {
     local py_version
     py_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
     info "检测到 Python 版本: ${py_version}"
+
+    # 检查并自动安装 OpenVPN
+    if command -v openvpn >/dev/null 2>&1 || [ -x "/usr/sbin/openvpn" ] || [ -x "/usr/bin/openvpn" ]; then
+        info "✅ 检测到 OpenVPN 已就绪"
+    else
+        if [ "$EUID" -eq 0 ]; then
+            info "🔧 未检测到 OpenVPN，正在自动通过系统包管理器安装..."
+            if command -v apt-get >/dev/null 2>&1; then
+                apt-get update -y && apt-get install -y openvpn
+            elif command -v dnf >/dev/null 2>&1; then
+                dnf install -y epel-release openvpn || dnf install -y openvpn
+            elif command -v yum >/dev/null 2>&1; then
+                yum install -y epel-release openvpn || yum install -y openvpn
+            elif command -v apk >/dev/null 2>&1; then
+                apk add openvpn
+            elif command -v pacman >/dev/null 2>&1; then
+                pacman -Sy --noconfirm openvpn
+            fi
+            if command -v openvpn >/dev/null 2>&1 || [ -x "/usr/sbin/openvpn" ]; then
+                info "✅ OpenVPN 安装成功！"
+            else
+                warn "⚠️ OpenVPN 自动安装未能完成，可稍后手动运行: sudo apt-get install -y openvpn"
+            fi
+        else
+            warn "⚠️ 未检测到 OpenVPN，若需要启动本地中继网桥，请先安装: sudo apt-get install -y openvpn"
+        fi
+    fi
+
     if [ "${IS_USER_MODE}" = true ]; then
         warn "当前以普通用户身份运行，将安装至 ${INSTALL_DIR} 与 ${BIN_DIR} (无需 sudo)"
     else
