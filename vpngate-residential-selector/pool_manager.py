@@ -19,7 +19,7 @@ SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from fetcher import fetch_vpngate_csv, parse_vpngate_csv, VpnGateServer
+from fetcher import fetch_all_vpngate_servers, VpnGateServer
 from filter import filter_servers
 from tester import test_single_server, benchmark_servers, select_top_servers, BenchmarkResult
 from exporter import get_country_flag
@@ -326,8 +326,7 @@ class ResidentialPoolManager:
             logger.info(f"ℹ️ [初始构建] 代理池为空，准备从 VPNGATE 拉取候选节点构建 7 国初始代理池...")
 
         try:
-            raw_csv = fetch_vpngate_csv()
-            all_latest_servers = parse_vpngate_csv(raw_csv)
+            all_latest_servers = fetch_all_vpngate_servers()
         except Exception as e:
             logger.error(f"❌ 从 VPNGATE 获取最新列表失败: {e}，保留当前健康节点继续工作。")
             self.save_state_and_export()

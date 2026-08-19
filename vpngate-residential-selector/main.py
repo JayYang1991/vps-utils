@@ -16,7 +16,7 @@ SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from fetcher import fetch_vpngate_csv, parse_vpngate_csv, VpnGateServer
+from fetcher import fetch_all_vpngate_servers, VpnGateServer
 from filter import filter_servers
 from tester import benchmark_servers, select_top_servers, BenchmarkResult
 from exporter import export_results, get_country_flag
@@ -201,9 +201,8 @@ def main() -> int:
         print_banner()
 
     try:
-        # 1. 从 VPNGATE 获取并解析数据
-        raw_csv = fetch_vpngate_csv(custom_url=args.vpngate_url if args.vpngate_url else None)
-        servers = parse_vpngate_csv(raw_csv)
+        # 1. 从 VPNGATE 官方接口与全部镜像全量并发聚合数据
+        servers = fetch_all_vpngate_servers(custom_url=args.vpngate_url if args.vpngate_url else None)
 
         if not servers:
             logging.error("❌ 未从 VPNGATE 解析到任何服务器数据，程序退出。")

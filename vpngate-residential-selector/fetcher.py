@@ -1,25 +1,41 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VPNGATE Data Fetcher & Parser
-Fetches live server lists from VPNGATE academic API with automatic fallback mirrors.
+VPNGATE Data Fetcher & Full Node Aggregator
+Fetches and aggregates full server lists from official VPNGATE APIs, daily mirror sites (sites.aspx),
+and real-time community mirrors, providing maximum server discovery.
 """
 
+import re
 import csv
 import base64
 import logging
+import concurrent.futures
 import urllib.request
 import urllib.error
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from dataclasses import dataclass, field
 
 logger = logging.getLogger("vpngate.fetcher")
 
-# Official and mirror endpoints for VPNGATE API
+# Official base endpoints
 DEFAULT_VPNGATE_URLS = [
     "http://www.vpngate.net/api/iphone/",
     "https://www.vpngate.net/api/iphone/",
     "http://vpngate.net/api/iphone/",
+]
+
+# Daily mirror index pages
+VPNGATE_SITES_INDEX_URLS = [
+    "http://www.vpngate.net/en/sites.aspx",
+    "http://www.vpngate.net/cn/sites.aspx",
+    "http://www.vpngate.net/ja/sites.aspx",
+]
+
+# Real-time community synchronization feeds
+COMMUNITY_FEEDS = [
+    "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/vpngate.csv",
+    "https://raw.githubusercontent.com/snakem982/vpngate-csver/main/vpngate.csv",
 ]
 
 
@@ -132,37 +148,25 @@ def extract_openvpn_info(ovpn_b64: str) -> Dict[str, Any]:
     return info
 
 
-def fetch_vpngate_csv(custom_url: Optional[str] = None, timeout: int = 15, max_retries: int = 3) -> str:
-    """
-    Fetches raw CSV string from VPNGATE API with fallback URLs.
-    """
-    urls_to_try = [custom_url] if custom_url else DEFAULT_VPNGATE_URLS
-
-    for url in urls_to_try:
-        if not url:
-            continue
-        for attempt in range(1, max_retries + 1):
-            logger.info(f"正在从 VPNGATE 拉取服务器列表: {url} (尝试 {attempt}/{max_retries})...")
+def discover_daily_mirrors(timeout: int = 4) -> List[str]:
+    """Discovers active daily dynamic mirror URLs from sites.aspx pages."""
+    discovered: Set[str] = set()
+    for sites_url in VPNGATE_SITES_INDEX_URLS:
+        try:
             req = urllib.request.Request(
-                url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "text/csv,text/plain,*/*",
-                }
+                sites_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
             )
-            try:
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    if resp.status == 200:
-                        raw_data = resp.read().decode("utf-8", errors="ignore")
-                        if "#HostName" in raw_data or "*vpn_servers" in raw_data:
-                            logger.info(f"✅ 成功获取 VPNGATE 数据 (大小: {len(raw_data)} 字节)")
-                            return raw_data
-                        else:
-                            logger.warning("⚠️ VPNGATE 返回数据缺少标准表头，准备重试...")
-            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
-                logger.warning(f"⚠️ 请求 {url} 失败: {e}")
-
-    raise RuntimeError("无法从 VPNGATE API 或备用镜像获取服务器列表，请检查网络连接。")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status == 200:
+                    html = resp.read().decode("utf-8", errors="ignore")
+                    mirrors = re.findall(r'http://[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]+/', html)
+                    discovered.update(mirrors)
+                    if discovered:
+                        break
+        except Exception:
+            continue
+    return list(discovered)
 
 
 def parse_vpngate_csv(raw_csv_text: str) -> List[VpnGateServer]:
@@ -174,7 +178,6 @@ def parse_vpngate_csv(raw_csv_text: str) -> List[VpnGateServer]:
 
     lines = [l.strip() for l in raw_csv_text.splitlines() if l.strip()]
     
-    # Locate the header line starting with #HostName
     header_idx = -1
     for idx, line in enumerate(lines):
         if line.startswith("#HostName") or line.startswith("HostName"):
@@ -182,7 +185,6 @@ def parse_vpngate_csv(raw_csv_text: str) -> List[VpnGateServer]:
             break
 
     if header_idx == -1:
-        logger.error("未在 VPNGATE 响应数据中找到 #HostName 表头。")
         return []
 
     csv_data = lines[header_idx:]
@@ -226,5 +228,105 @@ def parse_vpngate_csv(raw_csv_text: str) -> List[VpnGateServer]:
         )
         servers.append(server)
 
-    logger.info(f"成功解析出 {len(servers)} 个 VPNGATE 服务器节点")
     return servers
+
+
+def _fetch_single_url(url: str, timeout: int = 8) -> List[VpnGateServer]:
+    """Fetches and parses a single VPNGATE API or mirror URL."""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/csv,text/plain,*/*",
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                raw_data = resp.read().decode("utf-8", errors="ignore")
+                if "#HostName" in raw_data or "*vpn_servers" in raw_data:
+                    return parse_vpngate_csv(raw_data)
+    except Exception:
+        pass
+    return []
+
+
+def fetch_all_vpngate_servers(
+    custom_url: Optional[str] = None,
+    timeout: int = 10,
+    max_workers: int = 20
+) -> List[VpnGateServer]:
+    """
+    Fetches and aggregates full server lists from official VPNGATE APIs,
+    dynamic daily mirrors, and community feeds concurrently, merging and deduplicating by IP.
+    """
+    if custom_url:
+        servers = _fetch_single_url(custom_url, timeout=timeout)
+        if servers:
+            logger.info(f"✅ 从指定源成功获取 {len(servers)} 个 VPNGATE 节点 ({custom_url})")
+            return servers
+
+    logger.info("🌐 正在全量并发拉取 VPNGATE 官方接口、每日动态镜像与社区节点池...")
+
+    all_target_urls: List[str] = list(DEFAULT_VPNGATE_URLS)
+
+    # 1. Discover daily mirror endpoints
+    daily_mirrors = discover_daily_mirrors(timeout=5)
+    for m in daily_mirrors:
+        all_target_urls.append(f"{m}api/iphone/")
+
+    # 2. Add community sync feeds
+    all_target_urls.extend(COMMUNITY_FEEDS)
+
+    logger.info(f"📡 共发现并汇总了 {len(all_target_urls)} 个高可用数据采集源，正在并发拉取全量节点...")
+
+    unique_servers: Dict[str, VpnGateServer] = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_url = {executor.submit(_fetch_single_url, url, timeout): url for url in all_target_urls}
+        for future in concurrent.futures.as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                s_list = future.result()
+                if s_list:
+                    logger.debug(f"  • 从源 {url} 成功提取 {len(s_list)} 个节点")
+                    for s in s_list:
+                        if s.ip not in unique_servers:
+                            unique_servers[s.ip] = s
+                        else:
+                            # Merge extra ports & update with fresher stats
+                            existing = unique_servers[s.ip]
+                            for ep in s.extra_ports:
+                                if ep not in existing.extra_ports:
+                                    existing.extra_ports.append(ep)
+                            if s.speed_bps > existing.speed_bps:
+                                existing.speed_bps = s.speed_bps
+                                existing.speed_mbps = s.speed_mbps
+                            if s.score > existing.score:
+                                existing.score = s.score
+                            if not existing.openvpn_config_b64 and s.openvpn_config_b64:
+                                existing.openvpn_config_b64 = s.openvpn_config_b64
+            except Exception as e:
+                logger.debug(f"拉取 {url} 出现异常: {e}")
+
+    result_servers = list(unique_servers.values())
+    if not result_servers:
+        raise RuntimeError("无法从 VPNGATE API 或任何镜像拉取到服务器列表，请检查 VPS 外网连接。")
+
+    logger.info(f"🎉 全量聚合完成！去重后共获取到 {len(result_servers)} 个全球活跃 VPNGATE 节点！")
+    return result_servers
+
+
+def fetch_vpngate_csv(custom_url: Optional[str] = None, timeout: int = 15, max_retries: int = 3) -> str:
+    """Compatibility wrapper that returns raw CSV from first responding endpoint."""
+    urls = [custom_url] if custom_url else DEFAULT_VPNGATE_URLS
+    for url in urls:
+        if not url:
+            continue
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="ignore")
+        except Exception:
+            continue
+    return ""
