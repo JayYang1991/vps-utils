@@ -122,5 +122,36 @@ def filter_servers(
 
         filtered.append(server)
 
-    logger.info(f"过滤完成: 原始 {len(servers)} 个节点 -> 保留 {len(filtered)} 个候选节点")
+    logger.info(f"基础过滤完成: 原始 {len(servers)} 个节点 -> 保留 {len(filtered)} 个候选节点")
     return filtered
+
+
+def filter_by_fraud_score(
+    servers: List[VpnGateServer],
+    max_fraud_score: int = 20,
+    max_workers: int = 15,
+    cache_path: Optional[str] = "results/scamalytics_cache.json"
+) -> List[VpnGateServer]:
+    """
+    Queries Scamalytics threat score for each server IP and keeps ONLY clean residential IPs (< max_fraud_score).
+    """
+    from fraud_checker import batch_query_fraud_scores
+
+    if not servers:
+        return []
+
+    ips = [s.ip for s in servers]
+    score_map = batch_query_fraud_scores(ips, max_workers=max_workers, cache_path=cache_path)
+
+    clean_servers: List[VpnGateServer] = []
+    for s in servers:
+        score = score_map.get(s.ip, -1)
+        s.fraud_score = score
+        # Keep if score is valid and less than threshold (or equal to 0-19)
+        if 0 <= score < max_fraud_score:
+            clean_servers.append(s)
+
+    logger.info(
+        f"🛡️ Scamalytics 威胁分筛选: 候选 {len(servers)} 个 -> 筛选出威胁分 < {max_fraud_score} 的纯净住宅节点 {len(clean_servers)} 个"
+    )
+    return clean_servers

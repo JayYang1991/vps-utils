@@ -109,6 +109,7 @@ install_files() {
     # 复制所有核心 python 模块与脚本
     cp -f "${SCRIPT_DIR}/fetcher.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/filter.py" "${INSTALL_DIR}/"
+    cp -f "${SCRIPT_DIR}/fraud_checker.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/tester.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/exporter.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/pool_manager.py" "${INSTALL_DIR}/"

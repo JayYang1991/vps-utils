@@ -17,7 +17,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from fetcher import fetch_all_vpngate_servers, VpnGateServer
-from filter import filter_servers
+from filter import filter_servers, filter_by_fraud_score
 from tester import benchmark_servers, select_top_servers, BenchmarkResult
 from exporter import export_results, get_country_flag
 
@@ -42,8 +42,8 @@ def print_banner() -> None:
     """Prints tool banner."""
     banner = """
 ==================================================================
-  🌐 VPNGATE 住宅 IP 优选与高并发测速工具 (VPNGATE Selector)
-  ⚡ 自动拉取 -> 住宅网络识别 -> 高并发多轮测速 -> 优选 TOP 20
+  🌐 VPNGATE 纯净住宅 IP 优选与高并发测速工具 (VPNGATE Selector)
+  🛡️ Scamalytics 威胁分纯净筛选 (<20) -> 协议握手测速 -> 优选 TOP 20
 ==================================================================
 """
     print(banner)
@@ -55,11 +55,11 @@ def print_table(results: List[BenchmarkResult]) -> None:
         print("\n❌ 未找到符合条件的可用节点。\n")
         return
 
-    print("\n" + "=" * 115)
-    print(f"  🏆 测速完成！精选最优 TOP {len(results)} 协议验证可用住宅/志愿代理列表:")
-    print("=" * 115)
-    print(f"{'排名':<4} | {'地区':<6} | {'IP地址:端口':<22} | {'协议':<10} | {'实测延迟':<10} | {'官方带宽':<12} | {'综合得分':<10} | {'SOCKS5代理全路径'}")
-    print(f"{'-'*4}-+-{'-'*6}-+-{'-'*22}-+-{'-'*10}-+-{'-'*10}-+-{'-'*12}-+-{'-'*10}-+-{'-'*35}")
+    print("\n" + "=" * 125)
+    print(f"  🏆 测速完成！精选最优 TOP {len(results)} Scamalytics纯净验证(<20分)住宅/志愿代理列表:")
+    print("=" * 125)
+    print(f"{'排名':<4} | {'地区':<6} | {'IP地址:端口':<22} | {'威胁分':<8} | {'协议':<10} | {'实测延迟':<10} | {'官方带宽':<12} | {'综合得分':<10} | {'SOCKS5代理全路径'}")
+    print(f"{'-'*4}-+-{'-'*6}-+-{'-'*22}-+-{'-'*8}-+-{'-'*10}-+-{'-'*10}-+-{'-'*12}-+-{'-'*10}-+-{'-'*35}")
 
     for i, res in enumerate(results, 1):
         flag = get_country_flag(res.server.country_short)
@@ -69,9 +69,10 @@ def print_table(results: List[BenchmarkResult]) -> None:
         lat = f"{res.real_latency_ms:.2f} ms"
         spd = f"{res.server.speed_mbps:.2f} Mbps"
         score = f"{res.composite_score:.1f}"
-        print(f"{i:<4d} | {c_tag:<6} | {addr:<22} | {proto:<10} | {lat:<10} | {spd:<12} | {score:<10} | {res.socks5_url}")
+        fraud_str = f"{res.fraud_score} / 100" if res.fraud_score >= 0 else "N/A"
+        print(f"{i:<4d} | {c_tag:<6} | {addr:<22} | {fraud_str:<8} | {proto:<10} | {lat:<10} | {spd:<12} | {score:<10} | {res.socks5_url}")
 
-    print("=" * 115 + "\n")
+    print("=" * 125 + "\n")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -159,6 +160,19 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--max-fraud-score",
+        type=int,
+        default=20,
+        help="Scamalytics 威胁分最大阈值 (低于该分数的 IP 判定为纯净住宅 IP，默认 20)"
+    )
+
+    parser.add_argument(
+        "--skip-fraud-check",
+        action="store_true",
+        help="跳过 Scamalytics 威胁分在线查询"
+    )
+
+    parser.add_argument(
         "--strict-residential",
         action="store_true",
         help="启用严格住宅 ISP 签名匹配"
@@ -208,7 +222,7 @@ def main() -> int:
             logging.error("❌ 未从 VPNGATE 解析到任何服务器数据，程序退出。")
             return 1
 
-        # 2. 候选服务器过滤与分类
+        # 2. 候选服务器基础过滤 (国家、公网IP、去重)
         countries = [c.strip() for c in args.country.split(",") if c.strip()] if args.country else None
         candidate_servers = filter_servers(
             servers,
@@ -220,10 +234,24 @@ def main() -> int:
         )
 
         if not candidate_servers:
-            logging.error("❌ 过滤后无符合条件的候选节点，请放宽过滤条件后重试。")
+            logging.error("❌ 基础过滤后无符合条件的候选节点，请放宽过滤条件后重试。")
             return 1
 
-        # 3. 多轮高并发网络测速与连通性检测
+        # 3. 通过 Scamalytics 查询威胁分，筛选纯净住宅 IP (< max_fraud_score)
+        if not args.skip_fraud_check:
+            cache_file = os.path.join(args.output, "scamalytics_cache.json") if not os.path.isabs(args.output) else os.path.join(SCRIPT_DIR, args.output, "scamalytics_cache.json")
+            clean_servers = filter_by_fraud_score(
+                candidate_servers,
+                max_fraud_score=args.max_fraud_score,
+                max_workers=min(args.threads, 20),
+                cache_path=cache_file
+            )
+            if clean_servers:
+                candidate_servers = clean_servers
+            else:
+                logging.warning(f"⚠️ 未找到 Scamalytics 威胁分 < {args.max_fraud_score} 的纯净节点，保留全部基础候选节点继续测速。")
+
+        # 4. 对纯净住宅节点执行高并发协议层握手连通性与时延测速
         benchmark_results = benchmark_servers(
             candidate_servers,
             max_workers=args.threads,
@@ -235,7 +263,7 @@ def main() -> int:
             logging.error("❌ 所有候选节点连通性测试均失败，请检查当前网络状态。")
             return 1
 
-        # 4. 排序并精选出 TOP N
+        # 5. 综合加权排序精选最优 TOP N
         top_servers = select_top_servers(
             benchmark_results,
             top_n=args.top,

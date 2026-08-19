@@ -34,6 +34,7 @@ class BenchmarkResult:
     packet_loss_rate: float
     tested_port: int
     composite_score: float
+    fraud_score: int = -1      # Scamalytics fraud/threat score (0-100, < 20 is pure residential)
 
     @property
     def socks5_url(self) -> str:
@@ -189,13 +190,14 @@ def test_single_server_protocol(
             # 1. Real Protocol Latency Score: 1000 / (avg_lat + 1) * 10
             # 2. Bandwidth Score: speed_mbps * 2.0
             # 3. Stability Multiplier: 1.0 - (loss_rate * 0.5)
-            # 4. VPNGATE Academic Score: server.score / 10000.0
+            # 4. Clean Residential Bonus: (20 - fraud_score) * 15
             latency_score = (1000.0 / (avg_lat + 1.0)) * 10.0
             speed_score = min(server.speed_mbps, 1000.0) * 2.0
             stability_multiplier = 1.0 - (loss_rate * 0.5)
             quality_score = min(server.score / 10000.0, 500.0)
+            clean_bonus = max(20 - server.fraud_score, 0) * 15.0 if (server.fraud_score >= 0 and server.fraud_score <= 20) else 0.0
 
-            composite = (latency_score + speed_score + quality_score) * stability_multiplier
+            composite = (latency_score + speed_score + quality_score + clean_bonus) * stability_multiplier
 
             res = BenchmarkResult(
                 server=server,
@@ -207,7 +209,8 @@ def test_single_server_protocol(
                 jitter_ms=round(jitter, 2),
                 packet_loss_rate=round(loss_rate, 2),
                 tested_port=port,
-                composite_score=round(composite, 2)
+                composite_score=round(composite, 2),
+                fraud_score=server.fraud_score
             )
 
             if best_result is None or res.real_latency_ms < best_result.real_latency_ms:

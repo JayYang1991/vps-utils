@@ -93,6 +93,7 @@ class VpnGateServer:
     port: int = 443
     proto: str = "tcp"
     extra_ports: List[int] = field(default_factory=list)
+    fraud_score: int = -1
 
     @property
     def socks5_url(self) -> str:

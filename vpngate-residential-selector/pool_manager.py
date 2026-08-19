@@ -20,7 +20,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from fetcher import fetch_all_vpngate_servers, VpnGateServer
-from filter import filter_servers
+from filter import filter_servers, filter_by_fraud_score
 from tester import test_single_server, benchmark_servers, select_top_servers, BenchmarkResult
 from exporter import get_country_flag
 
@@ -124,6 +124,7 @@ class ResidentialPoolManager:
                         packet_loss_rate=n.get("packet_loss_rate", 0.0),
                         tested_port=n.get("port", 443),
                         composite_score=n.get("composite_score", 0.0),
+                        fraud_score=n.get("fraud_score", -1),
                     )
                     parsed_list.append(res)
                 self.pools[country_code] = parsed_list
@@ -165,6 +166,7 @@ class ResidentialPoolManager:
                     "ip": res.server.ip,
                     "port": res.tested_port,
                     "protocol": res.protocol,
+                    "fraud_score": res.fraud_score,
                     "proto": res.server.proto,
                     "hostname": res.server.hostname,
                     "country_short": res.server.country_short,
@@ -369,11 +371,20 @@ class ResidentialPoolManager:
                 logger.info(f"ℹ️ [{country_code}] VPNGATE 暂无新增可用候选节点 (当前保有 {current_healthy_count} 个)")
                 continue
 
-            # Benchmark candidate nodes
-            logger.info(f"🚀 [{country_code}] 正在对 {len(filtered_candidates)} 个候选节点进行测速以补充节点...")
-            benchmarked = benchmark_servers(
+            # Filter clean residential IPs (< 20 fraud score) via Scamalytics
+            cache_file = os.path.join(self.output_dir, "scamalytics_cache.json")
+            clean_candidates = filter_by_fraud_score(
                 filtered_candidates,
-                max_workers=min(self.threads, len(filtered_candidates)),
+                max_fraud_score=20,
+                cache_path=cache_file
+            )
+            nodes_to_benchmark = clean_candidates if clean_candidates else filtered_candidates
+
+            # Benchmark candidate nodes
+            logger.info(f"🚀 [{country_code}] 正在对 {len(nodes_to_benchmark)} 个纯净候选节点进行协议测速以补充节点...")
+            benchmarked = benchmark_servers(
+                nodes_to_benchmark,
+                max_workers=min(self.threads, len(nodes_to_benchmark)),
                 timeout=self.timeout,
                 samples=self.samples
             )

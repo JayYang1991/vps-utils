@@ -74,11 +74,11 @@ def export_results(
     # 3. Export detailed text report: vpngate_top20.txt
     report_txt_path = os.path.join(output_dir, "vpngate_top20.txt")
     with open(report_txt_path, "w", encoding="utf-8") as f:
-        f.write(f"========================================================================================================\n")
-        f.write(f"  VPNGATE 最优住宅 IP 代理精选 TOP {len(selected_results)} 列表 (更新时间: {timestamp_str})\n")
-        f.write(f"========================================================================================================\n")
-        f.write(f"{'排名':<4} | {'国家':<6} | {'IP地址:端口':<22} | {'协议类型':<12} | {'实测延迟':<10} | {'官方带宽':<12} | {'SOCKS5代理全路径'}\n")
-        f.write(f"{'-'*4}-+-{'-'*6}-+-{'-'*22}-+-{'-'*12}-+-{'-'*10}-+-{'-'*12}-+-{'-'*40}\n")
+        f.write(f"=======================================================================================================================\n")
+        f.write(f"  VPNGATE 最优纯净住宅 IP 代理精选 TOP {len(selected_results)} 列表 (Scamalytics威胁分<20, 更新时间: {timestamp_str})\n")
+        f.write(f"=======================================================================================================================\n")
+        f.write(f"{'排名':<4} | {'国家':<6} | {'IP地址:端口':<22} | {'威胁分':<8} | {'协议类型':<12} | {'实测延迟':<10} | {'官方带宽':<12} | {'SOCKS5代理全路径'}\n")
+        f.write(f"{'-'*4}-+-{'-'*6}-+-{'-'*22}-+-{'-'*8}-+-{'-'*12}-+-{'-'*10}-+-{'-'*12}-+-{'-'*35}\n")
         for i, res in enumerate(selected_results, 1):
             flag = get_country_flag(res.server.country_short)
             c_tag = f"{flag} {res.server.country_short}"
@@ -86,8 +86,9 @@ def export_results(
             proto = res.protocol.upper()
             lat = f"{res.real_latency_ms:.2f} ms"
             spd = f"{res.server.speed_mbps:.2f} Mbps"
-            f.write(f"{i:<4d} | {c_tag:<6} | {addr:<22} | {proto:<12} | {lat:<10} | {spd:<12} | {res.socks5_url}\n")
-        f.write(f"========================================================================================================\n")
+            fscore = f"{res.fraud_score}" if res.fraud_score >= 0 else "N/A"
+            f.write(f"{i:<4d} | {c_tag:<6} | {addr:<22} | {fscore:<8} | {proto:<12} | {lat:<10} | {spd:<12} | {res.socks5_url}\n")
+        f.write(f"=======================================================================================================================\n")
     generated_files["report_txt"] = report_txt_path
 
     # 4. Export rich JSON data: residential_nodes.json
@@ -99,6 +100,7 @@ def export_results(
             "ip": res.server.ip,
             "port": res.tested_port,
             "protocol": res.protocol,
+            "fraud_score": res.fraud_score,
             "country_short": res.server.country_short,
             "country_long": res.server.country_long,
             "flag": get_country_flag(res.server.country_short),

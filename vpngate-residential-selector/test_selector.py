@@ -179,6 +179,30 @@ class TestVpnGateSelector(unittest.TestCase):
             active_ips = manager2.get_all_active_ips()
             self.assertIn("219.100.37.13", active_ips)
 
+    def test_fraud_checker_and_filter(self):
+        from fraud_checker import MEMORY_CACHE
+        from filter import filter_by_fraud_score
+
+        # Pre-seed cache
+        MEMORY_CACHE["1.1.1.1"] = (0, 9999999999.0)   # Clean (< 20)
+        MEMORY_CACHE["2.2.2.2"] = (85, 9999999999.0)  # Datacenter (>= 20)
+
+        s1 = VpnGateServer(
+            hostname="clean1", ip="1.1.1.1", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+            country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+            total_users=1, total_traffic=1, operator="", message=""
+        )
+        s2 = VpnGateServer(
+            hostname="dirty1", ip="2.2.2.2", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+            country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+            total_users=1, total_traffic=1, operator="", message=""
+        )
+
+        clean = filter_by_fraud_score([s1, s2], max_fraud_score=20, cache_path=None)
+        self.assertEqual(len(clean), 1)
+        self.assertEqual(clean[0].ip, "1.1.1.1")
+        self.assertEqual(clean[0].fraud_score, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
