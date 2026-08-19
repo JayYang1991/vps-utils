@@ -279,7 +279,32 @@ describe('Node & Config Generators', () => {
     assert.equal(sbObj.outbounds[0].tag, '🚀 节点选择');
     assert.equal(sbObj.outbounds[1].tag, 'auto-selector-tcp');
 
-    // 2. 带有 OpenVPN 的链式代理配置生成
+    // 2. 带有 SOCKS5 住宅代理的链式代理配置生成
+    const configWithSocks = {
+      ...config,
+      upstreamProxy: 'socks5://user:pass@1.2.3.4:1080'
+    };
+    const sbWithSocks = generateSingboxFullProfile(configWithSocks, domain);
+    const sbSocksObj = JSON.parse(sbWithSocks);
+    
+    // 第 1 站：auto-selector-tcp (urltest)
+    const urltestNode = sbSocksObj.outbounds.find(o => o.tag === 'auto-selector-tcp');
+    assert.ok(urltestNode);
+    assert.equal(urltestNode.type, 'urltest');
+    
+    // 最终出站：SOCKS5 节点，detour 设置为 auto-selector-tcp
+    const socksNode = sbSocksObj.outbounds.find(o => o.tag === '🛡️ SOCKS5 住宅出口');
+    assert.ok(socksNode);
+    assert.equal(socksNode.type, 'socks');
+    assert.equal(socksNode.server, '1.2.3.4');
+    assert.equal(socksNode.server_port, 1080);
+    assert.equal(socksNode.detour, 'auto-selector-tcp');
+
+    // 主选择组默认指向 SOCKS5 住宅出口
+    assert.equal(sbSocksObj.outbounds[0].default, '🛡️ SOCKS5 住宅出口');
+    assert.equal(sbSocksObj.outbounds[0].outbounds[0], '🛡️ SOCKS5 住宅出口');
+
+    // 3. Sing-box 1.14.0 语法下的 OpenVPN Endpoint 链式代理配置生成
     const configWithOvpn = {
       ...config,
       upstreamProxy: 'openvpn://vpn:vpn@219.100.37.13:443'
@@ -287,25 +312,26 @@ describe('Node & Config Generators', () => {
     const sbWithOvpn = generateSingboxFullProfile(configWithOvpn, domain);
     const sbOvpnObj = JSON.parse(sbWithOvpn);
     
-    // 第 1 站：auto-selector-tcp (urltest)
-    const urltestNode = sbOvpnObj.outbounds.find(o => o.tag === 'auto-selector-tcp');
-    assert.ok(urltestNode);
-    assert.equal(urltestNode.type, 'urltest');
-    
-    // 最终出站：OpenVPN 节点，detour 设置为 auto-selector-tcp
-    const ovpnNode = sbOvpnObj.outbounds.find(o => o.tag === '🛡️ OpenVPN 住宅出口');
-    assert.ok(ovpnNode);
-    assert.equal(ovpnNode.type, 'openvpn');
-    assert.equal(ovpnNode.server, '219.100.37.13');
-    assert.equal(ovpnNode.server_port, 443);
-    assert.equal(ovpnNode.detour, 'auto-selector-tcp');
-
-    // 主选择组默认指向 OpenVPN
+    // 验证 1.14.0 endpoints 包含 openvpn-client
+    assert.ok(Array.isArray(sbOvpnObj.endpoints));
+    const ovpnEndpoint = sbOvpnObj.endpoints.find(e => e.type === 'openvpn-client');
+    assert.ok(ovpnEndpoint);
+    assert.equal(ovpnEndpoint.tag, '🛡️ OpenVPN 住宅出口');
+    assert.equal(ovpnEndpoint.server, '219.100.37.13');
+    assert.equal(ovpnEndpoint.server_port, 443);
+    assert.equal(ovpnEndpoint.detour, 'auto-selector-tcp');
     assert.equal(sbOvpnObj.outbounds[0].default, '🛡️ OpenVPN 住宅出口');
-    assert.equal(sbOvpnObj.outbounds[0].outbounds[0], '🛡️ OpenVPN 住宅出口');
 
-    // 3. 链式代理注入函数 injectSingboxChainProxy 测试
-    const mockSubapiResponse = JSON.stringify({
+    // 验证 1.14.0 inbounds 无废弃 legacy 字段，且 route.rules 包含 sniff 规则
+    assert.equal(sbOvpnObj.inbounds[0].sniff, undefined);
+    assert.equal(sbOvpnObj.inbounds[0].domain_strategy, undefined);
+    assert.ok(sbOvpnObj.route.rules.some(r => r.action === 'sniff'));
+
+    // 4. 链式代理注入函数 injectSingboxChainProxy (测试清洗旧版 subapi 响应中的 legacy 字段)
+    const mockLegacySubapiResponse = JSON.stringify({
+      inbounds: [
+        { type: 'mixed', tag: 'mixed-in', sniff: true, domain_strategy: 'prefer_ipv4' }
+      ],
       outbounds: [
         { type: 'selector', tag: 'PROXY', outbounds: ['⚡ 自动优选', 'DIRECT'], default: '⚡ 自动优选' },
         { type: 'urltest', tag: '⚡ 自动优选', outbounds: ['node1', 'node2'] },
@@ -313,14 +339,14 @@ describe('Node & Config Generators', () => {
         { type: 'vless', tag: 'node2' }
       ]
     });
-    const injected = injectSingboxChainProxy(mockSubapiResponse, configWithOvpn);
+    const injected = injectSingboxChainProxy(mockLegacySubapiResponse, configWithOvpn);
     const injectedObj = JSON.parse(injected);
-    const injectedOvpn = injectedObj.outbounds.find(o => o.tag === '🛡️ OpenVPN 住宅出口');
-    assert.ok(injectedOvpn);
-    assert.equal(injectedOvpn.detour, 'auto-selector-tcp');
+    assert.equal(injectedObj.inbounds[0].sniff, undefined); // 旧字段已被清洗
+    assert.ok(Array.isArray(injectedObj.endpoints));
+    assert.equal(injectedObj.endpoints[0].type, 'openvpn-client');
     assert.equal(injectedObj.outbounds[0].default, '🛡️ OpenVPN 住宅出口');
 
-    // 4. Base64 Sub
+    // 5. Base64 Sub
     const b64 = generateBase64Sub(config, domain);
     assert.equal(typeof b64, 'string');
     assert.ok(b64.length > 20);
