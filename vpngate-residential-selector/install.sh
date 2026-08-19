@@ -102,14 +102,13 @@ check_dependencies() {
 
 stop_existing_service() {
     info "正在停止可能正在运行的旧版本服务与进程..."
+    pkill -9 -f "daemon.py" 2>/dev/null || true
+    pkill -9 -f "bridge.py" 2>/dev/null || true
     if [ "${IS_USER_MODE}" = true ]; then
-        systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
+        systemctl --user stop --no-block "${SERVICE_NAME}" 2>/dev/null || true
     else
-        systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+        systemctl stop --no-block "${SERVICE_NAME}" 2>/dev/null || true
     fi
-    # 终止可能遗留的旧版独立前台后台进程
-    pkill -f "${INSTALL_DIR}/daemon.py" 2>/dev/null || true
-    sleep 0.5
 }
 
 install_files() {
@@ -168,23 +167,21 @@ install_files() {
     # 5. 清理可能存在的 __pycache__ 缓存
     find "${INSTALL_DIR}" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
-    # 6. 设置权限
+    # 6. 设置可执行权限
     chmod +x "${INSTALL_DIR}/main.py"
     chmod +x "${INSTALL_DIR}/daemon.py"
     chmod +x "${INSTALL_DIR}/bridge.py"
     chmod +x "${INSTALL_DIR}/service.sh"
-    chmod -R 755 "${INSTALL_DIR}"
 
-    # 7. 清理旧软链接并重新创建全局终端调用命令软链接至 BIN_DIR
+    # 7. 创建全局快捷命令软链接
     info "正在重新创建全局快捷命令软链接至 ${BIN_DIR} ..."
-    rm -f "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-service"
+    rm -f "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-service" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-daemon"
 
-    ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-selector"
     ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-nodes"
-    ln -sf "${INSTALL_DIR}/daemon.py" "${BIN_DIR}/vpngate-daemon"
-    ln -sf "${INSTALL_DIR}/bridge.py" "${BIN_DIR}/vpngate-bridge"
+    ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-selector"
     ln -sf "${INSTALL_DIR}/service.sh" "${BIN_DIR}/vpngate-service"
-    chmod +x "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-service"
+    ln -sf "${INSTALL_DIR}/bridge.py" "${BIN_DIR}/vpngate-bridge"
+    ln -sf "${INSTALL_DIR}/daemon.py" "${BIN_DIR}/vpngate-daemon"
 
     info "✅ 全局快捷命令已重新绑定就绪:"
     info "   • vpngate-nodes     -> 查看当前已选出的全部 7 国住宅代理节点列表 (支持 -c JP)"
@@ -196,12 +193,11 @@ install_files() {
 
 setup_systemd() {
     info "正在重新配置并加载 Systemd 服务 (${SERVICE_FILE})..."
-    mkdir -p "${SYSTEMD_DIR}"
-
     local python_bin
     python_bin=$(which python3)
 
     if [ "${IS_USER_MODE}" = true ]; then
+        mkdir -p "${SYSTEMD_DIR}"
         rm -f "${SYSTEMD_DIR}/${SERVICE_FILE}"
         cat << SERVICE_EOF > "${SYSTEMD_DIR}/${SERVICE_FILE}"
 [Unit]
@@ -215,7 +211,8 @@ WorkingDirectory=${INSTALL_DIR}
 ExecStart=${python_bin} ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 20
 Restart=always
 RestartSec=10
-KillMode=process
+TimeoutStopSec=3s
+KillMode=mixed
 StandardOutput=journal
 StandardError=journal
 
@@ -223,9 +220,9 @@ StandardError=journal
 WantedBy=default.target
 SERVICE_EOF
 
-        systemctl --user daemon-reload || true
-        systemctl --user enable "${SERVICE_NAME}" || true
-        systemctl --user restart --no-block "${SERVICE_NAME}" || true
+        systemctl --user daemon-reload 2>/dev/null || true
+        systemctl --user enable "${SERVICE_NAME}" 2>/dev/null || true
+        systemctl --user restart --no-block "${SERVICE_NAME}" 2>/dev/null || true
         info "✅ ${SERVICE_NAME} 用户级服务已重新加载并启动！"
     else
         rm -f "${SYSTEMD_DIR}/${SERVICE_FILE}"
@@ -242,7 +239,8 @@ WorkingDirectory=${INSTALL_DIR}
 ExecStart=${python_bin} ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 20
 Restart=always
 RestartSec=10
-KillMode=process
+TimeoutStopSec=3s
+KillMode=mixed
 StandardOutput=journal
 StandardError=journal
 
@@ -250,9 +248,9 @@ StandardError=journal
 WantedBy=multi-user.target
 SERVICE_EOF
 
-        systemctl daemon-reload || true
-        systemctl enable "${SERVICE_NAME}" || true
-        systemctl restart --no-block "${SERVICE_NAME}" || true
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl enable "${SERVICE_NAME}" 2>/dev/null || true
+        systemctl restart --no-block "${SERVICE_NAME}" 2>/dev/null || true
         info "✅ ${SERVICE_NAME} 系统级服务已重新加载并启动！"
     fi
 }

@@ -54,12 +54,14 @@ start_service() {
 }
 
 stop_service() {
-    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}"
+    pkill -9 -f "${INSTALL_DIR}/daemon.py" 2>/dev/null || true
+    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" --no-block 2>/dev/null || true
     info "🛑 ${SERVICE_NAME} 服务已停止"
 }
 
 restart_service() {
-    ${SYSTEMCTL_CMD} restart "${SERVICE_NAME}"
+    pkill -9 -f "${INSTALL_DIR}/daemon.py" 2>/dev/null || true
+    ${SYSTEMCTL_CMD} restart "${SERVICE_NAME}" --no-block 2>/dev/null || true
     info "🔄 ${SERVICE_NAME} 服务已重启"
 }
 
@@ -73,25 +75,23 @@ show_logs() {
 
 uninstall_service() {
     info "正在卸载 ${SERVICE_NAME} 服务..."
-    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" || true
-    ${SYSTEMCTL_CMD} disable "${SERVICE_NAME}" || true
+    pkill -9 -f "${INSTALL_DIR}/daemon.py" 2>/dev/null || true
+    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" --no-block 2>/dev/null || true
+    ${SYSTEMCTL_CMD} disable "${SERVICE_NAME}" 2>/dev/null || true
     rm -f "${SYSTEMD_DIR}/${SERVICE_FILE}"
-    rm -f "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-service"
+    rm -f "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-service" "${BIN_DIR}/vpngate-bridge"
     rm -rf "${INSTALL_DIR}"
-    ${SYSTEMCTL_CMD} daemon-reload
+    ${SYSTEMCTL_CMD} daemon-reload 2>/dev/null || true
     info "✅ ${SERVICE_NAME} 服务与 ${BIN_DIR} 依赖文件已彻底清理卸载！"
 }
 
 clean_history() {
     info "正在彻底清理历史节点沉淀库、7国保活状态池与 Scamalytics 威胁分缓存..."
     
-    # 1. 停止后台服务与相关进程
-    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" 2>/dev/null || true
-    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
-    systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
-    pkill -f "daemon.py" 2>/dev/null || true
-    pkill -f "bridge.py" 2>/dev/null || true
-    sleep 0.5
+    # 1. 强力快速终止后台服务与进程 (非阻塞, 避免 D-Bus/Polkit 超时卡顿)
+    pkill -9 -f "daemon.py" 2>/dev/null || true
+    pkill -9 -f "bridge.py" 2>/dev/null || true
+    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" --no-block 2>/dev/null || true
 
     # 2. 清除所有已知的可能安装路径和工作路径的 results 目录
     local clean_dirs=(
@@ -107,17 +107,10 @@ clean_history() {
 
     for dir in "${clean_dirs[@]}"; do
         if [ -d "${dir}" ]; then
-            rm -rf "${dir:?}"/* 2>/dev/null || true
+            rm -rf "${dir:?}"/* "${dir:?}"/.* 2>/dev/null || true
             mkdir -p "${dir}"
         fi
     done
-
-    # 3. 同时调用 Python 内部全面清理逻辑
-    if [ -x "${INSTALL_DIR}/main.py" ]; then
-        python3 "${INSTALL_DIR}/main.py" --clean >/dev/null 2>&1 || true
-    elif [ -x "${SCRIPT_DIR}/main.py" ]; then
-        python3 "${SCRIPT_DIR}/main.py" --clean >/dev/null 2>&1 || true
-    fi
 
     info "✅ 所有目录下的历史节点数据库、状态池与威胁分缓存已彻底清空！"
     info "💡 后台服务已停止。若需开始全新初始化，请运行: vpngate-service start (或 vpngate-selector 重新测速优选)"
