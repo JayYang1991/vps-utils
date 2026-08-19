@@ -16,7 +16,7 @@ async function getConnectFn() {
 
 /**
  * 解析 OpenVPN 配置文件文本或 Base64 编码字符串
- * 提取 remote 主机、端口、协议与默认认证信息
+ * 提取 remote 主机、端口、协议、认证信息以及内置 CA 根证书 / 客户端证书
  * @param {string} content 
  * @returns {object|null}
  */
@@ -39,8 +39,8 @@ export function parseOpenVpnConfig(content) {
     } catch (_) {}
   }
 
-  // 必须包含 remote 指令或 client 特征
-  if (!text.includes('remote ') && !text.includes('client') && !text.includes('dev tun')) {
+  // 必须包含 remote 指令、client 特征或 <ca> 块
+  if (!text.includes('remote ') && !text.includes('client') && !text.includes('dev tun') && !text.includes('<ca>')) {
     return null;
   }
 
@@ -49,6 +49,8 @@ export function parseOpenVpnConfig(content) {
   let username = 'vpn';
   let password = 'vpn';
   let proto = 'tcp';
+  let cipher = '';
+  let auth = '';
 
   const lines = text.split(/\r?\n/);
   for (const line of lines) {
@@ -71,7 +73,39 @@ export function parseOpenVpnConfig(content) {
           }
         }
       }
+    } else if (trimmed.startsWith('cipher ')) {
+      cipher = trimmed.slice(7).trim();
+    } else if (trimmed.startsWith('auth ')) {
+      auth = trimmed.slice(5).trim();
     }
+  }
+
+  // 提取 <ca> 根证书
+  let ca = null;
+  const caMatch = text.match(/<ca>([\s\S]*?)<\/ca>/i);
+  if (caMatch) {
+    ca = caMatch[1].trim();
+  }
+
+  // 提取 <cert> 客户端证书
+  let cert = null;
+  const certMatch = text.match(/<cert>([\s\S]*?)<\/cert>/i);
+  if (certMatch) {
+    cert = certMatch[1].trim();
+  }
+
+  // 提取 <key> 客户端私钥
+  let key = null;
+  const keyMatch = text.match(/<key>([\s\S]*?)<\/key>/i);
+  if (keyMatch) {
+    key = keyMatch[1].trim();
+  }
+
+  // 提取 <tls-auth>
+  let tlsAuth = null;
+  const tlsAuthMatch = text.match(/<tls-auth>([\s\S]*?)<\/tls-auth>/i);
+  if (tlsAuthMatch) {
+    tlsAuth = tlsAuthMatch[1].trim();
   }
 
   if (!host) return null;
@@ -83,6 +117,13 @@ export function parseOpenVpnConfig(content) {
     username,
     password,
     proto,
+    cipher: cipher || undefined,
+    auth: auth || undefined,
+    hasCa: Boolean(ca),
+    ca: ca || undefined,
+    cert: cert || undefined,
+    key: key || undefined,
+    tlsAuth: tlsAuth || undefined,
   };
 }
 

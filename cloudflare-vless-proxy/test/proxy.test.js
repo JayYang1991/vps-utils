@@ -84,6 +84,8 @@ MIIB...
     assert.equal(res.port, 443);
     assert.equal(res.username, 'vpn');
     assert.equal(res.password, 'vpn');
+    assert.equal(res.hasCa, true);
+    assert.ok(res.ca.includes('BEGIN CERTIFICATE'));
   });
 
   it('should parse Base64 encoded .ovpn configuration string', () => {
