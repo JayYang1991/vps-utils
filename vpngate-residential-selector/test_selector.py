@@ -470,7 +470,9 @@ class TestVpnGateSelector(unittest.TestCase):
         self.assertEqual(normalize_push_url("my-worker.workers.dev"), "https://my-worker.workers.dev/api/upstream")
         self.assertEqual(normalize_push_url("http://my-worker.workers.dev/"), "http://my-worker.workers.dev/api/upstream")
         self.assertEqual(normalize_push_url("https://my-worker.workers.dev/api/upstream"), "https://my-worker.workers.dev/api/upstream")
+        self.assertEqual(normalize_push_url("https://my-worker.workers.dev/upstream"), "https://my-worker.workers.dev/api/upstream")
         self.assertEqual(normalize_push_url("https://my-worker.workers.dev/api/proxy"), "https://my-worker.workers.dev/api/proxy")
+        self.assertEqual(normalize_push_url("https://my-worker.workers.dev/proxy"), "https://my-worker.workers.dev/api/upstream")
 
         with tempfile.TemporaryDirectory() as test_dir:
             # 2. Test saving configuration

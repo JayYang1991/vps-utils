@@ -576,12 +576,12 @@ function getSocks5ErrorMessage(code) {
 }
 
 /**
- * 测试上游代理可用性与延迟（连接到测试目标 www.google.com:80，自带全局 60 秒超时拦截）
+ * 测试上游代理可用性与延迟（连接到测试目标 www.google.com:443，自带全局 8 秒超时拦截）
  * @param {string} proxyString 代理配置
- * @param {number} timeoutMs 超时时间（默认 60000ms）
+ * @param {number} timeoutMs 超时时间（默认 8000ms）
  * @returns {Promise<{ success: boolean, latencyMs?: number, message: string }>}
  */
-export async function testUpstreamProxy(proxyString, timeoutMs = 60000) {
+export async function testUpstreamProxy(proxyString, timeoutMs = 8000) {
   const start = Date.now();
   try {
     const proxy = parseProxyString(proxyString);

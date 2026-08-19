@@ -21,18 +21,31 @@ logger = logging.getLogger("vpngate.pusher")
 
 
 def normalize_push_url(url: str) -> str:
-    """Normalizes Cloudflare Worker endpoint URL (handles domain, scheme, and /api/upstream path)."""
+    """
+    Normalizes Cloudflare Worker endpoint URL.
+    Supports all formats:
+    - worker.dev
+    - https://worker.dev
+    - https://worker.dev/
+    - https://worker.dev/upstream
+    - https://worker.dev/api/upstream
+    - https://worker.dev/proxy
+    - https://worker.dev/api/proxy
+    """
     if not url:
         return ""
-    url = url.strip()
+    url = url.strip().rstrip("/")
     if not url.startswith("http://") and not url.startswith("https://"):
         url = "https://" + url
-    if not url.endswith("/api/upstream") and not url.endswith("/api/proxy"):
-        if url.endswith("/"):
-            url = url + "api/upstream"
-        else:
-            url = url + "/api/upstream"
-    return url
+
+    if url.endswith("/api/upstream") or url.endswith("/api/proxy"):
+        return url
+    elif url.endswith("/upstream"):
+        return url[:-len("/upstream")] + "/api/upstream"
+    elif url.endswith("/proxy"):
+        return url[:-len("/proxy")] + "/api/upstream"
+    else:
+        return url + "/api/upstream"
 
 
 def get_default_config_path(base_dir: str) -> str:
@@ -146,7 +159,7 @@ class CloudflareVlessPusher:
         api_token: Optional[str] = None,
         state_dir: str = "results",
         config_path: Optional[str] = None,
-        timeout: float = 15.0,
+        timeout: float = 30.0,
         auto_save: bool = True
     ):
         self.state_dir = state_dir
@@ -244,7 +257,8 @@ class CloudflareVlessPusher:
     def push_best_node_if_changed(
         self,
         best_node: Any,
-        force: bool = False
+        force: bool = False,
+        test_on_worker: bool = False
     ) -> Dict[str, Any]:
         """
         Evaluates the optimal node. If changed compared to previous push, generates .ovpn and pushes to Cloudflare.
@@ -308,7 +322,7 @@ class CloudflareVlessPusher:
             payload = json.dumps({
                 "upstreamProxy": ovpn_content,
                 "enableDirectFallback": True,
-                "test": True
+                "test": test_on_worker
             }).encode("utf-8")
 
             req = urllib.request.Request(
@@ -441,6 +455,7 @@ def main() -> int:
     parser.add_argument("--force", "-f", action="store_true", default=True, help="强制推送 (即使与上次相同也立即推送)")
     parser.add_argument("--status", "-s", action="store_true", help="查看上次推送记录与状态")
     parser.add_argument("--output", "-o", type=str, default="results", help="结果文件目录")
+    parser.add_argument("--test", action="store_true", default=False, help="要求 Cloudflare Worker 端在保存前同步进行握手连接测试 (默认关闭以实现秒级更新)")
     parser.add_argument("--verbose", "-v", action="store_true", help="打印详细调试日志")
 
     args = parser.parse_args()
@@ -526,7 +541,7 @@ def main() -> int:
     print(f"• 推送接口: {pusher.push_url}")
     print("--------------------------------------------------")
 
-    res = pusher.push_best_node_if_changed(best, force=args.force)
+    res = pusher.push_best_node_if_changed(best, force=args.force, test_on_worker=args.test)
 
     if res.get("status") == "success":
         print("\n🎉 ✅ 推送成功！Cloudflare Worker 网关已即时更新并持久化至 KV！")
