@@ -252,14 +252,90 @@ def _fetch_single_url(url: str, timeout: int = 8) -> List[VpnGateServer]:
     return []
 
 
+def load_discovered_nodes_cache(cache_file: str) -> Dict[str, VpnGateServer]:
+    """Loads previously discovered VPNGATE servers from cache file."""
+    cached: Dict[str, VpnGateServer] = {}
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                for item in data.get("nodes", []):
+                    s = VpnGateServer(
+                        hostname=item.get("hostname", ""),
+                        ip=item.get("ip", ""),
+                        score=item.get("score", 0),
+                        ping=item.get("ping", 0),
+                        speed_bps=item.get("speed_bps", 0),
+                        speed_mbps=item.get("speed_mbps", 0.0),
+                        country_short=item.get("country_short", "UN"),
+                        country_long=item.get("country_long", "Unknown"),
+                        sessions=item.get("sessions", 0),
+                        uptime_seconds=item.get("uptime_seconds", 0),
+                        total_users=item.get("total_users", 0),
+                        total_traffic=item.get("total_traffic", 0),
+                        operator=item.get("operator", ""),
+                        message=item.get("message", ""),
+                        openvpn_config_b64=item.get("openvpn_config_b64", ""),
+                        port=item.get("port", 443),
+                        proto=item.get("proto", "tcp"),
+                        extra_ports=item.get("extra_ports", []),
+                        fraud_score=item.get("fraud_score", -1)
+                    )
+                    if s.ip:
+                        cached[s.ip] = s
+            logger.info(f"📂 从本地历史沉淀库加载了 {len(cached)} 个已知 VPNGATE 节点")
+        except Exception as e:
+            logger.debug(f"读取历史沉淀节点库失败: {e}")
+    return cached
+
+
+def save_discovered_nodes_cache(cache_file: str, servers: List[VpnGateServer]) -> None:
+    """Saves discovered VPNGATE servers to persistent JSON cache."""
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(cache_file)), exist_ok=True)
+        data = {
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "total_nodes": len(servers),
+            "nodes": [
+                {
+                    "hostname": s.hostname,
+                    "ip": s.ip,
+                    "score": s.score,
+                    "ping": s.ping,
+                    "speed_bps": s.speed_bps,
+                    "speed_mbps": s.speed_mbps,
+                    "country_short": s.country_short,
+                    "country_long": s.country_long,
+                    "sessions": s.sessions,
+                    "uptime_seconds": s.uptime_seconds,
+                    "total_users": s.total_users,
+                    "total_traffic": s.total_traffic,
+                    "operator": s.operator,
+                    "message": s.message,
+                    "openvpn_config_b64": s.openvpn_config_b64,
+                    "port": s.port,
+                    "proto": s.proto,
+                    "extra_ports": s.extra_ports,
+                    "fraud_score": s.fraud_score,
+                }
+                for s in servers
+            ]
+        }
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.debug(f"保存历史沉淀节点库失败: {e}")
+
+
 def fetch_all_vpngate_servers(
     custom_url: Optional[str] = None,
     timeout: int = 10,
-    max_workers: int = 20
+    max_workers: int = 20,
+    cache_file: Optional[str] = "results/all_discovered_nodes.json"
 ) -> List[VpnGateServer]:
     """
     Fetches and aggregates full server lists from official VPNGATE APIs,
-    dynamic daily mirrors, and community feeds concurrently, merging and deduplicating by IP.
+    dynamic daily mirrors, and community feeds concurrently, merging with historical discovered pool.
     """
     if custom_url:
         servers = _fetch_single_url(custom_url, timeout=timeout)
@@ -272,7 +348,7 @@ def fetch_all_vpngate_servers(
     all_target_urls: List[str] = list(DEFAULT_VPNGATE_URLS)
 
     # 1. Discover daily mirror endpoints
-    daily_mirrors = discover_daily_mirrors(timeout=5)
+    daily_mirrors = discover_daily_mirrors(timeout=4)
     for m in daily_mirrors:
         all_target_urls.append(f"{m}api/iphone/")
 
@@ -281,7 +357,10 @@ def fetch_all_vpngate_servers(
 
     logger.info(f"📡 共发现并汇总了 {len(all_target_urls)} 个高可用数据采集源，正在并发拉取全量节点...")
 
+    # Load historical node pool
     unique_servers: Dict[str, VpnGateServer] = {}
+    if cache_file and os.path.exists(cache_file):
+        unique_servers = load_discovered_nodes_cache(cache_file)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_url = {executor.submit(_fetch_single_url, url, timeout): url for url in all_target_urls}
@@ -314,7 +393,11 @@ def fetch_all_vpngate_servers(
     if not result_servers:
         raise RuntimeError("无法从 VPNGATE API 或任何镜像拉取到服务器列表，请检查 VPS 外网连接。")
 
-    logger.info(f"🎉 全量聚合完成！去重后共获取到 {len(result_servers)} 个全球活跃 VPNGATE 节点！")
+    # Save to persistent database
+    if cache_file:
+        save_discovered_nodes_cache(cache_file, result_servers)
+
+    logger.info(f"🎉 全量聚合与历史沉淀完成！当前已知全球活跃 VPNGATE 节点总数: {len(result_servers)} 个！")
     return result_servers
 
 
