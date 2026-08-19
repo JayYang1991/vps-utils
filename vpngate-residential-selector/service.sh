@@ -82,22 +82,43 @@ uninstall_service() {
     info "✅ ${SERVICE_NAME} 服务与 ${BIN_DIR} 依赖文件已彻底清理卸载！"
 }
 
+list_nodes() {
+    shift || true
+    if [ -x "${INSTALL_DIR}/main.py" ]; then
+        python3 "${INSTALL_DIR}/main.py" --list "$@"
+    elif [ -x "${SCRIPT_DIR}/main.py" ]; then
+        python3 "${SCRIPT_DIR}/main.py" --list "$@"
+    else
+        error "未找到主程序 main.py"
+        exit 1
+    fi
+}
+
 usage() {
     echo -e "${BLUE}VPNGATE 7国住宅代理 Systemd 后台服务管理脚本${NC}"
-    echo "用法: $0 {install|start|stop|restart|status|logs|uninstall}"
+    echo "用法: $0 {list|status|logs|start|stop|restart|install|uninstall} [参数]"
     echo ""
     echo "命令选项:"
+    echo "  list|nodes 查看当前已选出的全部保活住宅节点列表 (支持 -c JP,US 筛选)"
+    echo "  status     查看后台服务运行状态与进程信息"
+    echo "  logs       实时追踪查看 5 分钟健康检查与节点热替换日志"
+    echo "  start      启动后台保活服务"
+    echo "  stop       停止后台保活服务"
+    echo "  restart    重启后台保活服务"
     echo "  install    一键安装并配置为 Systemd 系统后台服务 (开机自启, 每5分钟检测)"
-    echo "  start      启动后台服务"
-    echo "  stop       停止后台服务"
-    echo "  restart    重启后台服务"
-    echo "  status     查看后台服务运行状态与统计"
-    echo "  logs       实时追踪查看服务运行日志"
     echo "  uninstall  停止并彻底卸载 Systemd 服务"
+    echo ""
+    echo "示例:"
+    echo "  $0 list           # 查看当前全部 7 国已选出的节点"
+    echo "  $0 list -c JP     # 仅查看日本 (JP) 节点"
+    echo "  $0 logs           # 实时跟踪日志"
     echo ""
 }
 
 case "$1" in
+    list|nodes|show)
+        list_nodes "$@"
+        ;;
     install)
         install_service
         ;;

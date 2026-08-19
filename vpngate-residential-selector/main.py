@@ -8,9 +8,10 @@ and saves the TOP 20 residential proxy endpoints into result files.
 
 import sys
 import os
+import json
 import argparse
 import logging
-from typing import List
+from typing import List, Optional, Dict, Any
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 if SCRIPT_DIR not in sys.path:
@@ -75,11 +76,112 @@ def print_table(results: List[BenchmarkResult]) -> None:
     print("=" * 125 + "\n")
 
 
+def show_current_nodes(results_dir: str = "results", country: Optional[str] = None) -> int:
+    """Reads and displays currently selected nodes from residential_pool.json or residential_nodes.json."""
+    search_dirs = [
+        results_dir,
+        os.path.join(SCRIPT_DIR, results_dir),
+        "/usr/local/bin/vpngate-residential-selector/results",
+        os.path.expanduser("~/.local/bin/vpngate-residential-selector/results")
+    ]
+
+    for r_dir in search_dirs:
+        if not os.path.exists(r_dir):
+            continue
+
+        pool_file = os.path.join(r_dir, "residential_pool.json")
+        nodes_file = os.path.join(r_dir, "residential_nodes.json")
+
+        if os.path.exists(pool_file):
+            try:
+                with open(pool_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                updated_at = data.get("updated_at", "未知")
+                pools = data.get("pools", {})
+                
+                selected_countries = [c.strip().upper() for c in country.split(",") if c.strip()] if country else list(pools.keys())
+                
+                all_nodes_data = []
+                for c_code in selected_countries:
+                    if c_code in pools:
+                        for item in pools[c_code]:
+                            all_nodes_data.append(item)
+                
+                if all_nodes_data:
+                    c_desc = f" ({','.join(selected_countries)})" if country else ""
+                    print(f"\n📂 当前 7 国活跃保活住宅节点池{c_desc} (最后更新: {updated_at})")
+                    print(f"📊 汇总结算: 共包含 {len(all_nodes_data)} 个已验证节点 (来源: {pool_file})\n")
+                    _render_nodes_table(all_nodes_data)
+                    return 0
+            except Exception as e:
+                logging.debug(f"读取 {pool_file} 失败: {e}")
+
+        if os.path.exists(nodes_file):
+            try:
+                with open(nodes_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                generated_at = data.get("generated_at", "未知")
+                nodes = data.get("nodes", [])
+                if country:
+                    target_c = [c.strip().upper() for c in country.split(",") if c.strip()]
+                    nodes = [n for n in nodes if n.get("country_short", "").upper() in target_c]
+                if nodes:
+                    print(f"\n📂 当前已选出 TOP 节点列表 (生成时间: {generated_at})")
+                    print(f"📊 汇总结算: 共包含 {len(nodes)} 个节点 (来源: {nodes_file})\n")
+                    _render_nodes_table(nodes)
+                    return 0
+            except Exception as e:
+                logging.debug(f"读取 {nodes_file} 失败: {e}")
+
+    print(f"\n❌ 未找到任何已选出的节点记录文件 (尝试目录: {results_dir})。")
+    print("👉 请先运行 'vpngate-selector' 或启动 'vpngate-service start' 进行测速与优选。\n")
+    return 1
+
+
+def _render_nodes_table(nodes: List[Dict[str, Any]]) -> None:
+    """Renders formatted CLI table for a list of node dicts."""
+    print("=" * 135)
+    print(f"{'序号':<4} | {'地区':<10} | {'IP地址:端口':<22} | {'威胁分':<8} | {'协议':<8} | {'实测延迟':<10} | {'官方带宽':<12} | {'综合得分':<10} | {'SOCKS5代理全路径'}")
+    print(f"{'-'*4}-+-{'-'*10}-+-{'-'*22}-+-{'-'*8}-+-{'-'*8}-+-{'-'*10}-+-{'-'*12}-+-{'-'*10}-+-{'-'*35}")
+
+    by_country: Dict[str, int] = {}
+    for i, n in enumerate(nodes, 1):
+        c_short = n.get("country_short", "UN")
+        c_zh = n.get("country_zh", "")
+        flag = n.get("flag", get_country_flag(c_short))
+        c_tag = f"{flag} {c_short}" + (f" {c_zh}" if c_zh else "")
+        ip = n.get("ip", "")
+        port = n.get("port", 443)
+        addr = f"{ip}:{port}"
+        proto = n.get("protocol", "openvpn").upper()
+        lat = f"{n.get('real_latency_ms', 0.0):.2f} ms"
+        spd = f"{n.get('speed_mbps', 0.0):.2f} Mbps"
+        score = f"{n.get('composite_score', 0.0):.1f}"
+        f_score = n.get("fraud_score", -1)
+        f_str = f"{f_score} / 100" if f_score >= 0 else "N/A"
+        proxy_url = n.get("proxy_urls", {}).get("socks5", f"socks5://vpn:vpn@{addr}")
+        
+        by_country[c_short] = by_country.get(c_short, 0) + 1
+        print(f"{i:<4d} | {c_tag:<10} | {addr:<22} | {f_str:<8} | {proto:<8} | {lat:<10} | {spd:<12} | {score:<10} | {proxy_url}")
+
+    print("=" * 135)
+    print("📈 各地区节点分布统计:")
+    for c, cnt in by_country.items():
+        print(f"   • {get_country_flag(c)} {c}: {cnt} 个可用节点")
+    print("")
+
+
 def parse_arguments() -> argparse.Namespace:
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(
         description="VPNGATE 住宅 IP 优选与多轮高并发测速工具",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    parser.add_argument(
+        "--list", "-l",
+        action="store_true",
+        help="查看当前已选出的全部住宅节点列表 (从本地状态文件直接读取展示，不重新测速)"
     )
 
     parser.add_argument(
@@ -208,8 +310,20 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     """Main CLI execution flow."""
+    # Check if invoked as vpngate-nodes or with list positional arg
+    if len(sys.argv) > 1 and sys.argv[1] in ("list", "nodes", "show"):
+        sys.argv.pop(1)
+        sys.argv.append("--list")
+    elif os.path.basename(sys.argv[0]) == "vpngate-nodes":
+        if "--list" not in sys.argv and "-l" not in sys.argv:
+            sys.argv.append("--list")
+
     args = parse_arguments()
     setup_logging(verbose=args.verbose, quiet=args.quiet)
+
+    # Fast path: display current selected nodes
+    if args.list:
+        return show_current_nodes(results_dir=args.output, country=args.country)
 
     if not args.quiet:
         print_banner()

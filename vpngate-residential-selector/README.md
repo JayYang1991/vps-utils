@@ -54,22 +54,46 @@ sudo ./install.sh
 
 ## 💻 服务安装后的全局命令用法 (Command Usage)
 
-安装完成后，系统已注册以下 4 个全局快捷命令，可在任意目录下直接调用：
+安装完成后，系统已注册以下 **5 个全局快捷命令**，可在任意目录下直接调用：
 
 ```
-• vpngate-service   -> 管理后台 Systemd 自动保活服务 (状态/日志/启停)
-• vpngate-selector  -> 手动单次运行全量测速与纯净住宅节点提取
-• vpngate-bridge    -> 启动本地 SOCKS5 (10808) / HTTP (10809) 住宅中继网桥
-• vpngate-daemon    -> 前台直接运行 7 国保活守护进程
+• vpngate-nodes     -> 🚀 查看当前已选出的全部 7 国住宅代理节点列表 (支持 -c JP)
+• vpngate-service   -> ⚙️ 管理后台 Systemd 自动保活服务 (支持 list/status/logs/启停)
+• vpngate-selector  -> 🔍 手动单次运行全量测速与纯净住宅节点提取 (支持 -l 查看)
+• vpngate-bridge    -> 🌉 启动本地 SOCKS5 (10808) / HTTP (10809) 住宅中继网桥
+• vpngate-daemon    -> 🛡️ 前台直接运行 7 国保活守护进程
 ```
 
 ---
 
-### 1️⃣ `vpngate-service` — 管理后台 Systemd 保活服务
+### 1️⃣ `vpngate-nodes` & `vpngate-service list` — 查看当前已选出的所有节点
 
-用于查看守护进程运行状态、监控 5 分钟健康检查与节点热替换日志：
+直接打印当前 7 国已通过 Scamalytics 纯净风控与协议验证的可用节点列表，包含国旗、IP:端口、威胁分、实测延迟与代理全路径：
 
 ```bash
+# 1. 查看当前全部 7 国已选出的节点
+vpngate-nodes
+
+# 2. 仅查看指定国家的节点 (如日本 JP、美国 US、韩国 KR)
+vpngate-nodes -c JP
+vpngate-nodes -c US,KR
+
+# 3. 通过 vpngate-service 或 vpngate-selector 同样可快捷查看
+vpngate-service list
+vpngate-service list -c JP
+vpngate-selector -l
+```
+
+---
+
+### 2️⃣ `vpngate-service` — 管理后台 Systemd 保活服务
+
+用于管理守护进程、监控 5 分钟健康检查与节点热替换日志：
+
+```bash
+# 查看全部已选出节点列表
+vpngate-service list
+
 # 查看服务运行状态及当前 7 国保活节点统计看板
 vpngate-service status
 
@@ -91,7 +115,7 @@ vpngate-service uninstall
 
 ---
 
-### 2️⃣ `vpngate-selector` — 手动执行全量测速与提取
+### 3️⃣ `vpngate-selector` — 手动执行全量测速与提取
 
 用于手动触发全网节点抓取、Scamalytics 威胁分过滤与深度协议测速：
 

@@ -133,16 +133,18 @@ install_files() {
     # 创建全局终端调用命令软链接至 /usr/local/bin
     info "正在创建全局快捷命令软链接至 ${BIN_DIR} ..."
     ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-selector"
+    ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-nodes"
     ln -sf "${INSTALL_DIR}/daemon.py" "${BIN_DIR}/vpngate-daemon"
     ln -sf "${INSTALL_DIR}/bridge.py" "${BIN_DIR}/vpngate-bridge"
     ln -sf "${INSTALL_DIR}/service.sh" "${BIN_DIR}/vpngate-service"
-    chmod +x "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-service"
+    chmod +x "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-service"
 
     info "✅ 全局快捷命令已就绪:"
-    info "   • vpngate-selector  -> 手动单次协议测速与提取 TOP 住宅节点"
-    info "   • vpngate-daemon    -> 运行 7 国守护保活进程"
+    info "   • vpngate-nodes     -> 查看当前已选出的全部 7 国住宅代理节点列表 (支持 -c JP)"
+    info "   • vpngate-selector  -> 手动单次协议测速与提取 TOP 住宅节点 (可带 -l/--list 查看列表)"
+    info "   • vpngate-service   -> 管理后台 systemd 服务 (支持 vpngate-service list/status/logs)"
     info "   • vpngate-bridge    -> 启动本地 SOCKS5/HTTP 住宅中继网桥"
-    info "   • vpngate-service   -> 管理后台 systemd 服务"
+    info "   • vpngate-daemon    -> 前台运行 7 国守护保活进程"
 }
 
 setup_systemd() {
