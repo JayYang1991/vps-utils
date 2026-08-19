@@ -9,8 +9,9 @@ import { handleAdmin } from './admin.js';
 import { handleRestApi } from './api.js';
 import { renderLandingPage } from './landing.js';
 import { generateAllVlessNodes, generateBase64Sub, generateSingboxFullProfile, convertViaSubapi, injectSingboxChainProxy } from './sub.js';
+import { logSystem } from './logger.js';
 
-export default {
+const handler = {
   /**
    * Cloudflare Worker fetch 处理函数
    * @param {Request} request 
@@ -36,10 +37,10 @@ export default {
       if (isProxyPathMatch) {
         if (isWebSocketUpgrade) {
           console.log(`[Router:VLESS] 命中 VLESS WS 代理路径 ${pathname} (IP: ${clientIp})`);
-          return await handleVlessWebSocket(request, config);
+          return await handleVlessWebSocket(request, config, env);
         }
         console.warn(`[Router:Probe] 普通 HTTP 探测代理路径 ${pathname} (IP: ${clientIp}) -> 返回伪装落地页`);
-        // 如果是普通 HTTP GET 访问代理路径，返回伪装静态页面，防止被网络探测探针指纹识别
+        await logSystem(env, { level: 'WARN', module: 'Router:Probe', message: `未通过 WebSocket 升级的代理路径探测: ${pathname}`, ip: clientIp });
         return new Response(renderLandingPage(), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
@@ -66,6 +67,7 @@ export default {
         const expectedToken = await hashPassword(config.adminPassword);
         if (token !== expectedToken) {
           console.warn(`[Router:Sub:Unauthorized] 订阅 Token 校验失败 (路径: ${pathname}, IP: ${clientIp})`);
+          await logSystem(env, { level: 'WARN', module: 'Router:Sub', message: `订阅鉴权失败，无效或缺失 Token: ${pathname}`, ip: clientIp });
           return new Response(renderLandingPage(), {
             status: 200,
             headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -96,6 +98,7 @@ export default {
           content = injectSingboxChainProxy(content, config);
         } else {
           // 在线转换失败或超时时，使用本地动态优选节点生成完整配置兜底
+          await logSystem(env, { level: 'WARN', module: 'Subapi', message: 'Subapi 在线转换超时或异常，已自动回退至本地模板引擎生成' });
           const nodes = await generateAllVlessNodes(config, url.host, { env });
           content = generateSingboxFullProfile(nodes, config, url.host);
         }
@@ -120,8 +123,22 @@ export default {
 
     } catch (err) {
       console.error('Worker runtime error:', err);
+      if (env) {
+        await logSystem(env, { level: 'ERROR', module: 'Worker', message: `全局未捕获异常: ${err.message}`, details: err.stack });
+      }
       return new Response('Internal Server Error', { status: 500 });
     }
   },
 };
+
+export default handler;
+
+/**
+ * Cloudflare Pages Functions 原生入口适配
+ * @param {object} context 
+ * @returns {Promise<Response>}
+ */
+export async function onRequest(context) {
+  return await handler.fetch(context.request, context.env, context);
+}
 

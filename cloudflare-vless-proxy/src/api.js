@@ -5,6 +5,7 @@
 
 import { verifyApiToken, saveConfig } from './config.js';
 import { parseProxyString, testUpstreamProxy } from './upstream.js';
+import { logSystem } from './logger.js';
 
 /**
  * 处理上游代理 REST API 请求 (/api/upstream, /api/proxy, /api/upstream/test)
@@ -17,6 +18,7 @@ import { parseProxyString, testUpstreamProxy } from './upstream.js';
 export async function handleRestApi(request, env, url, config) {
   const pathname = url.pathname.replace(/\/+$/, '');
   const method = request.method;
+  const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || 'unknown';
 
   // 处理 CORS 预检请求
   if (method === 'OPTIONS') {
@@ -33,6 +35,7 @@ export async function handleRestApi(request, env, url, config) {
   // 1. 独立 API Token 鉴权校验
   const isAuthed = await verifyApiToken(request, config);
   if (!isAuthed) {
+    await logSystem(env, { level: 'WARN', module: 'REST API', message: `API Token 鉴权失败 (路径: ${pathname})`, ip: clientIp });
     return jsonResponse({
       success: false,
       error: 'Unauthorized: Invalid or missing API Token. Please provide token via Authorization: Bearer <token>, X-API-Token header, or ?token=<token> parameter.',
@@ -136,6 +139,7 @@ async function handleUpdateProxyApi(request, env, config) {
 
   try {
     const nextConfig = await saveConfig(env, updates);
+    await logSystem(env, { level: 'INFO', module: 'REST API', message: `成功更新上游代理配置: ${parsed ? parsed.protocol + '://' + parsed.host + ':' + parsed.port : '(空)'}` });
     return jsonResponse({
       success: true,
       message: '上游住宅代理已成功更新并持久化至 KV！',
@@ -146,6 +150,7 @@ async function handleUpdateProxyApi(request, env, config) {
       updatedAt: new Date().toISOString(),
     });
   } catch (err) {
+    await logSystem(env, { level: 'ERROR', module: 'REST API', message: `保存上游代理配置至 KV 失败: ${err.message}` });
     return jsonResponse({
       success: false,
       error: `保存配置至 KV 失败: ${err.message}`,

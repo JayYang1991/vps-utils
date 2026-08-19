@@ -6,6 +6,7 @@
 import { getConfig, saveConfig, verifyAdminAuth, hashPassword, DEFAULT_SINGBOX_CONFIG_URL } from './config.js';
 import { testUpstreamProxy } from './upstream.js';
 import { generateAllVlessNodes, generateSingboxConfig, fetchSubconfigs, clearPreferredNodesCache } from './sub.js';
+import { logSystem, getSystemLogs, clearSystemLogs } from './logger.js';
 
 /**
  * 处理管理后台的所有 HTTP 请求
@@ -20,7 +21,7 @@ export async function handleAdmin(request, env, url, config) {
 
   // 1. API: 登录接口 (POST /admin/api/login)
   if (path.endsWith('/api/login') && method === 'POST') {
-    return handleLogin(request, config);
+    return handleLogin(request, config, env);
   }
 
   // 2. API: 获取远程规则列表 (GET /admin/api/subconfigs)
@@ -126,8 +127,31 @@ export async function handleAdmin(request, env, url, config) {
       const result = await testUpstreamProxy(body.upstreamProxy || config.upstreamProxy);
       return jsonResponse(result);
     } catch (err) {
+      await logSystem(env, { level: 'ERROR', module: 'Admin', message: `测试住宅代理异常: ${err.message}` });
       return jsonResponse({ success: false, message: err.message }, 500);
     }
+  }
+
+  // 6.1 API: 获取系统运行与错误日志 (GET /admin/api/logs)
+  if (path.endsWith('/api/logs') && method === 'GET') {
+    const isAuthed = await verifyAdminAuth(request, config);
+    if (!isAuthed) {
+      return jsonResponse({ error: 'Unauthorized' }, 401);
+    }
+    const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+    const logs = await getSystemLogs(env, limit);
+    return jsonResponse({ success: true, logs });
+  }
+
+  // 6.2 API: 清空系统运行日志 (POST /admin/api/logs/clear)
+  if (path.endsWith('/api/logs/clear') && method === 'POST') {
+    const isAuthed = await verifyAdminAuth(request, config);
+    if (!isAuthed) {
+      return jsonResponse({ error: 'Unauthorized' }, 401);
+    }
+    await clearSystemLogs(env);
+    await logSystem(env, { level: 'INFO', module: 'Admin', message: '管理员清空了系统运行日志' });
+    return jsonResponse({ success: true, message: '系统日志已清空！' });
   }
 
   // 7. 前端单页面 HTML (GET /admin)
@@ -143,11 +167,13 @@ export async function handleAdmin(request, env, url, config) {
 /**
  * 登录处理
  */
-async function handleLogin(request, config) {
+async function handleLogin(request, config, env) {
+  const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || 'unknown';
   try {
     const { password } = await request.json();
     if (password === config.adminPassword) {
       const token = await hashPassword(config.adminPassword);
+      await logSystem(env, { level: 'INFO', module: 'Admin', message: `管理员成功登录后台 (IP: ${clientIp})`, ip: clientIp });
       return new Response(JSON.stringify({ success: true, token }), {
         status: 200,
         headers: {
@@ -156,8 +182,10 @@ async function handleLogin(request, config) {
         },
       });
     }
+    await logSystem(env, { level: 'WARN', module: 'Admin', message: `管理后台登录密码错误 (IP: ${clientIp})`, ip: clientIp });
     return jsonResponse({ success: false, message: '密码错误，请重试' }, 401);
   } catch (err) {
+    await logSystem(env, { level: 'ERROR', module: 'Admin', message: `管理后台登录参数解析失败: ${err.message} (IP: ${clientIp})`, ip: clientIp });
     return jsonResponse({ success: false, message: '请求参数错误' }, 400);
   }
 }
@@ -442,6 +470,50 @@ function getAdminHTML(host, adminPath) {
     }
     .test-result-box.success { display: block; background: rgba(16, 185, 129, 0.1); border: 1px solid var(--success); color: var(--success); }
     .test-result-box.error { display: block; background: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger); color: var(--danger); }
+
+    /* 系统日志控制台样式 */
+    .logs-console-box {
+      background: #090d16;
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+      font-size: 0.82rem;
+      max-height: 380px;
+      overflow-y: auto;
+      line-height: 1.6;
+    }
+    .log-row {
+      display: flex;
+      gap: 8px;
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      align-items: flex-start;
+      word-break: break-all;
+    }
+    .log-time { color: #64748b; flex-shrink: 0; font-size: 0.76rem; margin-top: 1px; }
+    .log-level {
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: bold;
+      flex-shrink: 0;
+    }
+    .log-level.ERROR { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.4); }
+    .log-level.WARN { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .log-level.INFO { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .log-module { color: #a78bfa; font-weight: 600; flex-shrink: 0; }
+    .log-msg { color: #e2e8f0; flex-grow: 1; }
+    .log-details {
+      display: block;
+      color: #94a3b8;
+      font-size: 0.76rem;
+      background: rgba(0, 0, 0, 0.35);
+      padding: 4px 8px;
+      border-radius: 4px;
+      margin-top: 4px;
+      white-space: pre-wrap;
+    }
   </style>
 </head>
 <body>
@@ -541,21 +613,6 @@ function getAdminHTML(host, adminPath) {
             <button class="btn btn-sm" onclick="showQRModal('通用 VLESS 订阅', document.getElementById('sub-vless-url').value)">📱 二维码</button>
           </div>
         </div>
-      </div>
-
-      <!-- VLESS 单节点列表 -->
-      <div class="card">
-        <div class="card-title">
-          <div>
-            <span>📋 VLESS 优选 IP 节点列表 (<span id="lbl-node-count">0</span> 个)</span>
-            <span style="font-size:0.75rem; font-weight:normal; color:var(--text-muted); margin-left:8px;">参考 singbox-sub-converter 逻辑动态从 sub.19910417.xyz 获取</span>
-          </div>
-          <div style="display:flex; gap:8px;">
-            <button class="btn btn-sm" style="background:#10b981;" id="btn-refresh-ip" onclick="refreshPreferredIPs()">🔄 刷新优选 IP</button>
-            <button class="btn btn-secondary btn-sm" onclick="copyAllNodes()">复制全部链接</button>
-          </div>
-        </div>
-        <div id="nodes-container"></div>
       </div>
 
     </div>
@@ -689,6 +746,26 @@ function getAdminHTML(host, adminPath) {
           <button class="btn btn-secondary btn-sm" onclick="copyText(appData.singbox)">复制代码</button>
         </div>
         <div class="code-block" id="singbox-code"></div>
+      </div>
+    </div>
+
+    <!-- 全局底部卡片: 📜 系统运行与错误日志 -->
+    <div class="card" style="margin-top: 24px;">
+      <div class="card-title" style="margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <span>📜 系统运行与错误日志</span>
+          <span id="lbl-logs-count" class="badge" style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; font-size: 0.75rem; padding: 2px 8px; border-radius: 12px;">0 条</span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <label style="font-size: 0.8rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px; cursor: pointer;">
+            <input type="checkbox" id="chk-auto-refresh-logs" checked onchange="toggleAutoRefreshLogs(this.checked)"> 自动刷新
+          </label>
+          <button class="btn btn-secondary btn-sm" onclick="fetchSystemLogs()">🔄 刷新</button>
+          <button class="btn btn-secondary btn-sm" style="color: #ef4444;" onclick="doClearLogs()">🗑️ 清空</button>
+        </div>
+      </div>
+      <div id="system-logs-console" class="logs-console-box">
+        <div style="color: var(--text-muted); text-align: center; padding: 20px;">正在加载系统日志...</div>
       </div>
     </div>
 
@@ -960,32 +1037,94 @@ function getAdminHTML(host, adminPath) {
       // 渲染 REST API 指南
       updateRestSnippets(appData.config.apiToken || '');
 
-      // 渲染节点列表
-      const nodesDiv = document.getElementById('nodes-container');
-      nodesDiv.innerHTML = '';
-      const nodes = appData.nodes || [];
-      document.getElementById('lbl-node-count').innerText = nodes.length;
-
-      nodes.forEach((node) => {
-        const item = document.createElement('div');
-        item.className = 'node-item';
-        item.innerHTML = \`
-          <div class="node-info">
-            <div class="node-name">\${escapeHtml(node.name)}</div>
-            <div class="node-url">\${escapeHtml(node.url)}</div>
-          </div>
-          <div style="display:flex; gap:6px; flex-shrink: 0;">
-            <button class="btn btn-secondary btn-sm" onclick="copyText('\${escapeHtml(node.url)}')">复制</button>
-            <button class="btn btn-sm" onclick="showQRModal('\${escapeHtml(node.name)}', '\${escapeHtml(node.url)}')">📱 二维码</button>
-          </div>
-        \`;
-        nodesDiv.appendChild(item);
-      });
-
       if (document.getElementById('singbox-code')) {
         document.getElementById('singbox-code').innerText = appData.singbox || '';
       }
+
+      // 首次加载或刷新时获取系统日志
+      fetchSystemLogs();
     }
+
+    let logsRefreshTimer = null;
+
+    async function fetchSystemLogs() {
+      const token = localStorage.getItem("vless_token");
+      if (!token) return;
+      try {
+        const res = await fetch('${adminPath}/api/logs?limit=100', {
+          headers: { "Authorization": "Bearer " + token }
+        });
+        if (res.status === 401) {
+          return;
+        }
+        const data = await res.json();
+        if (data.success && Array.isArray(data.logs)) {
+          renderLogs(data.logs);
+        }
+      } catch (err) {
+        console.error("获取系统日志失败:", err);
+      }
+    }
+
+    function renderLogs(logs) {
+      const consoleBox = document.getElementById("system-logs-console");
+      const countBadge = document.getElementById("lbl-logs-count");
+      if (countBadge) {
+        countBadge.innerText = (logs ? logs.length : 0) + " 条";
+      }
+      if (!consoleBox) return;
+
+      if (!logs || logs.length === 0) {
+        consoleBox.innerHTML = '<div style="color: var(--text-muted); text-align: center; padding: 20px;">暂无系统运行与错误日志</div>';
+        return;
+      }
+
+      consoleBox.innerHTML = logs.map(log => {
+        const timeStr = log.timestamp ? log.timestamp.replace('T', ' ').substring(0, 19) : '';
+        const level = (log.level || 'INFO').toUpperCase();
+        const detailsHtml = log.details ? '<div class="log-details">' + escapeHtml(log.details) + '</div>' : '';
+        const ipTag = log.ip ? '<span style="color:#64748b; font-size:0.72rem; margin-left:4px;">(' + escapeHtml(log.ip) + ')</span>' : '';
+        return '<div class="log-row">' +
+          '<div class="log-time">' + escapeHtml(timeStr) + '</div>' +
+          '<div class="log-level ' + level + '">' + level + '</div>' +
+          '<div class="log-module">[' + escapeHtml(log.module || 'System') + ']</div>' +
+          '<div class="log-msg">' + escapeHtml(log.message || '') + ipTag + detailsHtml + '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    async function doClearLogs() {
+      if (!confirm("确定要清空所有系统运行与错误日志吗？")) return;
+      const token = localStorage.getItem("vless_token");
+      try {
+        const res = await fetch('${adminPath}/api/logs/clear', {
+          method: "POST",
+          headers: { "Authorization": "Bearer " + token }
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast("✅ 系统日志已清空", "success");
+          fetchSystemLogs();
+        } else {
+          showToast("❌ 清空失败: " + (data.message || data.error), "error");
+        }
+      } catch (err) {
+        showToast("清空异常: " + err.message, "error");
+      }
+    }
+
+    function toggleAutoRefreshLogs(enabled) {
+      if (logsRefreshTimer) {
+        clearInterval(logsRefreshTimer);
+        logsRefreshTimer = null;
+      }
+      if (enabled) {
+        logsRefreshTimer = setInterval(fetchSystemLogs, 5000);
+      }
+    }
+
+    // 默认开启自动轮询日志 (5秒一次)
+    toggleAutoRefreshLogs(true);
 
     function updateRestSnippets(token) {
       const restEndpoint = (appData.restApi && appData.restApi.endpoint) || (window.location.origin + '/api/upstream');

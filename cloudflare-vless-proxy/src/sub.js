@@ -474,7 +474,61 @@ export function migrateSingboxToV1_14(profile) {
     }
   }
 
-  // 2. 规范化 route 与 route.rules
+  // 2. 清理 DNS 中的废弃选项 (如 1.14.0 废弃的 independent_cache)
+  if (profile.dns && typeof profile.dns === 'object') {
+    delete profile.dns.independent_cache;
+  }
+
+  // 3. 彻底移除 1.13+ 已删除的 type: "dns" outbound
+  if (Array.isArray(profile.outbounds)) {
+    profile.outbounds = profile.outbounds.filter(o => o && o.type !== 'dns');
+  } else {
+    profile.outbounds = [];
+  }
+
+  // 4. 确保 outbounds 列表中具备基础出站（大小写兼容 direct/DIRECT, block/REJECT）
+  const existingTags = new Set(profile.outbounds.map(o => o && o.tag));
+  const endpointTags = new Set((profile.endpoints || []).map(e => e && e.tag));
+
+  // 确保 direct 与 DIRECT 均存在
+  if (!existingTags.has('DIRECT')) {
+    profile.outbounds.push({ type: 'direct', tag: 'DIRECT' });
+    existingTags.add('DIRECT');
+  }
+  if (!existingTags.has('direct')) {
+    profile.outbounds.push({ type: 'direct', tag: 'direct' });
+    existingTags.add('direct');
+  }
+  if (!existingTags.has('REJECT')) {
+    profile.outbounds.push({ type: 'block', tag: 'REJECT' });
+    existingTags.add('REJECT');
+  }
+  if (!existingTags.has('block')) {
+    profile.outbounds.push({ type: 'block', tag: 'block' });
+    existingTags.add('block');
+  }
+
+  // 5. 修复 dns.servers 中可能失效或不合法的 detour 引用
+  // 注意：在 Sing-box 1.12+ 中，DNS 服务器设置 detour 为 direct/DIRECT 会导致 "detour to an empty direct outbound makes no sense" 报错
+  // 直连 DNS 无需显式设置 detour，必须将其删除
+  if (profile.dns && Array.isArray(profile.dns.servers)) {
+    const mainSelectorTag = profile.outbounds[0] ? profile.outbounds[0].tag : 'auto-selector-tcp';
+    for (const server of profile.dns.servers) {
+      if (server && server.detour) {
+        if (server.detour.toLowerCase() === 'direct' || server.detour === 'DIRECT') {
+          delete server.detour;
+        } else if (!existingTags.has(server.detour) && !endpointTags.has(server.detour)) {
+          if (server.detour.toLowerCase() === 'proxy' || server.detour.includes('节点选择')) {
+            server.detour = mainSelectorTag;
+          } else {
+            delete server.detour;
+          }
+        }
+      }
+    }
+  }
+
+  // 6. 规范化 route 与 route.rules (将旧版 dns outbound 路由转换为 hijack-dns 动作)
   if (!profile.route || typeof profile.route !== 'object') {
     profile.route = {};
   }
@@ -482,18 +536,50 @@ export function migrateSingboxToV1_14(profile) {
     profile.route.rules = [];
   }
 
+  // 清洗旧版中 protocol: 'dns', outbound: 'dns-out' 或 outbound: 'dns' 的规则，转为 hijack-dns
+  profile.route.rules = profile.route.rules.map(r => {
+    if (r && r.protocol === 'dns' && !r.action) {
+      return { protocol: 'dns', action: 'hijack-dns' };
+    }
+    return r;
+  });
+
   // 确保 route.rules 开头包含 1.14.0 标准的 sniff 与 hijack-dns actions
   const hasSniff = profile.route.rules.some(r => r && r.action === 'sniff');
   if (!hasSniff) {
     profile.route.rules.unshift({ action: 'sniff' });
   }
 
-  const hasDnsAction = profile.route.rules.some(r => r && (r.action === 'hijack-dns' || r.protocol === 'dns'));
+  const hasDnsAction = profile.route.rules.some(r => r && r.action === 'hijack-dns');
   if (!hasDnsAction) {
     profile.route.rules.splice(1, 0, { protocol: 'dns', action: 'hijack-dns' });
   }
 
-  // 3. 基础分流规则与终点
+  // 7. 清理并迁移 rule_set 中的 download_detour 选项至 1.14.0 标准的 http_clients
+  if (profile.route && Array.isArray(profile.route.rule_set) && profile.route.rule_set.length > 0) {
+    if (!Array.isArray(profile.http_clients)) {
+      profile.http_clients = [];
+    }
+    const hasDefaultHttp = profile.http_clients.some(c => c && c.tag === 'default-http');
+    if (!hasDefaultHttp) {
+      profile.http_clients.push({
+        tag: 'default-http',
+        detour: 'DIRECT',
+      });
+    }
+    profile.route.default_http_client = 'default-http';
+
+    for (const rs of profile.route.rule_set) {
+      if (rs && typeof rs === 'object') {
+        if (rs.download_detour) {
+          delete rs.download_detour;
+          rs.http_client = 'default-http';
+        }
+      }
+    }
+  }
+
+  // 8. 基础分流规则与终点
   profile.route.auto_detect_interface = true;
   if (!profile.route.final && profile.outbounds && profile.outbounds[0]) {
     profile.route.final = profile.outbounds[0].tag || '🚀 节点选择';
@@ -521,15 +607,20 @@ export function buildOpenVpnEndpoint(proxy, detourTag = 'auto-selector-tcp') {
     username: proxy.username || 'vpn',
     password: proxy.password || 'vpn',
     detour: detourTag, // 第 1 站 auto-selector-tcp
+    data_ciphers: ['AES-128-CBC', 'AES-256-CBC', 'AES-256-GCM', 'AES-128-GCM', 'CHACHA20-POLY1305'],
+    data_ciphers_fallback: proxy.cipher || 'AES-128-CBC',
+    auth: proxy.auth || 'SHA1',
+    allow_compression: 'asym',
+    compression_lzo: 'adaptive',
   };
 
   if (proxy.ca || proxy.cert || proxy.key) {
     endpoint.tls = {
-      enabled: true,
+      certificate_profile: 'legacy',
     };
-    if (proxy.ca) endpoint.tls.ca = proxy.ca;
-    if (proxy.cert) endpoint.tls.certificate = proxy.cert;
-    if (proxy.key) endpoint.tls.key = proxy.key;
+    if (proxy.ca) endpoint.tls.certificate = proxy.ca;
+    if (proxy.cert) endpoint.tls.client_certificate = proxy.cert;
+    if (proxy.key) endpoint.tls.client_key = proxy.key;
   }
 
   return endpoint;
@@ -664,18 +755,56 @@ export function injectSingboxChainProxy(singboxContent, config = {}) {
     }
   }
 
-  // 3. 在所有 selector 节点中，将最终住宅出口置于首位并设为 default
+  // 3. 在所有 selector 节点中，将最终住宅出口置于首位并设为 default（不保留 auto-selector-tcp 作为备选）
   if (finalTargetTag) {
     for (const ob of profile.outbounds) {
       if (ob.type === 'selector' && Array.isArray(ob.outbounds)) {
-        ob.outbounds = ob.outbounds.filter(t => t !== finalTargetTag);
-        ob.outbounds.unshift(finalTargetTag);
+        ob.outbounds = [finalTargetTag, 'DIRECT'];
         ob.default = finalTargetTag;
+      }
+    }
+
+    // 4. 将所有流量路由规则中指向 auto-selector-tcp 或前置代理节点的 outbound 改为走住宅代理出站
+    const vlessTags = new Set(profile.outbounds.filter(o => o.type === 'vless').map(o => o.tag));
+    if (profile.route && Array.isArray(profile.route.rules)) {
+      for (const rule of profile.route.rules) {
+        if (rule && rule.outbound) {
+          const obTag = rule.outbound;
+          if (obTag === 'auto-selector-tcp' ||
+              obTag === '🚀 节点选择' ||
+              obTag === 'PROXY' ||
+              obTag === 'GLOBAL' ||
+              obTag.includes('自动') ||
+              obTag.includes('优选') ||
+              vlessTags.has(obTag)) {
+            rule.outbound = finalTargetTag;
+          }
+        }
+      }
+    }
+
+    // 5. 修改默认路由出口 (final) 与远端 DNS detour 为住宅代理出站
+    if (profile.route) {
+      profile.route.final = finalTargetTag;
+    }
+    if (profile.dns && Array.isArray(profile.dns.servers)) {
+      for (const server of profile.dns.servers) {
+        if (server && server.detour) {
+          const detourTag = server.detour;
+          if (detourTag === 'auto-selector-tcp' ||
+              detourTag === '🚀 节点选择' ||
+              detourTag === 'PROXY' ||
+              detourTag.includes('自动') ||
+              detourTag.includes('优选') ||
+              vlessTags.has(detourTag)) {
+            server.detour = finalTargetTag;
+          }
+        }
       }
     }
   }
 
-  // 4. 应用 Sing-box 1.14.0 语法清洗，移除旧字段
+  // 6. 应用 Sing-box 1.14.0 语法清洗，移除旧字段
   profile = migrateSingboxToV1_14(profile);
 
   return JSON.stringify(profile, null, 2);
@@ -715,11 +844,13 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
     }
   }
 
+  // 构造主选择组：若有住宅出口，严格只走住宅出口（不回退到 auto-selector-tcp）
   const selectorOutbounds = [];
   if (finalTargetTag) {
-    selectorOutbounds.push(finalTargetTag);
+    selectorOutbounds.push(finalTargetTag, 'DIRECT');
+  } else {
+    selectorOutbounds.push('auto-selector-tcp', ...nodeTags, 'DIRECT');
   }
-  selectorOutbounds.push('auto-selector-tcp', ...nodeTags, 'DIRECT');
 
   const outbounds = [
     {
@@ -774,12 +905,10 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
     {
       type: 'block',
       tag: 'REJECT',
-    },
-    {
-      type: 'dns',
-      tag: 'dns-out',
     }
   );
+
+  const targetOutboundTag = finalTargetTag || '🚀 节点选择';
 
   const profile = {
     log: {
@@ -791,12 +920,11 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
         {
           tag: 'dns-remote',
           address: 'https://1.1.1.1/dns-query',
-          detour: '🚀 节点选择',
+          detour: targetOutboundTag,
         },
         {
           tag: 'dns-local',
           address: '223.5.5.5',
-          detour: 'DIRECT',
         },
       ],
       rules: [
@@ -831,7 +959,7 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
         },
         {
           clash_mode: 'Global',
-          outbound: '🚀 节点选择',
+          outbound: targetOutboundTag,
         },
         {
           clash_mode: 'Direct',
@@ -839,13 +967,16 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
         },
       ],
       auto_detect_interface: true,
-      final: '🚀 节点选择',
+      final: targetOutboundTag,
     },
   };
 
   if (openvpnEndpoint) {
     profile.endpoints = [openvpnEndpoint];
   }
+
+  // 统一通过 1.14.0 自愈迁移器清洗与标准化
+  migrateSingboxToV1_14(profile);
 
   return JSON.stringify(profile, null, 2);
 }

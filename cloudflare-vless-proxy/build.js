@@ -66,10 +66,12 @@ async function buildAndObfuscate() {
 
   const finalCode = obfuscatedResult.getObfuscatedCode();
   const distFile = path.join(distDir, 'index.js');
+  const pagesWorkerFile = path.join(distDir, '_worker.js');
   fs.writeFileSync(distFile, finalCode, 'utf-8');
+  fs.writeFileSync(pagesWorkerFile, finalCode, 'utf-8');
 
   const finalSize = (Buffer.byteLength(finalCode, 'utf-8') / 1024).toFixed(2);
-  console.log(`✨ [DONE] Production obfuscated artifact created at: dist/index.js (${finalSize} KB)`);
+  console.log(`✨ [DONE] Production obfuscated artifacts created at: dist/index.js & dist/_worker.js (${finalSize} KB)`);
 }
 
 buildAndObfuscate().catch((err) => {

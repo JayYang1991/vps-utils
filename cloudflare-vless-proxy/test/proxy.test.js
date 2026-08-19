@@ -321,13 +321,32 @@ describe('Node & Config Generators', () => {
     assert.equal(ovpnEndpoint.server_port, 443);
     assert.equal(ovpnEndpoint.detour, 'auto-selector-tcp');
     assert.equal(sbOvpnObj.outbounds[0].default, '🛡️ OpenVPN 住宅出口');
+    assert.equal(ovpnEndpoint.cipher, undefined, 'cipher must NOT be present in TLS mode');
+    assert.ok(Array.isArray(ovpnEndpoint.data_ciphers));
+    assert.equal(ovpnEndpoint.data_ciphers_fallback, 'AES-128-CBC');
+
+    // 验证带 CA 证书的 OpenVPN 配置生成正确的 1.14.0 tls 结构 (无 enabled 字段)
+    const configWithCaOvpn = {
+      ...config,
+      upstreamProxy: 'client\ndev tun\nproto tcp\nremote 219.100.37.13 443\n<ca>\n-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n</ca>'
+    };
+    const sbWithCaOvpn = JSON.parse(generateSingboxFullProfile(configWithCaOvpn, domain));
+    const caEndpoint = sbWithCaOvpn.endpoints.find(e => e.type === 'openvpn-client');
+    assert.ok(caEndpoint.tls);
+    assert.equal(caEndpoint.tls.enabled, undefined, 'Must NOT contain unknown enabled field');
+    assert.ok(caEndpoint.tls.certificate.includes('BEGIN CERTIFICATE'));
+    assert.equal(caEndpoint.tls.certificate_profile, 'legacy');
 
     // 验证 1.14.0 inbounds 无废弃 legacy 字段，且 route.rules 包含 sniff 规则
     assert.equal(sbOvpnObj.inbounds[0].sniff, undefined);
     assert.equal(sbOvpnObj.inbounds[0].domain_strategy, undefined);
     assert.ok(sbOvpnObj.route.rules.some(r => r.action === 'sniff'));
 
-    // 4. 链式代理注入函数 injectSingboxChainProxy (测试清洗旧版 subapi 响应中的 legacy 字段)
+    // 验证 1.14.0 绝不包含已废弃被移除的 type: "dns" outbound
+    assert.equal(sbOvpnObj.outbounds.some(o => o.type === 'dns'), false, 'Sing-box 1.14.0 must not contain dns outbound');
+    assert.ok(sbOvpnObj.route.rules.some(r => r.action === 'hijack-dns'), 'Must use hijack-dns rule action');
+
+    // 4. 链式代理注入函数 injectSingboxChainProxy (测试清洗旧版 subapi 响应中的 legacy 字段和 dns outbound)
     const mockLegacySubapiResponse = JSON.stringify({
       inbounds: [
         { type: 'mixed', tag: 'mixed-in', sniff: true, domain_strategy: 'prefer_ipv4' }
@@ -336,15 +355,43 @@ describe('Node & Config Generators', () => {
         { type: 'selector', tag: 'PROXY', outbounds: ['⚡ 自动优选', 'DIRECT'], default: '⚡ 自动优选' },
         { type: 'urltest', tag: '⚡ 自动优选', outbounds: ['node1', 'node2'] },
         { type: 'vless', tag: 'node1' },
-        { type: 'vless', tag: 'node2' }
-      ]
+        { type: 'vless', tag: 'node2' },
+        { type: 'dns', tag: 'dns-out' }
+      ],
+      route: {
+        rules: [
+          { protocol: 'dns', outbound: 'dns-out' }
+        ],
+        rule_set: [
+          { type: 'remote', tag: 'geoip-cn', format: 'binary', url: 'https://example.com/geoip.db', download_detour: 'DIRECT' }
+        ]
+      }
     });
     const injected = injectSingboxChainProxy(mockLegacySubapiResponse, configWithOvpn);
     const injectedObj = JSON.parse(injected);
     assert.equal(injectedObj.inbounds[0].sniff, undefined); // 旧字段已被清洗
+    assert.equal(injectedObj.outbounds.some(o => o.type === 'dns'), false); // 旧 dns outbound 已被清洗
     assert.ok(Array.isArray(injectedObj.endpoints));
-    assert.equal(injectedObj.endpoints[0].type, 'openvpn-client');
+    assert.ok(injectedObj.route.rules.some(r => r.action === 'hijack-dns')); // 自动转换为 hijack-dns
+
+    // 验证 rule_set 中的 download_detour 自动迁移为 http_clients
+    assert.equal(injectedObj.route.rule_set[0].download_detour, undefined);
+    assert.equal(injectedObj.route.rule_set[0].http_client, 'default-http');
+    assert.ok(Array.isArray(injectedObj.http_clients));
+    assert.equal(injectedObj.http_clients[0].tag, 'default-http');
+
+    // 验证主选择组默认首选指向 OpenVPN 住宅出口以实现链式代理
     assert.equal(injectedObj.outbounds[0].default, '🛡️ OpenVPN 住宅出口');
+    assert.equal(sbOvpnObj.outbounds[0].default, '🛡️ OpenVPN 住宅出口');
+    assert.equal(sbOvpnObj.route.final, '🛡️ OpenVPN 住宅出口');
+    assert.equal(injectedObj.route.final, '🛡️ OpenVPN 住宅出口');
+    assert.equal(sbOvpnObj.dns.servers[0].detour, '🛡️ OpenVPN 住宅出口');
+
+    // 验证直连 DNS 绝不包含 direct detour (避免 'detour to an empty direct outbound makes no sense')
+    if (sbOvpnObj.dns && sbOvpnObj.dns.servers) {
+      const localDns = sbOvpnObj.dns.servers.find(s => s.tag === 'dns-local');
+      if (localDns) assert.equal(localDns.detour, undefined);
+    }
 
     // 5. Base64 Sub
     const b64 = generateBase64Sub(config, domain);
@@ -664,6 +711,36 @@ describe('Static Landing Page & Admin HTML Integrity', () => {
     assert.doesNotThrow(() => {
       new vm.Script(scriptCode);
     }, 'Client-side script in admin HTML must compile without any SyntaxError');
+  });
+
+  it('should record, query and clear system logs in logger module and admin API', async () => {
+    const { logSystem, getSystemLogs, clearSystemLogs } = await import('../src/logger.js');
+    const mockStore = new Map();
+    const mockKV = {
+      async get(key) { return mockStore.get(key) || null; },
+      async put(key, val) { mockStore.set(key, val); },
+      async delete(key) { mockStore.delete(key); },
+    };
+    const env = { CONFIG_KV: mockKV };
+
+    // 1. 记录日志
+    await logSystem(env, { level: 'ERROR', module: 'TestModule', message: '测试错误信息', details: { code: 500 }, ip: '1.2.3.4' });
+    await logSystem(env, { level: 'INFO', module: 'TestModule', message: '测试普通信息' });
+
+    // 2. 查询日志
+    const logs = await getSystemLogs(env);
+    assert.ok(Array.isArray(logs));
+    assert.equal(logs.length, 2);
+    assert.equal(logs[0].level, 'INFO');
+    assert.equal(logs[1].level, 'ERROR');
+    assert.equal(logs[1].module, 'TestModule');
+    assert.equal(logs[1].ip, '1.2.3.4');
+
+    // 3. 清空日志
+    const clearRes = await clearSystemLogs(env);
+    assert.equal(clearRes, true);
+    const emptyLogs = await getSystemLogs(env);
+    assert.equal(emptyLogs.length, 0);
   });
 });
 
