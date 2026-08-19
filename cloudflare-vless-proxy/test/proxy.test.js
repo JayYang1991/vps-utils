@@ -244,6 +244,47 @@ describe('Node & Config Generators', () => {
     assert.equal(normalizePath('/foo/'), '/foo');
     assert.equal(normalizePath(''), '/');
   });
+
+  it('should remove direct-only select and url-test proxy-groups and clean references', async () => {
+    const { cleanClashDirectOnlyGroups } = await import('../src/sub.js');
+    const mockClashYaml = `
+port: 7890
+proxies:
+  - name: HK-Node
+    type: vless
+proxy-groups:
+  - name: 🚀 节点选择
+    type: select
+    proxies:
+      - 🇭🇰 香港节点
+      - 🇺🇲 美国节点
+      - 🖥️ VPS直连节点
+  - name: 🇭🇰 香港节点
+    type: select
+    proxies:
+      - HK-Node
+  - name: 🇺🇲 美国节点
+    type: select
+    proxies:
+      - DIRECT
+  - name: 🖥️ VPS直连节点
+    type: url-test
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    proxies:
+      - DIRECT
+rules:
+  - DOMAIN,us.example.com,🇺🇲 美国节点
+  - MATCH,🚀 节点选择
+`;
+
+    const cleaned = cleanClashDirectOnlyGroups(mockClashYaml);
+    assert.ok(!cleaned.includes('🇺🇲 美国节点'));
+    assert.ok(!cleaned.includes('🖥️ VPS直连节点'));
+    assert.ok(cleaned.includes('🇭🇰 香港节点'));
+    assert.ok(cleaned.includes('HK-Node'));
+    assert.ok(cleaned.includes('DOMAIN,us.example.com,DIRECT'));
+  });
 });
 
 describe('Worker Request Routing & API Endpoints', () => {

@@ -344,6 +344,9 @@ export async function convertViaSubapi(subUrl, target = 'clash', configUrl = '',
         const content = await resp.text();
         const isValid = ['proxies', 'outbounds', 'outbound', 'port', 'inbounds'].some(k => content.includes(k));
         if (content.length > 100 && isValid) {
+          if (!isSingbox) {
+            return cleanClashDirectOnlyGroups(content);
+          }
           return content;
         }
       }
@@ -354,6 +357,136 @@ export async function convertViaSubapi(subUrl, target = 'clash', configUrl = '',
   }
 
   return '';
+}
+
+/**
+ * 清理 Clash 配置中只有 DIRECT 的 select 和 url-test 节点分组，并更新关联引用
+ * @param {string} yaml Clash 完整配置 YAML 文本
+ * @returns {string} 清理后的 YAML 文本
+ */
+export function cleanClashDirectOnlyGroups(yaml) {
+  if (!yaml || typeof yaml !== 'string') return yaml;
+
+  const lines = yaml.split(/\r?\n/);
+  const pgStartIdx = lines.findIndex(l => /^proxy-groups\s*:/.test(l));
+  if (pgStartIdx === -1) return yaml;
+
+  let pgEndIdx = lines.findIndex((l, idx) => idx > pgStartIdx && /^[a-zA-Z0-9_-]+\s*:/.test(l));
+  if (pgEndIdx === -1) pgEndIdx = lines.length;
+
+  const headerLines = lines.slice(0, pgStartIdx + 1);
+  const pgLines = lines.slice(pgStartIdx + 1, pgEndIdx);
+  const footerLines = lines.slice(pgEndIdx);
+
+  const groups = [];
+  let currentGroup = null;
+  let inProxies = false;
+
+  for (let i = 0; i < pgLines.length; i++) {
+    const line = pgLines[i];
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+
+    const groupItemMatch = line.match(/^\s*-\s+name:\s*(.+)$/);
+    if (groupItemMatch) {
+      currentGroup = {
+        name: groupItemMatch[1].trim().replace(/^['\"]|['\"]$/g, ''),
+        fields: [],
+        proxies: [],
+        type: 'select',
+      };
+      groups.push(currentGroup);
+      inProxies = false;
+      continue;
+    }
+
+    if (!currentGroup) continue;
+
+    const typeMatch = line.match(/^\s*type:\s*(.+)$/);
+    if (typeMatch) {
+      currentGroup.type = typeMatch[1].trim().toLowerCase().replace(/^['\"]|['\"]$/g, '');
+      currentGroup.fields.push(line);
+      inProxies = false;
+      continue;
+    }
+
+    if (/^\s*proxies\s*:/.test(line)) {
+      inProxies = true;
+      continue;
+    }
+
+    if (inProxies) {
+      const proxyItemMatch = line.match(/^\s*-\s+(.+)$/);
+      if (proxyItemMatch) {
+        const pName = proxyItemMatch[1].trim().replace(/^['\"]|['\"]$/g, '');
+        currentGroup.proxies.push(pName);
+        continue;
+      } else {
+        inProxies = false;
+      }
+    }
+
+    currentGroup.fields.push(line);
+  }
+
+  let removedAny = true;
+  const removedNames = new Set();
+
+  while (removedAny) {
+    removedAny = false;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      const g = groups[i];
+      const isTargetType = ['select', 'url-test', 'urltest', 'fallback', 'load-balance'].includes(g.type);
+      const isOnlyDirect = g.proxies.length === 0 || g.proxies.every(p => p.toUpperCase() === 'DIRECT');
+
+      if (isTargetType && isOnlyDirect) {
+        removedNames.add(g.name);
+        groups.splice(i, 1);
+        removedAny = true;
+      }
+    }
+
+    if (removedAny) {
+      for (const g of groups) {
+        g.proxies = g.proxies.filter(p => !removedNames.has(p));
+      }
+    }
+  }
+
+  const newPgLines = [];
+  for (const g of groups) {
+    newPgLines.push(`  - name: ${g.name}`);
+    for (const f of g.fields) {
+      newPgLines.push(f);
+    }
+    newPgLines.push('    proxies:');
+    if (g.proxies.length > 0) {
+      for (const p of g.proxies) {
+        newPgLines.push(`      - ${p}`);
+      }
+    } else {
+      newPgLines.push('      - DIRECT');
+    }
+  }
+
+  const newFooterLines = footerLines.map(line => {
+    let modifiedLine = line;
+    for (const rName of removedNames) {
+      if (modifiedLine.includes(rName)) {
+        const parts = modifiedLine.split(',');
+        if (parts.length === 2 && parts[1].trim() === rName) {
+          parts[1] = 'DIRECT';
+          modifiedLine = parts.join(',');
+        } else if (parts.length >= 3 && parts[2].trim() === rName) {
+          parts[2] = 'DIRECT';
+          modifiedLine = parts.join(',');
+        }
+      }
+    }
+    return modifiedLine;
+  });
+
+  return [...headerLines, ...newPgLines, ...newFooterLines].join('\n');
 }
 
 /**
