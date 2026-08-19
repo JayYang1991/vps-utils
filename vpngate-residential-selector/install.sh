@@ -62,6 +62,7 @@ install_files() {
     cp -f "${SCRIPT_DIR}/exporter.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/pool_manager.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/daemon.py" "${INSTALL_DIR}/"
+    cp -f "${SCRIPT_DIR}/bridge.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/main.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/service.sh" "${INSTALL_DIR}/"
 
@@ -73,6 +74,7 @@ install_files() {
     # 设置可执行权限
     chmod +x "${INSTALL_DIR}/main.py"
     chmod +x "${INSTALL_DIR}/daemon.py"
+    chmod +x "${INSTALL_DIR}/bridge.py"
     chmod +x "${INSTALL_DIR}/service.sh"
     chmod -R 755 "${INSTALL_DIR}"
 
@@ -80,12 +82,14 @@ install_files() {
     info "正在创建全局快捷命令软链接至 ${BIN_DIR} ..."
     ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-selector"
     ln -sf "${INSTALL_DIR}/daemon.py" "${BIN_DIR}/vpngate-daemon"
+    ln -sf "${INSTALL_DIR}/bridge.py" "${BIN_DIR}/vpngate-bridge"
     ln -sf "${INSTALL_DIR}/service.sh" "${BIN_DIR}/vpngate-service"
-    chmod +x "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-service"
+    chmod +x "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-service"
 
     info "✅ 全局快捷命令已就绪:"
-    info "   • vpngate-selector  -> 手动单次测速与提取 TOP 住宅节点"
+    info "   • vpngate-selector  -> 手动单次协议测速与提取 TOP 住宅节点"
     info "   • vpngate-daemon    -> 运行 7 国守护保活进程"
+    info "   • vpngate-bridge    -> 启动本地 SOCKS5/HTTP 住宅中继网桥"
     info "   • vpngate-service   -> 管理后台 systemd 服务"
 }
 

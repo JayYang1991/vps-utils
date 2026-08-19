@@ -116,6 +116,7 @@ class ResidentialPoolManager:
                     res = BenchmarkResult(
                         server=server,
                         reachable=True,
+                        protocol=n.get("protocol", "openvpn"),
                         real_latency_ms=n.get("real_latency_ms", 0.0),
                         min_latency_ms=n.get("min_latency_ms", 0.0),
                         max_latency_ms=n.get("max_latency_ms", 0.0),
@@ -142,14 +143,28 @@ class ResidentialPoolManager:
         json_pools = {}
         all_flattened_nodes: List[BenchmarkResult] = []
 
+        # Export individual OpenVPN profiles
+        ovpn_dir = os.path.join(self.output_dir, "ovpn")
+        os.makedirs(ovpn_dir, exist_ok=True)
+
         for country_code, res_list in self.pools.items():
             json_pools[country_code] = []
             for i, res in enumerate(res_list, 1):
                 all_flattened_nodes.append(res)
+                if res.server.openvpn_config_b64:
+                    try:
+                        ovpn_content = base64.b64decode(res.server.openvpn_config_b64).decode("utf-8", errors="ignore")
+                        fname = f"{country_code}_{i:02d}_{res.server.ip}_{res.tested_port}.ovpn"
+                        with open(os.path.join(ovpn_dir, fname), "w", encoding="utf-8") as ovpn_f:
+                            ovpn_f.write(ovpn_content)
+                    except Exception:
+                        pass
+
                 json_pools[country_code].append({
                     "rank": i,
                     "ip": res.server.ip,
                     "port": res.tested_port,
+                    "protocol": res.protocol,
                     "proto": res.server.proto,
                     "hostname": res.server.hostname,
                     "country_short": res.server.country_short,

@@ -100,12 +100,12 @@ class TestVpnGateSelector(unittest.TestCase):
         )
 
         r1 = BenchmarkResult(
-            server=s1, reachable=True, real_latency_ms=10.0, min_latency_ms=9.0,
+            server=s1, reachable=True, protocol="openvpn", real_latency_ms=10.0, min_latency_ms=9.0,
             max_latency_ms=11.0, jitter_ms=2.0, packet_loss_rate=0.0,
             tested_port=443, composite_score=1000.0
         )
         r2 = BenchmarkResult(
-            server=s2, reachable=True, real_latency_ms=80.0, min_latency_ms=75.0,
+            server=s2, reachable=True, protocol="openvpn", real_latency_ms=80.0, min_latency_ms=75.0,
             max_latency_ms=85.0, jitter_ms=10.0, packet_loss_rate=0.0,
             tested_port=443, composite_score=300.0
         )
@@ -121,7 +121,7 @@ class TestVpnGateSelector(unittest.TestCase):
             total_users=1, total_traffic=1, operator="", message=""
         )
         r = BenchmarkResult(
-            server=s, reachable=True, real_latency_ms=15.5, min_latency_ms=15.0,
+            server=s, reachable=True, protocol="openvpn", real_latency_ms=15.5, min_latency_ms=15.0,
             max_latency_ms=16.0, jitter_ms=1.0, packet_loss_rate=0.0,
             tested_port=443, composite_score=850.0
         )
@@ -165,7 +165,7 @@ class TestVpnGateSelector(unittest.TestCase):
             total_users=1, total_traffic=1, operator="", message=""
         )
         r_jp = BenchmarkResult(
-            server=s_jp, reachable=True, real_latency_ms=10.0, min_latency_ms=9.0,
+            server=s_jp, reachable=True, protocol="openvpn", real_latency_ms=10.0, min_latency_ms=9.0,
             max_latency_ms=11.0, jitter_ms=2.0, packet_loss_rate=0.0,
             tested_port=443, composite_score=1000.0
         )

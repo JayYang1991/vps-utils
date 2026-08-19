@@ -55,22 +55,23 @@ def print_table(results: List[BenchmarkResult]) -> None:
         print("\n❌ 未找到符合条件的可用节点。\n")
         return
 
-    print("\n" + "=" * 105)
-    print(f"  🏆 测速完成！精选最优 TOP {len(results)} 住宅/志愿代理列表:")
-    print("=" * 105)
-    print(f"{'排名':<4} | {'地区':<6} | {'IP地址:端口':<22} | {'实测延迟':<10} | {'官方带宽':<12} | {'综合得分':<10} | {'SOCKS5代理全路径'}")
-    print(f"{'-'*4}-+-{'-'*6}-+-{'-'*22}-+-{'-'*10}-+-{'-'*12}-+-{'-'*10}-+-{'-'*43}")
+    print("\n" + "=" * 115)
+    print(f"  🏆 测速完成！精选最优 TOP {len(results)} 协议验证可用住宅/志愿代理列表:")
+    print("=" * 115)
+    print(f"{'排名':<4} | {'地区':<6} | {'IP地址:端口':<22} | {'协议':<10} | {'实测延迟':<10} | {'官方带宽':<12} | {'综合得分':<10} | {'SOCKS5代理全路径'}")
+    print(f"{'-'*4}-+-{'-'*6}-+-{'-'*22}-+-{'-'*10}-+-{'-'*10}-+-{'-'*12}-+-{'-'*10}-+-{'-'*35}")
 
     for i, res in enumerate(results, 1):
         flag = get_country_flag(res.server.country_short)
         c_tag = f"{flag} {res.server.country_short}"
         addr = f"{res.server.ip}:{res.tested_port}"
+        proto = res.protocol.upper()
         lat = f"{res.real_latency_ms:.2f} ms"
         spd = f"{res.server.speed_mbps:.2f} Mbps"
         score = f"{res.composite_score:.1f}"
-        print(f"{i:<4d} | {c_tag:<6} | {addr:<22} | {lat:<10} | {spd:<12} | {score:<10} | {res.socks5_url}")
+        print(f"{i:<4d} | {c_tag:<6} | {addr:<22} | {proto:<10} | {lat:<10} | {spd:<12} | {score:<10} | {res.socks5_url}")
 
-    print("=" * 105 + "\n")
+    print("=" * 115 + "\n")
 
 
 def parse_arguments() -> argparse.Namespace:
