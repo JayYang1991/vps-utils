@@ -11,6 +11,7 @@ Maintains TOP 20 residential proxies for US, JP, HK, SG, KR, DE, and AU with:
 import os
 import sys
 import json
+import base64
 import logging
 from typing import Dict, List, Set, Any, Optional
 from datetime import datetime

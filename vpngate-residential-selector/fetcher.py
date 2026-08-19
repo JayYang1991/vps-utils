@@ -6,8 +6,10 @@ Fetches and aggregates full server lists from official VPNGATE APIs, daily mirro
 and real-time community mirrors, providing maximum server discovery.
 """
 
+import os
 import re
 import csv
+import json
 import base64
 import logging
 import concurrent.futures
