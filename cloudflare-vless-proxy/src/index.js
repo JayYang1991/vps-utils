@@ -1,13 +1,13 @@
 /**
  * Cloudflare Worker Main Entrypoint
- * VLESS Protocol over WebSocket + Residential Proxy Upstream + KV Admin Panel
+ * VLESS Protocol over WebSocket + Dynamic Preferred IP + Subapi Subscription Conversion + KV Admin Panel
  */
 
-import { getConfig, verifyAdminAuth, hashPassword } from './config.js';
+import { getConfig, verifyAdminAuth, hashPassword, DEFAULT_CONFIG_URL, DEFAULT_SINGBOX_CONFIG_URL } from './config.js';
 import { handleVlessWebSocket } from './vless.js';
 import { handleAdmin } from './admin.js';
 import { renderLandingPage } from './landing.js';
-import { generateBase64Sub, generateClashFullProfile, generateSingboxFullProfile } from './sub.js';
+import { generateAllVlessNodes, generateBase64Sub, generateClashFullProfile, generateSingboxFullProfile, convertViaSubapi } from './sub.js';
 
 export default {
   /**
@@ -44,8 +44,10 @@ export default {
         return await handleAdmin(request, env, url, config);
       }
 
-      // 4. 路由 C：订阅聚合接口 (/sub)
-      if (pathname === '/sub') {
+      // 4. 路由 C：订阅聚合接口 (/sub, /clash, /singbox, /v2ray, /base64)
+      const isSubRoute = pathname === '/sub' || pathname === '/clash' || pathname === '/singbox' || pathname === '/v2ray' || pathname === '/base64';
+
+      if (isSubRoute) {
         const token = url.searchParams.get('token') || '';
         const expectedToken = await hashPassword(config.adminPassword);
         if (token !== expectedToken) {
@@ -55,23 +57,33 @@ export default {
           });
         }
 
-        const format = (url.searchParams.get('format') || 'vless').toLowerCase();
+        const ua = (request.headers.get('User-Agent') || '').toLowerCase();
+        const formatParam = (url.searchParams.get('format') || url.searchParams.get('target') || url.searchParams.get('flag') || '').toLowerCase();
 
-        if (format === 'clash') {
-          const yamlContent = generateClashFullProfile(config, url.host);
-          return new Response(yamlContent, {
-            headers: {
-              'Content-Type': 'text/yaml; charset=utf-8',
-              'Content-Disposition': 'attachment; filename="clash-config.yaml"',
-              'Subscription-Userinfo': 'upload=0; download=0; total=1073741824000; expire=0',
-              'Profile-Update-Interval': '24',
-            },
-          });
-        }
+        const isSingbox = pathname === '/singbox' ||
+          formatParam === 'singbox' || formatParam === 'sing-box' ||
+          (!formatParam && (ua.includes('sing-box') || ua.includes('singbox') || ua.includes('box')));
 
-        if (format === 'singbox') {
-          const jsonContent = generateSingboxFullProfile(config, url.host);
-          return new Response(jsonContent, {
+        const isClash = !isSingbox && (
+          pathname === '/clash' ||
+          formatParam === 'clash' || formatParam === 'mihomo' || formatParam === 'stash' ||
+          (!formatParam && (ua.includes('clash') || ua.includes('stash') || ua.includes('mihomo') || ua.includes('verge') || ua.includes('meta')))
+        );
+
+        const isV2ray = pathname === '/v2ray' || pathname === '/base64' || formatParam === 'vless' || formatParam === 'base64' || formatParam === 'v2ray';
+
+        // 统一构造给 subapi 转换使用的源订阅 URL
+        const rawSubUrl = `${url.origin}/v2ray?token=${encodeURIComponent(token)}`;
+
+        if (isSingbox) {
+          const configTemplate = url.searchParams.get('config') || config.singboxConfigUrl || DEFAULT_SINGBOX_CONFIG_URL;
+          let content = await convertViaSubapi(rawSubUrl, 'singbox', configTemplate, 3, config.subapiUrl);
+          if (!content) {
+            // 在线转换失败或超时时，使用本地动态优选节点生成完整配置兜底
+            const nodes = await generateAllVlessNodes(config, url.host, { env });
+            content = generateSingboxFullProfile(nodes, config, url.host);
+          }
+          return new Response(content, {
             headers: {
               'Content-Type': 'application/json; charset=utf-8',
               'Content-Disposition': 'attachment; filename="singbox-config.json"',
@@ -81,8 +93,27 @@ export default {
           });
         }
 
+        if (isClash) {
+          const configTemplate = url.searchParams.get('config') || config.configUrl || DEFAULT_CONFIG_URL;
+          let content = await convertViaSubapi(rawSubUrl, 'clash', configTemplate, 3, config.subapiUrl);
+          if (!content) {
+            // 在线转换失败或超时时，使用本地动态优选节点生成完整配置兜底
+            const nodes = await generateAllVlessNodes(config, url.host, { env });
+            content = generateClashFullProfile(nodes, config, url.host);
+          }
+          return new Response(content, {
+            headers: {
+              'Content-Type': 'text/yaml; charset=utf-8',
+              'Content-Disposition': 'attachment; filename="clash-config.yaml"',
+              'Subscription-Userinfo': 'upload=0; download=0; total=1073741824000; expire=0',
+              'Profile-Update-Interval': '24',
+            },
+          });
+        }
+
         // 默认返回通用 Base64 订阅文本
-        const subContent = generateBase64Sub(config, url.host);
+        const nodes = await generateAllVlessNodes(config, url.host, { env });
+        const subContent = generateBase64Sub(nodes, url.host);
         return new Response(subContent, {
           headers: {
             'Content-Type': 'text/plain; charset=utf-8',
@@ -107,3 +138,4 @@ export default {
     }
   },
 };
+

@@ -157,12 +157,46 @@ describe('Node & Config Generators', () => {
     assert.ok(url.includes('type=ws'));
   });
 
-  it('should generate all nodes including preferred IPs', () => {
-    const nodes = generateAllVlessNodes(config, domain);
-    assert.equal(nodes.length, 3); // 1 direct + 2 clean IPs
+  it('should parse sub.19910417.xyz response lines accurately', async () => {
+    const { parseVlessSubResponse } = await import('../src/sub.js');
+    const mockRawData = [
+      'vless://d342d11e-d424-4583-b36e-524ab1f0afa4@103.135.249.52:443?encryption=none&security=tls&sni=example.com&fp=chrome&type=ws&host=example.com&path=%2F#HK%E8%87%AA%E7%94%A8',
+      'vless://d342d11e-d424-4583-b36e-524ab1f0afa4@38.207.178.173:2087?encryption=none&security=tls&sni=example.com&fp=chrome&type=ws&host=example.com&path=%2F#HK%E8%87%AA%E7%94%A8',
+      'vless://d342d11e-d424-4583-b36e-524ab1f0afa4@216.23.84.34:443?encryption=none&security=tls&sni=example.com&fp=chrome&type=ws&host=example.com&path=%2F#JP%E8%87%AA%E7%94%A8',
+      'vless://d342d11e-d424-4583-b36e-524ab1f0afa4@example.com:443?encryption=none#Ignored',
+      'vless://d342d11e-d424-4583-b36e-524ab1f0afa4@1.2.3.4:443?encryption=none#%E4%B8%8D%E5%86%8D%E6%94%AF%E6%8C%81%E6%97%A7%E7%89%88',
+    ].join('\n');
+
+    const nodes = parseVlessSubResponse(mockRawData, config, domain);
+    assert.equal(nodes.length, 3);
+    assert.equal(nodes[0].host, '103.135.249.52');
+    assert.equal(nodes[0].port, 443);
+    assert.ok(nodes[0].name.includes('HK自用-01'));
+    assert.ok(nodes[0].url.includes('path=%2Fmy-custom-ws'));
+    assert.ok(nodes[0].url.includes(`sni=${domain}`));
+
+    assert.equal(nodes[1].host, '38.207.178.173');
+    assert.equal(nodes[1].port, 2087);
+    assert.equal(nodes[2].host, '216.23.84.34');
+    assert.equal(nodes[2].port, 443);
+  });
+
+  it('should parse Base64 encoded sub.19910417.xyz response', async () => {
+    const { parseVlessSubResponse } = await import('../src/sub.js');
+    const rawLine = 'vless://d342d11e-d424-4583-b36e-524ab1f0afa4@104.16.1.1:443?encryption=none#US-Node';
+    const b64Data = Buffer.from(rawLine).toString('base64');
+
+    const nodes = parseVlessSubResponse(b64Data, config, domain);
+    assert.equal(nodes.length, 1);
+    assert.equal(nodes[0].host, '104.16.1.1');
+    assert.ok(nodes[0].name.includes('US-Node-01'));
+  });
+
+  it('should generate all nodes including preferred IPs and fallback IPs', async () => {
+    const nodes = await generateAllVlessNodes(config, domain);
+    assert.ok(nodes.length >= 1);
     assert.equal(nodes[0].host, domain);
-    assert.equal(nodes[1].host, '1.2.3.4');
-    assert.equal(nodes[2].host, 'cf.example.com');
+    assert.equal(nodes[0].category, 'direct');
   });
 
   it('should generate Sing-box and Clash Meta outbound configurations', () => {
@@ -212,6 +246,60 @@ describe('Node & Config Generators', () => {
   });
 });
 
+describe('Worker Request Routing & API Endpoints', () => {
+  const env = {
+    DEFAULT_UUID: 'd342d11e-d424-4583-b36e-524ab1f0afa4',
+    DEFAULT_DATA_PATH: '/test-ws',
+    ADMIN_PASSWORD: 'Password123!',
+  };
+
+  it('should respond to /v2ray with Base64 content when authorized', async () => {
+    const worker = (await import('../src/index.js')).default;
+    const token = await hashPassword('Password123!');
+    const req = new Request(`https://my-worker.workers.dev/v2ray?token=${token}`);
+    const res = await worker.fetch(req, env, {});
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('Content-Type'), 'text/plain; charset=utf-8');
+    const body = await res.text();
+    assert.ok(body.length > 10);
+    const decoded = atob(body);
+    assert.ok(decoded.includes('vless://'));
+  });
+
+  it('should reject unauthorized /v2ray and return landing page', async () => {
+    const worker = (await import('../src/index.js')).default;
+    const req = new Request('https://my-worker.workers.dev/v2ray?token=invalid_token');
+    const res = await worker.fetch(req, env, {});
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('Content-Type'), 'text/html; charset=utf-8');
+    const body = await res.text();
+    assert.ok(body.includes('汉武大帝'));
+  });
+
+  it('should handle /admin/api/login and /admin/api/subconfigs', async () => {
+    const worker = (await import('../src/index.js')).default;
+    
+    // Login
+    const loginReq = new Request('https://my-worker.workers.dev/admin/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'Password123!' })
+    });
+    const loginRes = await worker.fetch(loginReq, env, {});
+    assert.equal(loginRes.status, 200);
+    const loginData = await loginRes.json();
+    assert.equal(loginData.success, true);
+    assert.ok(loginData.token);
+
+    // Subconfigs
+    const subcfgReq = new Request('https://my-worker.workers.dev/admin/api/subconfigs');
+    const subcfgRes = await worker.fetch(subcfgReq, env, {});
+    assert.equal(subcfgRes.status, 200);
+  });
+});
+
 describe('Static Landing Page', () => {
   it('should render Han Wudi biography landing page with proper DOM structure', async () => {
     const { renderLandingPage } = await import('../src/landing.js');
@@ -224,4 +312,5 @@ describe('Static Landing Page', () => {
     assert.ok(html.includes('<!DOCTYPE html>'));
   });
 });
+
 

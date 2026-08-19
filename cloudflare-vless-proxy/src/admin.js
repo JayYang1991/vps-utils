@@ -1,11 +1,11 @@
 /**
  * Admin Management Panel & API Endpoints
- * Includes Clash & Sing-box Subscriptions, VLESS Links, and Built-in QR Code Generator.
+ * Includes Clash & Sing-box Subscriptions, Dynamic Preferred IPs, VLESS Links, and Built-in QR Code Generator.
  */
 
-import { getConfig, saveConfig, verifyAdminAuth, hashPassword } from './config.js';
+import { getConfig, saveConfig, verifyAdminAuth, hashPassword, DEFAULT_CONFIG_URL, DEFAULT_SINGBOX_CONFIG_URL } from './config.js';
 import { testUpstreamProxy } from './upstream.js';
-import { generateAllVlessNodes, generateSingboxConfig, generateClashMetaConfig } from './sub.js';
+import { generateAllVlessNodes, generateSingboxConfig, generateClashMetaConfig, fetchSubconfigs, clearPreferredNodesCache } from './sub.js';
 
 /**
  * 处理管理后台的所有 HTTP 请求
@@ -23,7 +23,25 @@ export async function handleAdmin(request, env, url, config) {
     return handleLogin(request, config);
   }
 
-  // 2. API: 获取配置、节点与订阅链接 (GET /admin/api/config)
+  // 2. API: 获取远程规则列表 (GET /admin/api/subconfigs)
+  if (path.endsWith('/api/subconfigs') && method === 'GET') {
+    const configs = await fetchSubconfigs();
+    return jsonResponse(configs);
+  }
+
+  // 3. API: 刷新优选 IP 节点缓存 (POST /admin/api/refresh-ip)
+  if (path.endsWith('/api/refresh-ip') && method === 'POST') {
+    const isAuthed = await verifyAdminAuth(request, config);
+    if (!isAuthed) {
+      return jsonResponse({ error: 'Unauthorized' }, 401);
+    }
+    clearPreferredNodesCache();
+    const workerDomain = url.host;
+    const nodes = await generateAllVlessNodes(config, workerDomain, { forceRefresh: true, env });
+    return jsonResponse({ success: true, message: '优选 IP 节点已刷新！', count: nodes.length, nodes });
+  }
+
+  // 4. API: 获取配置、节点与订阅链接 (GET /admin/api/config)
   if (path.endsWith('/api/config') && method === 'GET') {
     const isAuthed = await verifyAdminAuth(request, config);
     if (!isAuthed) {
@@ -31,14 +49,15 @@ export async function handleAdmin(request, env, url, config) {
     }
     const workerDomain = url.host;
     const token = await hashPassword(config.adminPassword);
-    const nodes = generateAllVlessNodes(config, workerDomain);
-    const singbox = generateSingboxConfig(config, workerDomain);
-    const clash = generateClashMetaConfig(config, workerDomain);
+    const nodes = await generateAllVlessNodes(config, workerDomain, { env });
+    const singbox = generateSingboxConfig(nodes, config, workerDomain);
+    const clash = generateClashMetaConfig(nodes, config, workerDomain);
 
     const subscriptions = {
-      clash: `${url.origin}/sub?token=${token}&format=clash`,
-      singbox: `${url.origin}/sub?token=${token}&format=singbox`,
-      vless: `${url.origin}/sub?token=${token}&format=vless`,
+      adaptive: `${url.origin}/sub?token=${token}`,
+      clash: `${url.origin}/clash?token=${token}`,
+      singbox: `${url.origin}/singbox?token=${token}`,
+      vless: `${url.origin}/v2ray?token=${token}`,
     };
 
     return jsonResponse({
@@ -50,6 +69,10 @@ export async function handleAdmin(request, env, url, config) {
         cleanIPs: config.cleanIPs,
         nodeName: config.nodeName,
         enableDirectFallback: config.enableDirectFallback,
+        configUrl: config.configUrl || DEFAULT_CONFIG_URL,
+        singboxConfigUrl: config.singboxConfigUrl || DEFAULT_SINGBOX_CONFIG_URL,
+        preferredSubUrl: config.preferredSubUrl || PREFERRED_SUB_URL,
+        subapiUrl: config.subapiUrl || SUBAPI_URL,
       },
       kvEnabled: !!env.CONFIG_KV,
       workerDomain,
@@ -60,7 +83,7 @@ export async function handleAdmin(request, env, url, config) {
     });
   }
 
-  // 3. API: 保存配置 (POST /admin/api/config)
+  // 5. API: 保存配置 (POST /admin/api/config)
   if (path.endsWith('/api/config') && method === 'POST') {
     const isAuthed = await verifyAdminAuth(request, config);
     if (!isAuthed) {
@@ -75,7 +98,7 @@ export async function handleAdmin(request, env, url, config) {
     }
   }
 
-  // 4. API: 测试住宅代理 (POST /admin/api/test-upstream)
+  // 6. API: 测试住宅代理 (POST /admin/api/test-upstream)
   if (path.endsWith('/api/test-upstream') && method === 'POST') {
     const isAuthed = await verifyAdminAuth(request, config);
     if (!isAuthed) {
@@ -90,7 +113,7 @@ export async function handleAdmin(request, env, url, config) {
     }
   }
 
-  // 5. 前端单页面 HTML (GET /admin)
+  // 7. 前端单页面 HTML (GET /admin)
   if (method === 'GET') {
     return new Response(getAdminHTML(url.host, config.adminPath), {
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -458,12 +481,36 @@ function getAdminHTML(host, adminPath) {
         <div class="card-title">
           <span>🔗 客户端开箱即用聚合订阅</span>
         </div>
+
+        <!-- 转换规则配置文件下拉选择 -->
+        <div class="form-group" style="margin-bottom: 18px; padding: 12px 14px; background: #090d16; border-radius: var(--radius); border: 1px solid var(--card-border);">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
+            <label class="form-label" style="margin-bottom:0; font-weight:600; color:#38bdf8;">🎯 转换规则配置文件 (SUBCONFIG)</label>
+            <span id="cfg-status-tip" style="font-size:0.75rem; color:var(--success);">已保存至服务端</span>
+          </div>
+          <select id="cfg-subconfig-select" class="form-control" onchange="handleSubconfigChange()">
+            <option value="https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Bespoke.ini">🔥 默认规则: ACL4SSR_Online_Bespoke (自定义精细化分流规则)</option>
+          </select>
+        </div>
+
+        <!-- 智能自适应订阅 -->
+        <div class="sub-item" style="border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.05);">
+          <div class="sub-header">
+            <span class="sub-name" style="color: #60a5fa;">✨ 智能自适应订阅 (推荐首选)</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">自动识别客户端 User-Agent (Clash / sing-box / V2Ray)</span>
+          </div>
+          <div class="sub-url-row">
+            <input type="text" id="sub-adaptive-url" class="form-control" readonly>
+            <button class="btn btn-secondary btn-sm" onclick="copyInputText('sub-adaptive-url')">复制</button>
+            <button class="btn btn-sm" onclick="showQRModal('智能自适应订阅', document.getElementById('sub-adaptive-url').value)">📱 二维码</button>
+          </div>
+        </div>
         
         <!-- Clash Meta 订阅 -->
         <div class="sub-item">
           <div class="sub-header">
             <span class="sub-name">🐱 Clash Meta / Mihomo 完整订阅</span>
-            <span style="font-size:0.75rem; color:var(--text-muted);">自动测速优选分流规则</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">通过 subapi.19910417.xyz 在线规则转换</span>
           </div>
           <div class="sub-url-row">
             <input type="text" id="sub-clash-url" class="form-control" readonly>
@@ -476,7 +523,7 @@ function getAdminHTML(host, adminPath) {
         <div class="sub-item">
           <div class="sub-header">
             <span class="sub-name">📦 Sing-box 完整配置订阅</span>
-            <span style="font-size:0.75rem; color:var(--text-muted);">开箱即用 JSON 配置</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">开箱即用 JSON 规则转换配置</span>
           </div>
           <div class="sub-url-row">
             <input type="text" id="sub-singbox-url" class="form-control" readonly>
@@ -489,7 +536,7 @@ function getAdminHTML(host, adminPath) {
         <div class="sub-item">
           <div class="sub-header">
             <span class="sub-name">🚀 通用 VLESS Base64 订阅</span>
-            <span style="font-size:0.75rem; color:var(--text-muted);">适用于 V2rayN / Shadowrocket</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">适用于 V2rayN / Shadowrocket / Quantumult X</span>
           </div>
           <div class="sub-url-row">
             <input type="text" id="sub-vless-url" class="form-control" readonly>
@@ -502,8 +549,14 @@ function getAdminHTML(host, adminPath) {
       <!-- VLESS 单节点列表 -->
       <div class="card">
         <div class="card-title">
-          <span>📋 VLESS 节点链接列表</span>
-          <button class="btn btn-secondary btn-sm" onclick="copyAllNodes()">复制全部链接</button>
+          <div>
+            <span>📋 VLESS 优选 IP 节点列表 (<span id="lbl-node-count">0</span> 个)</span>
+            <span style="font-size:0.75rem; font-weight:normal; color:var(--text-muted); margin-left:8px;">参考 singbox-sub-converter 逻辑动态从 sub.19910417.xyz 获取</span>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <button class="btn btn-sm" style="background:#10b981;" id="btn-refresh-ip" onclick="refreshPreferredIPs()">🔄 刷新优选 IP</button>
+            <button class="btn btn-secondary btn-sm" onclick="copyAllNodes()">复制全部链接</button>
+          </div>
         </div>
         <div id="nodes-container"></div>
       </div>
@@ -553,9 +606,27 @@ function getAdminHTML(host, adminPath) {
         </div>
 
         <div class="form-group">
-          <label class="form-label">优选 IP / 域名列表 (每行一个)</label>
-          <textarea id="cfg-clean-ips" class="form-control" rows="4"></textarea>
-          <p class="help-text">用于生成对应优选 CDN 节点的域名或 IP。</p>
+          <label class="form-label">Clash 规则配置文件 URL (Config URL)</label>
+          <input type="text" id="cfg-config-url" class="form-control" placeholder="https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Bespoke.ini">
+          <p class="help-text">用于 subapi 转换生成 Clash Meta 配置时的规则模板。</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">优选 IP 动态拉取源 URL (PREFERRED_SUB_URL)</label>
+          <input type="text" id="cfg-preferred-sub-url" class="form-control" placeholder="https://sub.19910417.xyz">
+          <p class="help-text">用于动态获取 Cloudflare 优选 IP 节点的订阅源地址（内置默认: <code>https://sub.19910417.xyz</code>）。</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Subapi 在线转换接口 URL (SUBAPI_URL)</label>
+          <input type="text" id="cfg-subapi-url" class="form-control" placeholder="https://subapi.19910417.xyz">
+          <p class="help-text">用于在线转换生成 Clash 与 Sing-box 客户端配置文件的 subapi 接口（内置默认: <code>https://subapi.19910417.xyz</code>）。</p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">优选 IP / 域名备用列表 (动态接口异常时的本地兜底，每行一个)</label>
+          <textarea id="cfg-clean-ips" class="form-control" rows="3"></textarea>
+          <p class="help-text">当 sub.19910417.xyz 不可用时自动兜底使用的 IP/域名。</p>
         </div>
 
         <div class="form-group">
@@ -600,6 +671,7 @@ function getAdminHTML(host, adminPath) {
   <script>
     let appData = {};
     let currentQRString = '';
+    let subconfigsLoaded = false;
 
     async function doLogin() {
       const pass = document.getElementById('login-pass').value;
@@ -652,8 +724,124 @@ function getAdminHTML(host, adminPath) {
         document.getElementById('app-container').style.display = 'block';
 
         renderUI();
+        if (!subconfigsLoaded) {
+          loadSubconfigs();
+        }
       } catch (err) {
         showToast('加载配置失败: ' + err.message, 'error');
+      }
+    }
+
+    async function loadSubconfigs() {
+      try {
+        const res = await fetch('${adminPath}/api/subconfigs');
+        if (res.ok) {
+          const groups = await res.json();
+          renderSubconfigOptions(groups);
+          subconfigsLoaded = true;
+        }
+      } catch (err) {
+        console.error('Failed to load subconfigs:', err);
+      }
+    }
+
+    function renderSubconfigOptions(groups) {
+      const select = document.getElementById('cfg-subconfig-select');
+      if (!select || !Array.isArray(groups) || groups.length === 0) return;
+      select.innerHTML = '';
+
+      const currentCfg = (appData.config && appData.config.configUrl) || '';
+      let matched = false;
+
+      groups.forEach(g => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = g.label || '规则分组';
+        if (Array.isArray(g.options)) {
+          g.options.forEach(opt => {
+            const option = document.createElement('option');
+            option.value = opt.value;
+            option.textContent = opt.label;
+            if (opt.value === currentCfg) {
+              option.selected = true;
+              matched = true;
+            }
+            optgroup.appendChild(option);
+          });
+        }
+        select.appendChild(optgroup);
+      });
+
+      if (!matched && currentCfg) {
+        const customOpt = document.createElement('option');
+        customOpt.value = currentCfg;
+        customOpt.textContent = '自定义规则: ' + currentCfg;
+        customOpt.selected = true;
+        select.insertBefore(customOpt, select.firstChild);
+      }
+    }
+
+    async function handleSubconfigChange() {
+      const select = document.getElementById('cfg-subconfig-select');
+      const val = select.value;
+      document.getElementById('cfg-config-url').value = val;
+      const tip = document.getElementById('cfg-status-tip');
+      tip.innerText = '正在保存至服务端...';
+      tip.style.color = '#f59e0b';
+
+      const token = localStorage.getItem('vless_token');
+      try {
+        const res = await fetch('${adminPath}/api/config', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          },
+          body: JSON.stringify({ configUrl: val })
+        });
+        const data = await res.json();
+        if (data.success) {
+          tip.innerText = '✅ 已保存至服务端';
+          tip.style.color = 'var(--success)';
+          showToast('✅ 规则配置已切换并保存！', 'success');
+        } else {
+          tip.innerText = '❌ 保存失败';
+          tip.style.color = 'var(--danger)';
+        }
+      } catch (e) {
+        tip.innerText = '❌ 保存异常';
+        tip.style.color = 'var(--danger)';
+      }
+    }
+
+    async function refreshPreferredIPs() {
+      const btn = document.getElementById('btn-refresh-ip');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = '🔄 正在刷新优选 IP...';
+      }
+      const token = localStorage.getItem('vless_token');
+      try {
+        const res = await fetch('${adminPath}/api/refresh-ip', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + token
+          }
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('✅ ' + data.message + ' (共获取 ' + data.count + ' 个节点)', 'success');
+          loadDashboard();
+        } else {
+          showToast('❌ 刷新失败: ' + (data.error || data.message), 'error');
+        }
+      } catch (err) {
+        showToast('刷新异常: ' + err.message, 'error');
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = '🔄 刷新优选 IP';
+        }
       }
     }
 
@@ -666,6 +854,9 @@ function getAdminHTML(host, adminPath) {
 
       // 订阅链接填充
       if (appData.subscriptions) {
+        if (document.getElementById('sub-adaptive-url')) {
+          document.getElementById('sub-adaptive-url').value = appData.subscriptions.adaptive || '';
+        }
         document.getElementById('sub-clash-url').value = appData.subscriptions.clash || '';
         document.getElementById('sub-singbox-url').value = appData.subscriptions.singbox || '';
         document.getElementById('sub-vless-url').value = appData.subscriptions.vless || '';
@@ -677,11 +868,23 @@ function getAdminHTML(host, adminPath) {
       document.getElementById('cfg-upstream').value = appData.config.upstreamProxy || '';
       document.getElementById('cfg-clean-ips').value = appData.config.cleanIPs || '';
       document.getElementById('cfg-node-name').value = appData.config.nodeName || '';
+      if (document.getElementById('cfg-config-url')) {
+        document.getElementById('cfg-config-url').value = appData.config.configUrl || '';
+      }
+      if (document.getElementById('cfg-preferred-sub-url')) {
+        document.getElementById('cfg-preferred-sub-url').value = appData.config.preferredSubUrl || '';
+      }
+      if (document.getElementById('cfg-subapi-url')) {
+        document.getElementById('cfg-subapi-url').value = appData.config.subapiUrl || '';
+      }
 
       // 渲染节点列表
       const nodesDiv = document.getElementById('nodes-container');
       nodesDiv.innerHTML = '';
-      (appData.nodes || []).forEach((node) => {
+      const nodes = appData.nodes || [];
+      document.getElementById('lbl-node-count').innerText = nodes.length;
+
+      nodes.forEach((node) => {
         const item = document.createElement('div');
         item.className = 'node-item';
         item.innerHTML = \`
@@ -709,6 +912,9 @@ function getAdminHTML(host, adminPath) {
         upstreamProxy: document.getElementById('cfg-upstream').value.trim(),
         cleanIPs: document.getElementById('cfg-clean-ips').value.trim(),
         nodeName: document.getElementById('cfg-node-name').value.trim(),
+        configUrl: document.getElementById('cfg-config-url') ? document.getElementById('cfg-config-url').value.trim() : '',
+        preferredSubUrl: document.getElementById('cfg-preferred-sub-url') ? document.getElementById('cfg-preferred-sub-url').value.trim() : '',
+        subapiUrl: document.getElementById('cfg-subapi-url') ? document.getElementById('cfg-subapi-url').value.trim() : '',
       };
 
       const newPass = document.getElementById('cfg-new-pass').value.trim();

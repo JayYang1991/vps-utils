@@ -33,4 +33,4 @@ ENABLE_DIRECT_FALLBACK = "true"
 # 并将生成的 id 填入下方
 [[kv_namespaces]]
 binding = "CONFIG_KV"
-id = "YOUR_CONFIG_KV_NAMESPACE_ID"
+id = "dcbd8210dc4549628f92ec48b3dafacd"

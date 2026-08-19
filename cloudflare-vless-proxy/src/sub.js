@@ -1,7 +1,28 @@
 /**
  * Subscription and Client Configuration Generator
- * Supports VLESS Base64, Clash Meta (Mihomo) full profile, and Sing-box full profile.
+ * Supports dynamic preferred IP fetching from https://sub.19910417.xyz
+ * and online subscription conversion via https://subapi.19910417.xyz
  */
+
+import { DEFAULT_CONFIG_URL, DEFAULT_SINGBOX_CONFIG_URL, PREFERRED_SUB_URL, SUBAPI_URL } from './config.js';
+
+export { DEFAULT_CONFIG_URL, DEFAULT_SINGBOX_CONFIG_URL, PREFERRED_SUB_URL, SUBAPI_URL };
+export const REMOTE_SUBCONFIG_URL = 'https://raw.githubusercontent.com/JayYang1991/edgetunnel/main/SUBCONFIG.json';
+export const USER_AGENT = 'v2rayN/edgetunnel (https://github.com/cmliu/edgetunnel)';
+
+let _preferredNodesCache = null;
+let _preferredNodesLastFetch = 0;
+const PREFERRED_CACHE_TTL = 600 * 1000; // 10 分钟内存缓存
+
+let _cachedSubconfigs = [];
+
+/**
+ * 清除优选 IP 内存缓存
+ */
+export function clearPreferredNodesCache() {
+  _preferredNodesCache = null;
+  _preferredNodesLastFetch = 0;
+}
 
 /**
  * 生成 VLESS 单节点连接 URL
@@ -14,22 +35,157 @@ export function generateVlessUrl({ uuid, host, port = 443, workerDomain, proxyPa
     fp: 'chrome',
     type: 'ws',
     host: workerDomain,
-    path: proxyPath,
+    path: proxyPath || '/',
   });
 
   return `vless://${uuid}@${host}:${port}?${params.toString()}#${encodeURIComponent(nodeName)}`;
 }
 
 /**
- * 根据优选 IP 列表生成全部 VLESS 节点列表
+ * 解析 sub.19910417.xyz 返回的 Base64/文本订阅内容并构造 VLESS 节点列表
+ * @param {string} rawData 
+ * @param {object} config 
+ * @param {string} workerDomain 
+ * @returns {Array<object>}
  */
-export function generateAllVlessNodes(config, workerDomain) {
+export function parseVlessSubResponse(rawData, config, workerDomain) {
+  if (!rawData || typeof rawData !== 'string') return [];
+
+  let decoded = rawData;
+  try {
+    const cleaned = rawData.trim();
+    if (!cleaned.includes('vless://') && cleaned.length > 20) {
+      decoded = atob(cleaned.replace(/\s/g, ''));
+    }
+  } catch (_) {
+    decoded = rawData;
+  }
+
   const nodes = [];
-  const rawIPs = (config.cleanIPs || '').split('\n').map(s => s.trim()).filter(Boolean);
+  const lines = decoded.split(/\r?\n/);
+  let idx = 1;
+
+  for (let line of lines) {
+    line = line.trim();
+    if (!line.startsWith('vless://')) continue;
+
+    try {
+      const withoutScheme = line.slice(8);
+      const hashIdx = withoutScheme.indexOf('#');
+      let mainPart = hashIdx !== -1 ? withoutScheme.slice(0, hashIdx) : withoutScheme;
+      let rawTag = hashIdx !== -1 ? withoutScheme.slice(hashIdx + 1) : '';
+
+      const tag = rawTag ? decodeURIComponent(rawTag) : '';
+      if (tag.includes('不再支持旧版') || tag.includes('更新至最新版本')) continue;
+
+      const atIdx = mainPart.indexOf('@');
+      if (atIdx === -1) continue;
+      const ipPortAndQuery = mainPart.slice(atIdx + 1);
+
+      const qIdx = ipPortAndQuery.indexOf('?');
+      const ipPort = qIdx !== -1 ? ipPortAndQuery.slice(0, qIdx) : ipPortAndQuery;
+
+      let ip = ipPort;
+      let port = 443;
+      if (ipPort.includes(':') && !ipPort.includes('[')) {
+        const parts = ipPort.split(':');
+        ip = parts[0];
+        port = parseInt(parts[1], 10) || 443;
+      }
+
+      if (['example.com', '127.0.0.1', 'localhost'].includes(ip)) continue;
+
+      const cleanTag = tag.replace(/^#+/, '').trim() || `${ip}`;
+      const prefix = config.nodeName || 'CF';
+      const nodeName = `${prefix}-${cleanTag}-${String(idx).padStart(2, '0')}`;
+
+      const vlessUrl = generateVlessUrl({
+        uuid: config.uuid,
+        host: ip,
+        port,
+        workerDomain,
+        proxyPath: config.proxyPath,
+        nodeName,
+      });
+
+      nodes.push({
+        name: nodeName,
+        host: ip,
+        port,
+        url: vlessUrl,
+        category: 'preferred',
+      });
+      idx++;
+    } catch (e) {
+      console.warn('Error parsing VLESS line from sub response:', e);
+    }
+  }
+
+  return nodes;
+}
+
+/**
+ * 从 https://sub.19910417.xyz 动态获取 Cloudflare 优选 IP 节点列表 (带 10 分钟缓存与超时控制)
+ * @param {object} config 
+ * @param {string} workerDomain 
+ * @param {boolean} forceRefresh 
+ * @param {object} env 
+ * @returns {Promise<Array<object>>}
+ */
+export async function fetchPreferredNodes(config, workerDomain, forceRefresh = false, env = null) {
+  const now = Date.now();
+  if (!forceRefresh && _preferredNodesCache && (now - _preferredNodesLastFetch < PREFERRED_CACHE_TTL)) {
+    return _preferredNodesCache;
+  }
+
+  const subBase = (config.preferredSubUrl || PREFERRED_SUB_URL).replace(/\/+$/, '');
+  const url = `${subBase}/sub?host=${encodeURIComponent(workerDomain)}&uuid=${encodeURIComponent(config.uuid)}`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': USER_AGENT,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (resp.ok) {
+      const data = await resp.text();
+      const nodes = parseVlessSubResponse(data, config, workerDomain);
+      if (nodes.length > 0) {
+        _preferredNodesCache = nodes;
+        _preferredNodesLastFetch = now;
+        return nodes;
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching preferred nodes from sub.19910417.xyz:', err.message || err);
+  }
+
+  if (_preferredNodesCache && _preferredNodesCache.length > 0) {
+    return _preferredNodesCache;
+  }
+
+  return [];
+}
+
+/**
+ * 同步生成基础/回退 VLESS 节点列表 (包括直连节点与 cleanIPs 兜底节点)
+ * @param {object} config 
+ * @param {string} workerDomain 
+ * @returns {Array<object>}
+ */
+export function generateAllVlessNodesSync(config, workerDomain) {
+  const nodes = [];
 
   // 1. 默认官方 Worker 域名节点
+  const directName = `${config.nodeName || 'CF'}-Direct`;
   nodes.push({
-    name: `${config.nodeName} (Worker直连)`,
+    name: directName,
     host: workerDomain,
     port: 443,
     url: generateVlessUrl({
@@ -38,11 +194,14 @@ export function generateAllVlessNodes(config, workerDomain) {
       port: 443,
       workerDomain,
       proxyPath: config.proxyPath,
-      nodeName: `${config.nodeName}-Direct`,
+      nodeName: directName,
     }),
+    category: 'direct',
   });
 
-  // 2. 优选 IP / 域名节点
+  // 2. 优选 IP / 域名兜底列表
+  const rawIPs = (config.cleanIPs || '').split('\n').map(s => s.trim()).filter(Boolean);
+  let idx = 1;
   for (const ip of rawIPs) {
     let cleanHost = ip;
     let cleanPort = 443;
@@ -52,8 +211,9 @@ export function generateAllVlessNodes(config, workerDomain) {
       cleanPort = parseInt(parts[1], 10) || 443;
     }
 
+    const nodeName = `${config.nodeName || 'CF'}-${cleanHost}-${String(idx).padStart(2, '0')}`;
     nodes.push({
-      name: `${config.nodeName} (${cleanHost})`,
+      name: nodeName,
       host: cleanHost,
       port: cleanPort,
       url: generateVlessUrl({
@@ -62,19 +222,183 @@ export function generateAllVlessNodes(config, workerDomain) {
         port: cleanPort,
         workerDomain,
         proxyPath: config.proxyPath,
-        nodeName: `${config.nodeName}-${cleanHost}`,
+        nodeName,
       }),
+      category: 'preferred',
     });
+    idx++;
   }
 
   return nodes;
 }
 
 /**
+ * 异步获取所有 VLESS 节点 (Worker 直连节点 + 动态从 sub.19910417.xyz 获取的优选 IP 节点 + cleanIPs 兜底)
+ * @param {object} config 
+ * @param {string} workerDomain 
+ * @param {object} options 
+ * @returns {Promise<Array<object>>}
+ */
+export async function generateAllVlessNodes(config, workerDomain, options = {}) {
+  const { forceRefresh = false, env = null } = options;
+  const nodes = [];
+
+  // 1. 默认官方 Worker 直连节点
+  const directName = `${config.nodeName || 'CF'}-Direct`;
+  nodes.push({
+    name: directName,
+    host: workerDomain,
+    port: 443,
+    url: generateVlessUrl({
+      uuid: config.uuid,
+      host: workerDomain,
+      port: 443,
+      workerDomain,
+      proxyPath: config.proxyPath,
+      nodeName: directName,
+    }),
+    category: 'direct',
+  });
+
+  // 2. 动态从 sub.19910417.xyz 获取优选节点
+  const preferredNodes = await fetchPreferredNodes(config, workerDomain, forceRefresh, env);
+  if (preferredNodes && preferredNodes.length > 0) {
+    nodes.push(...preferredNodes);
+  } else {
+    // 3. 动态获取失败时使用 cleanIPs 进行本地节点兜底
+    const rawIPs = (config.cleanIPs || '').split('\n').map(s => s.trim()).filter(Boolean);
+    let idx = 1;
+    for (const ip of rawIPs) {
+      let cleanHost = ip;
+      let cleanPort = 443;
+      if (ip.includes(':') && !ip.includes('[')) {
+        const parts = ip.split(':');
+        cleanHost = parts[0];
+        cleanPort = parseInt(parts[1], 10) || 443;
+      }
+
+      const nodeName = `${config.nodeName || 'CF'}-${cleanHost}-${String(idx).padStart(2, '0')}`;
+      nodes.push({
+        name: nodeName,
+        host: cleanHost,
+        port: cleanPort,
+        url: generateVlessUrl({
+          uuid: config.uuid,
+          host: cleanHost,
+          port: cleanPort,
+          workerDomain,
+          proxyPath: config.proxyPath,
+          nodeName,
+        }),
+        category: 'preferred',
+      });
+      idx++;
+    }
+  }
+
+  return nodes;
+}
+
+/**
+ * 调用 https://subapi.19910417.xyz 在线订阅转换接口生成 Clash / Singbox 配置文件
+ * @param {string} subUrl 待转换的原始订阅 URL
+ * @param {string} target 目标类型 'clash' | 'singbox'
+ * @param {string} configUrl 规则策略配置文件 URL (如 ACL4SSR 或自定义 ini)
+ * @param {number} maxRetries 重试次数
+ * @param {string} subapiUrl 自定义 subapi 转换服务 URL
+ * @returns {Promise<string>}
+ */
+export async function convertViaSubapi(subUrl, target = 'clash', configUrl = '', maxRetries = 3, subapiUrl = '') {
+  if (!subUrl) {
+    console.warn(`Subapi 转换跳过: 传入的 subUrl 为空 (target=${target})`);
+    return '';
+  }
+
+  const isSingbox = target.toLowerCase().includes('singbox') || target.toLowerCase().includes('sing-box');
+  const subapiTarget = isSingbox ? 'singbox' : 'clash';
+  const encodedUrl = encodeURIComponent(subUrl);
+
+  let cfg = configUrl;
+  if (!cfg) {
+    cfg = isSingbox ? DEFAULT_SINGBOX_CONFIG_URL : DEFAULT_CONFIG_URL;
+  }
+
+  const subapiBase = (subapiUrl || SUBAPI_URL).replace(/\/+$/, '');
+  const apiUrl = `${subapiBase}/sub?target=${subapiTarget}&url=${encodedUrl}&filter_local=false&config=${encodeURIComponent(cfg)}`;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const timeoutMs = (attempt + 1) * 4000; // 8s, 12s, 16s
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const resp = await fetch(apiUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (resp.ok) {
+        const content = await resp.text();
+        const isValid = ['proxies', 'outbounds', 'outbound', 'port', 'inbounds'].some(k => content.includes(k));
+        if (content.length > 100 && isValid) {
+          return content;
+        }
+      }
+    } catch (err) {
+      clearTimeout(timeoutId);
+      console.warn(`Subapi 转换尝试 ${attempt}/${maxRetries} 异常:`, err.message || err);
+    }
+  }
+
+  return '';
+}
+
+/**
+ * 获取远程 SUBCONFIG 规则列表 (用于前端下拉选择)
+ * @returns {Promise<Array<object>>}
+ */
+export async function fetchSubconfigs() {
+  if (_cachedSubconfigs && _cachedSubconfigs.length > 0) {
+    return _cachedSubconfigs;
+  }
+  try {
+    const resp = await fetch(REMOTE_SUBCONFIG_URL, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (Array.isArray(data)) {
+        _cachedSubconfigs = data;
+        return data;
+      }
+    }
+  } catch (e) {
+    console.error('Error fetching remote SUBCONFIG.json:', e);
+  }
+  return _cachedSubconfigs;
+}
+
+/**
+ * 规范化节点输入 (支持传入节点数组或 (config, workerDomain) 组合)
+ */
+function resolveNodes(nodesOrConfig, workerDomain) {
+  if (Array.isArray(nodesOrConfig)) {
+    return nodesOrConfig;
+  }
+  if (nodesOrConfig && typeof nodesOrConfig === 'object' && workerDomain) {
+    return generateAllVlessNodesSync(nodesOrConfig, workerDomain);
+  }
+  return [];
+}
+
+/**
  * 生成标准 Base64 订阅内容 (适用于 V2rayN, Shadowrocket 等通用客户端)
  */
-export function generateBase64Sub(config, workerDomain) {
-  const nodes = generateAllVlessNodes(config, workerDomain);
+export function generateBase64Sub(nodesOrConfig, workerDomain) {
+  const nodes = resolveNodes(nodesOrConfig, workerDomain);
   const rawUrls = nodes.map(n => n.url).join('\n');
   return btoa(unescape(encodeURIComponent(rawUrls)));
 }
@@ -82,8 +406,21 @@ export function generateBase64Sub(config, workerDomain) {
 /**
  * 生成 Sing-box Client Outbound 节点数组 JSON 代码片段
  */
-export function generateSingboxConfig(config, workerDomain) {
-  const nodes = generateAllVlessNodes(config, workerDomain);
+export function generateSingboxConfig(nodesOrConfig, workerDomainOrConfig, maybeWorkerDomain) {
+  let nodes = [];
+  let workerDomain = '';
+  let config = {};
+
+  if (Array.isArray(nodesOrConfig)) {
+    nodes = nodesOrConfig;
+    config = workerDomainOrConfig || {};
+    workerDomain = maybeWorkerDomain || '';
+  } else {
+    config = nodesOrConfig || {};
+    workerDomain = workerDomainOrConfig || '';
+    nodes = generateAllVlessNodesSync(config, workerDomain);
+  }
+
   const outbounds = nodes.map((node) => ({
     type: 'vless',
     tag: node.name,
@@ -92,7 +429,7 @@ export function generateSingboxConfig(config, workerDomain) {
     uuid: config.uuid,
     tls: {
       enabled: true,
-      server_name: workerDomain,
+      server_name: workerDomain || node.host,
       utls: {
         enabled: true,
         fingerprint: 'chrome',
@@ -100,9 +437,9 @@ export function generateSingboxConfig(config, workerDomain) {
     },
     transport: {
       type: 'ws',
-      path: config.proxyPath,
+      path: config.proxyPath || '/',
       headers: {
-        Host: workerDomain,
+        Host: workerDomain || node.host,
       },
     },
   }));
@@ -111,10 +448,23 @@ export function generateSingboxConfig(config, workerDomain) {
 }
 
 /**
- * 生成 Sing-box 客户端开箱即用完整配置文件 (Full Profile JSON)
+ * 生成 Sing-box 客户端开箱即用完整配置文件 (本地兜底 Profile JSON)
  */
-export function generateSingboxFullProfile(config, workerDomain) {
-  const nodes = generateAllVlessNodes(config, workerDomain);
+export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, maybeWorkerDomain) {
+  let nodes = [];
+  let workerDomain = '';
+  let config = {};
+
+  if (Array.isArray(nodesOrConfig)) {
+    nodes = nodesOrConfig;
+    config = workerDomainOrConfig || {};
+    workerDomain = maybeWorkerDomain || '';
+  } else {
+    config = nodesOrConfig || {};
+    workerDomain = workerDomainOrConfig || '';
+    nodes = generateAllVlessNodesSync(config, workerDomain);
+  }
+
   const nodeTags = nodes.map(n => n.name);
 
   const outbounds = [
@@ -140,7 +490,7 @@ export function generateSingboxFullProfile(config, workerDomain) {
       uuid: config.uuid,
       tls: {
         enabled: true,
-        server_name: workerDomain,
+        server_name: workerDomain || node.host,
         utls: {
           enabled: true,
           fingerprint: 'chrome',
@@ -148,9 +498,9 @@ export function generateSingboxFullProfile(config, workerDomain) {
       },
       transport: {
         type: 'ws',
-        path: config.proxyPath,
+        path: config.proxyPath || '/',
         headers: {
-          Host: workerDomain,
+          Host: workerDomain || node.host,
         },
       },
     })),
@@ -228,8 +578,21 @@ export function generateSingboxFullProfile(config, workerDomain) {
 /**
  * 生成 Clash Meta (Mihomo) Outbound 节点 YAML 代码片段
  */
-export function generateClashMetaConfig(config, workerDomain) {
-  const nodes = generateAllVlessNodes(config, workerDomain);
+export function generateClashMetaConfig(nodesOrConfig, workerDomainOrConfig, maybeWorkerDomain) {
+  let nodes = [];
+  let workerDomain = '';
+  let config = {};
+
+  if (Array.isArray(nodesOrConfig)) {
+    nodes = nodesOrConfig;
+    config = workerDomainOrConfig || {};
+    workerDomain = maybeWorkerDomain || '';
+  } else {
+    config = nodesOrConfig || {};
+    workerDomain = workerDomainOrConfig || '';
+    nodes = generateAllVlessNodesSync(config, workerDomain);
+  }
+
   const yamlLines = ['proxies:'];
 
   for (const node of nodes) {
@@ -241,12 +604,12 @@ export function generateClashMetaConfig(config, workerDomain) {
     yamlLines.push(`    network: ws`);
     yamlLines.push(`    tls: true`);
     yamlLines.push(`    udp: true`);
-    yamlLines.push(`    sni: ${workerDomain}`);
+    yamlLines.push(`    sni: ${workerDomain || node.host}`);
     yamlLines.push(`    client-fingerprint: chrome`);
     yamlLines.push(`    ws-opts:`);
-    yamlLines.push(`      path: "${config.proxyPath}"`);
+    yamlLines.push(`      path: "${config.proxyPath || '/'}"`);
     yamlLines.push(`      headers:`);
-    yamlLines.push(`        Host: ${workerDomain}`);
+    yamlLines.push(`        Host: ${workerDomain || node.host}`);
     yamlLines.push('');
   }
 
@@ -254,10 +617,23 @@ export function generateClashMetaConfig(config, workerDomain) {
 }
 
 /**
- * 生成 Clash Meta (Mihomo) 客户端开箱即用完整配置文件 (Full Profile YAML)
+ * 生成 Clash Meta (Mihomo) 客户端开箱即用完整配置文件 (本地兜底 Profile YAML)
  */
-export function generateClashFullProfile(config, workerDomain) {
-  const nodes = generateAllVlessNodes(config, workerDomain);
+export function generateClashFullProfile(nodesOrConfig, workerDomainOrConfig, maybeWorkerDomain) {
+  let nodes = [];
+  let workerDomain = '';
+  let config = {};
+
+  if (Array.isArray(nodesOrConfig)) {
+    nodes = nodesOrConfig;
+    config = workerDomainOrConfig || {};
+    workerDomain = maybeWorkerDomain || '';
+  } else {
+    config = nodesOrConfig || {};
+    workerDomain = workerDomainOrConfig || '';
+    nodes = generateAllVlessNodesSync(config, workerDomain);
+  }
+
   const nodeNames = nodes.map(n => `"${n.name}"`);
 
   let yaml = `port: 7890
@@ -286,12 +662,12 @@ proxies:
     network: ws
     tls: true
     udp: true
-    sni: ${workerDomain}
+    sni: ${workerDomain || node.host}
     client-fingerprint: chrome
     ws-opts:
-      path: "${config.proxyPath}"
+      path: "${config.proxyPath || '/'}"
       headers:
-        Host: ${workerDomain}
+        Host: ${workerDomain || node.host}
 `;
   }
 
@@ -319,3 +695,4 @@ rules:
 
   return yaml;
 }
+

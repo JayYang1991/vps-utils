@@ -2,6 +2,11 @@
  * Cloudflare Worker Configuration & KV Manager
  */
 
+export const DEFAULT_CONFIG_URL = 'https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Bespoke.ini';
+export const DEFAULT_SINGBOX_CONFIG_URL = 'https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/sing-box/singbox-template.ini';
+export const PREFERRED_SUB_URL = 'https://sub.19910417.xyz';
+export const SUBAPI_URL = 'https://subapi.19910417.xyz';
+
 export const DEFAULT_CONFIG = {
   uuid: 'd342d11e-d424-4583-b36e-524ab1f0afa4',
   proxyPath: '/data-ws',
@@ -11,6 +16,10 @@ export const DEFAULT_CONFIG = {
   cleanIPs: 'cloudflare.com\ncf.090227.xyz\nvisa.cn\nicook.hk',
   nodeName: 'Edge-Gateway-Node',
   enableDirectFallback: true,
+  configUrl: DEFAULT_CONFIG_URL,
+  singboxConfigUrl: DEFAULT_SINGBOX_CONFIG_URL,
+  preferredSubUrl: PREFERRED_SUB_URL,
+  subapiUrl: SUBAPI_URL,
 };
 
 const KV_CONFIG_KEY = 'app_config';
@@ -20,7 +29,7 @@ const KV_CONFIG_KEY = 'app_config';
  * @param {object} env Cloudflare Worker env
  * @returns {Promise<object>}
  */
-export async function getConfig(env) {
+export async function getConfig(env = {}) {
   const fallback = {
     uuid: env.DEFAULT_UUID || env.USER_ID || env.UUID || DEFAULT_CONFIG.uuid,
     proxyPath: env.DEFAULT_DATA_PATH || env.DEFAULT_WS_PATH || env.DEFAULT_PROXY_PATH || env.WS_PATH || env.PROXY_PATH || DEFAULT_CONFIG.proxyPath,
@@ -30,6 +39,10 @@ export async function getConfig(env) {
     cleanIPs: (env.DEFAULT_CLEAN_IPS || env.CLEAN_IPS || env.CDN_IPS || DEFAULT_CONFIG.cleanIPs).replace(/,/g, '\n'),
     nodeName: env.DEFAULT_NODE_TAG || env.DEFAULT_NODE_NAME || env.NODE_TAG || env.NODE_NAME || DEFAULT_CONFIG.nodeName,
     enableDirectFallback: env.ENABLE_DIRECT_FALLBACK !== 'false',
+    configUrl: DEFAULT_CONFIG.configUrl,
+    singboxConfigUrl: DEFAULT_CONFIG.singboxConfigUrl,
+    preferredSubUrl: DEFAULT_CONFIG.preferredSubUrl,
+    subapiUrl: DEFAULT_CONFIG.subapiUrl,
   };
 
   // 标准化路径格式（确保以 / 开头，末尾不带 /）
@@ -52,6 +65,10 @@ export async function getConfig(env) {
         cleanIPs: raw.cleanIPs !== undefined ? raw.cleanIPs : fallback.cleanIPs,
         nodeName: raw.nodeName || fallback.nodeName,
         enableDirectFallback: raw.enableDirectFallback !== undefined ? raw.enableDirectFallback : fallback.enableDirectFallback,
+        configUrl: raw.configUrl || fallback.configUrl,
+        singboxConfigUrl: raw.singboxConfigUrl || fallback.singboxConfigUrl,
+        preferredSubUrl: raw.preferredSubUrl || fallback.preferredSubUrl,
+        subapiUrl: raw.subapiUrl || fallback.subapiUrl,
       };
     }
   } catch (err) {

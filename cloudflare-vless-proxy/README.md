@@ -64,19 +64,26 @@
 
 1. **协议标准与零延迟 (0-RTT)**：
    - 严格遵循 VLESS 协议规范，完整支持 WebSocket 传输与 `Sec-WebSocket-Protocol` Early Data 首包加速。
-2. **住宅 IP 深度整合 (Residential Proxy Relay)**：
+2. **动态优选 IP 深度集成 (参考 singbox-sub-converter 逻辑)**：
+   - 自动且动态从 `https://sub.19910417.xyz` 实时获取最新测速优选的 Cloudflare CDN 节点列表并智能解析命名。
+   - 内置 10 分钟内存缓存与故障本地兜底机制，支持在管理后台一键手动即时刷新优选节点。
+3. **Subapi 在线订阅转换生成 (`https://subapi.19910417.xyz`)**：
+   - Clash Meta / Mihomo 与 Sing-box 客户端完整配置文件直接通过 `subapi.19910417.xyz` 在线 API 智能生成。
+   - 内置 ACL4SSR 多地区负载均衡等完整规则模板，并支持在控制台切换 `SUBCONFIG.json` 规则方案或自定义 ini 规则。
+   - 具备自适应 User-Agent 识别能力，并提供高可靠的本地配置兜底保证。
+4. **住宅 IP 深度整合 (Residential Proxy Relay)**：
    - 流量由 Cloudflare 边缘透明转发至海外住宅网络，获取高纯净度 ISP 住宅 IP，轻松解锁流媒体、各类 AI 大模型并绕过反爬/风控拦截。
    - 兼容多种主流住宅代理认证格式（SOCKS5 与 HTTP 均支持）。
    - 内置智能故障转移（当住宅代理异常时可自动平滑回退至直连模式）。
-3. **双重反探测与指纹伪装保护**：
+5. **双重反探测与指纹伪装保护**：
    - **伪装落地页**：根路径 `/` 返回结构完整、具有真实 DOM 结构的《汉武大帝 · 刘彻生平述略》历史文化静态网页。
    - **鉴权失败静默回退**：对任何非合法客户端的嗅探、扫描、路径探测或 UUID 不匹配请求，均直接返回 200 静态网页或安全断开，杜绝协议指纹外泄。
-4. **Cloudflare KV 动态配置管理**：
-   - UUID、数据传输路径、住宅代理网关、优选 IP 列表、管理密码等核心参数均持久化存储于 Cloudflare KV，控制台修改即刻生效，无需重新执行 `wrangler deploy`。
-5. **脱敏配置文件 (`wrangler.toml`)**：
+6. **Cloudflare KV 动态配置管理**：
+   - UUID、数据传输路径、住宅代理网关、转换规则 URL、优选 IP 列表、管理密码等核心参数均持久化存储于 Cloudflare KV，控制台修改即刻生效，无需重新执行 `wrangler deploy`。
+7. **脱敏配置文件 (`wrangler.toml`)**：
    - 配置文件中已全面剔除敏感关键字，使用中性数据流与网关术语，安全隐蔽。
-6. **Web 可视化控制台 (`/admin`)**：
-   - 包含一键随机 UUID、路径混淆生成器、住宅代理实时测速诊断、VLESS 链接与多客户端代码导出等一站式运维能力。
+8. **Web 可视化控制台 (`/admin`)**：
+   - 包含一键随机 UUID、路径混淆生成器、优选 IP 节点即时刷新、住宅代理实时测速诊断、SUBCONFIG 规则选择与多客户端订阅导出等一站式运维能力。
 
 ---
 
@@ -223,27 +230,32 @@ Current Deployment ID: a1b2c3d4-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
 ---
 
-### 4.4 订阅聚合、节点导出与二维码扫码
+### 4.4 订阅聚合、在线转换与二维码扫码
 
 在 **🔗 订阅与节点导出** 选项卡中：
 
-1. **🐱 Clash Meta / Mihomo 订阅**：
-   - 包含完整的 `proxies`、`proxy-groups`（含自动延迟测速 `⚡ 自动优选` 与手动选择 `🚀 节点选择`）及智能分流规则。
-   - 点击 **复制** 可直接导入 Clash Verge / Mihomo Party / Flclash；点击 **📱 二维码** 可使用手机端 Clash Meta 快速扫码导入。
+1. **✨ 智能自适应订阅 (`/sub`)**：
+   - 自动识别客户端 User-Agent（Clash / Sing-box / V2Ray / Shadowrocket），无需手动区分格式，一个链接适配所有客户端。
 
-2. **📦 Sing-box 完整配置订阅**：
-   - 包含完整的开箱即用 JSON 配置（含 `mixed-in` 本地入站、`selector`、`urltest` 自动测优、`dns` 分流与路由规则）。
+2. **🐱 Clash Meta / Mihomo 订阅 (`/clash`)**：
+   - 优先通过 `subapi.19910417.xyz` 在线接口与 ACL4SSR 多地区负载均衡模板生成完整配置。
+   - 包含完整的 `proxies`、`proxy-groups` 及智能分流规则；在线服务异常时无缝回退至本地动态配置。
+   - 点击 **复制** 可直接导入 Clash Verge / Mihomo Party / Flclash；点击 **📱 二维码** 可使用手机端快速扫码导入。
+
+3. **📦 Sing-box 完整配置订阅 (`/singbox`)**：
+   - 优先通过 `subapi.19910417.xyz` 在线接口生成完整 JSON 配置文件（含 `mixed-in` 本地入站、分流规则组与 `urltest` 自动测优）。
    - 点击 **复制** 或 **📱 二维码** 可在 Sing-box 客户端（iOS / Android / Desktop）中直接作为 Profile 订阅链接添加。
 
-3. **🚀 通用 VLESS Base64 订阅**：
-   - 生成标准的 Base64 节点列表订阅，适用于 V2rayN、Shadowrocket 等传统订阅客户端。
+4. **🚀 通用 VLESS Base64 订阅 (`/v2ray`)**：
+   - 生成标准 Base64 节点列表，适用于 V2rayN、Shadowrocket、Quantumult X 等传统客户端。
 
-4. **📋 单节点链接与二维码**：
-   - 列表展示直连节点与所有优选 CDN IP 节点。
-   - 每个节点均配备独立的 **复制** 与 **📱 二维码** 按钮，手机端 Shadowsocks/Shadowrocket/v2rayNG/Streisand 扫码即可即刻连通。
+5. **📋 动态优选 IP 节点列表**：
+   - 自动展示从 `https://sub.19910417.xyz` 实时获取的优选 IP 节点。
+   - 支持点击 **🔄 刷新优选 IP** 手动即时同步最新节点。
+   - 每个节点均配备独立的 **复制** 与 **📱 二维码** 按钮。
 
-5. **📱 纯原生离线二维码引擎**：
-   - 管理后台内置轻量级纯原生 JavaScript SVG 二维码生成引擎，完全不依赖任何外部 CDN 或第三方图片 API，安全隐私，在任何网络环境下均秒级渲染。
+6. **📱 纯原生离线二维码引擎**：
+   - 管理后台内置轻量级纯原生 JavaScript SVG 二维码生成引擎，完全不依赖任何外部 CDN 或第三方图片 API，安全隐私，秒级渲染。
 
 ---
 
