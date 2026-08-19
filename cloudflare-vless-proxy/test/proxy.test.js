@@ -88,6 +88,18 @@ MIIB...
     assert.ok(res.ca.includes('BEGIN CERTIFICATE'));
   });
 
+  it('should parse single-line compressed .ovpn configuration text with comments', () => {
+    const ovpnSingle = '# OpenVPN Sample config dev tun proto tcp remote 219.100.37.13 443 cipher AES-128-CBC auth SHA1 <ca>MIIB...</ca>';
+    const res = parseProxyString(ovpnSingle);
+    assert.ok(res);
+    assert.equal(res.protocol, 'openvpn');
+    assert.equal(res.host, '219.100.37.13');
+    assert.equal(res.port, 443);
+    assert.equal(res.cipher, 'AES-128-CBC');
+    assert.equal(res.auth, 'SHA1');
+    assert.equal(res.hasCa, true);
+  });
+
   it('should parse Base64 encoded .ovpn configuration string', () => {
     const ovpnText = `client\ndev tun\nproto tcp\nremote 133.242.18.25 995\n`;
     const b64 = Buffer.from(ovpnText).toString('base64');

@@ -605,7 +605,69 @@ function getSocks5ErrorMessage(code) {
 }
 
 /**
- * 测试上游代理可用性与延迟（连接到测试目标 www.google.com:443，自带全局 8 秒超时拦截）
+ * 针对原生 OpenVPN TCP 端口进行协议层握手连通性与 RTT 延迟探测
+ */
+async function testOpenVpnDirect(proxy, timeoutMs = 8000) {
+  const start = Date.now();
+  const connect = await getConnectFn();
+  const socket = connect({
+    hostname: proxy.host,
+    port: proxy.port,
+  });
+
+  const reader = socket.readable.getReader();
+  const writer = socket.writable.getWriter();
+
+  try {
+    // 构造 OpenVPN P_CONTROL_HARD_RESET_CLIENT_V2 TCP 报文 (16 字节)
+    const payloadLen = 14;
+    const packet = new Uint8Array(16);
+    packet[0] = (payloadLen >> 8) & 0xff;
+    packet[1] = payloadLen & 0xff;
+    packet[2] = 0x38; // Opcode 7 (P_CONTROL_HARD_RESET_CLIENT_V2) << 3
+    crypto.getRandomValues(packet.subarray(3, 11)); // 8 字节随机 Session ID
+    packet[11] = 0;
+    packet[12] = 0;
+    packet[13] = 0;
+    packet[14] = 0;
+    packet[15] = 0;
+
+    await writer.write(packet);
+
+    const readPromise = reader.read();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`OpenVPN 握手响应超时 (${timeoutMs / 1000}s)`)), timeoutMs)
+    );
+
+    const { value, done } = await Promise.race([readPromise, timeoutPromise]);
+    const latency = Date.now() - start;
+
+    if (done || !value || value.length < 3) {
+      throw new Error('未收到有效的 OpenVPN 服务端响应报文');
+    }
+
+    const respOpcode = value[2] >> 3;
+    // 8: P_CONTROL_HARD_RESET_SERVER_V2, 5: P_ACK_V1, 7: P_CONTROL_HARD_RESET_CLIENT_V2, 0x16: TLS ServerHello
+    const isValid = respOpcode === 8 || respOpcode === 5 || respOpcode === 7 || value[0] === 0x16 || value[2] === 0x16;
+
+    if (!isValid) {
+      throw new Error(`收到非 OpenVPN 协议响应 (Opcode: ${respOpcode})`);
+    }
+
+    return {
+      success: true,
+      latencyMs: latency,
+      message: `OpenVPN 原生节点探测成功！类型: OPENVPN (TCP), 握手延迟: ${latency}ms, 目标节点: ${proxy.host}:${proxy.port}`,
+    };
+  } finally {
+    try { reader.releaseLock(); } catch (_) {}
+    try { writer.releaseLock(); } catch (_) {}
+    try { socket.close(); } catch (_) {}
+  }
+}
+
+/**
+ * 测试上游代理可用性与延迟（连接到测试目标 www.google.com:443 或执行原生 OpenVPN 握手）
  * @param {string} proxyString 代理配置
  * @param {number} timeoutMs 超时时间（默认 8000ms）
  * @returns {Promise<{ success: boolean, latencyMs?: number, message: string }>}
@@ -618,21 +680,26 @@ export async function testUpstreamProxy(proxyString, timeoutMs = 8000) {
       return { success: false, message: '无法解析代理配置格式，请检查语法' };
     }
 
-    const testExecution = (async () => {
-      // 使用 443 (HTTPS) 作为探测目标，满足 HTTP 代理对 CONNECT 必须为 SSL/443 安全端口的规范
-      const { socket } = await createUpstreamConnection('www.google.com', 443, proxyString, false);
-      const latency = Date.now() - start;
+    let testExecution;
+    if (proxy.protocol === 'openvpn' || proxy.protocol === 'ovpn') {
+      testExecution = testOpenVpnDirect(proxy, timeoutMs);
+    } else {
+      testExecution = (async () => {
+        // 使用 443 (HTTPS) 作为探测目标，满足 HTTP 代理对 CONNECT 必须为 SSL/443 安全端口的规范
+        const { socket } = await createUpstreamConnection('www.google.com', 443, proxyString, false);
+        const latency = Date.now() - start;
 
-      try {
-        socket.close();
-      } catch (_) {}
+        try {
+          socket.close();
+        } catch (_) {}
 
-      return {
-        success: true,
-        latencyMs: latency,
-        message: `代理握手成功！类型: ${proxy.protocol.toUpperCase()}, 延迟: ${latency}ms, 代理服务器: ${proxy.host}:${proxy.port}`,
-      };
-    })();
+        return {
+          success: true,
+          latencyMs: latency,
+          message: `代理握手成功！类型: ${proxy.protocol.toUpperCase()}, 延迟: ${latency}ms, 代理服务器: ${proxy.host}:${proxy.port}`,
+        };
+      })();
+    }
 
     const timeoutExecution = new Promise((_, reject) =>
       setTimeout(() => reject(new Error(`握手超时 (${timeoutMs / 1000}s)，代理服务器未响应或连接受阻`)), timeoutMs)
