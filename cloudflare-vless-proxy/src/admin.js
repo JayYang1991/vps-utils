@@ -3,9 +3,9 @@
  * Includes Clash & Sing-box Subscriptions, Dynamic Preferred IPs, VLESS Links, and Built-in QR Code Generator.
  */
 
-import { getConfig, saveConfig, verifyAdminAuth, hashPassword, DEFAULT_CONFIG_URL, DEFAULT_SINGBOX_CONFIG_URL } from './config.js';
+import { getConfig, saveConfig, verifyAdminAuth, hashPassword, DEFAULT_SINGBOX_CONFIG_URL } from './config.js';
 import { testUpstreamProxy } from './upstream.js';
-import { generateAllVlessNodes, generateSingboxConfig, generateClashMetaConfig, fetchSubconfigs, clearPreferredNodesCache } from './sub.js';
+import { generateAllVlessNodes, generateSingboxConfig, fetchSubconfigs, clearPreferredNodesCache } from './sub.js';
 
 /**
  * 处理管理后台的所有 HTTP 请求
@@ -51,11 +51,9 @@ export async function handleAdmin(request, env, url, config) {
     const token = await hashPassword(config.adminPassword);
     const nodes = await generateAllVlessNodes(config, workerDomain, { env });
     const singbox = generateSingboxConfig(nodes, config, workerDomain);
-    const clash = generateClashMetaConfig(nodes, config, workerDomain);
 
     const subscriptions = {
       adaptive: `${url.origin}/sub?token=${token}`,
-      clash: `${url.origin}/clash?token=${token}`,
       singbox: `${url.origin}/singbox?token=${token}`,
       vless: `${url.origin}/v2ray?token=${token}`,
     };
@@ -76,7 +74,6 @@ export async function handleAdmin(request, env, url, config) {
         cleanIPs: config.cleanIPs,
         nodeName: config.nodeName,
         enableDirectFallback: config.enableDirectFallback,
-        configUrl: config.configUrl || DEFAULT_CONFIG_URL,
         singboxConfigUrl: config.singboxConfigUrl || DEFAULT_SINGBOX_CONFIG_URL,
         preferredSubUrl: config.preferredSubUrl || PREFERRED_SUB_URL,
         subapiUrl: config.subapiUrl || SUBAPI_URL,
@@ -85,7 +82,6 @@ export async function handleAdmin(request, env, url, config) {
       workerDomain,
       nodes,
       singbox,
-      clash,
       subscriptions,
       restApi,
     });
@@ -504,56 +500,32 @@ function getAdminHTML(host, adminPath) {
       <!-- 客户端聚合订阅 -->
       <div class="card">
         <div class="card-title">
-          <span>🔗 客户端开箱即用聚合订阅</span>
+          <span>🔗 Sing-box 与客户端开箱即用聚合订阅</span>
         </div>
 
-        <!-- 转换规则配置文件下拉选择 -->
-        <div class="form-group" style="margin-bottom: 18px; padding: 12px 14px; background: #090d16; border-radius: var(--radius); border: 1px solid var(--card-border);">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">
-            <label class="form-label" style="margin-bottom:0; font-weight:600; color:#38bdf8;">🎯 转换规则配置文件 (SUBCONFIG)</label>
-            <span id="cfg-status-tip" style="font-size:0.75rem; color:var(--success);">已保存至服务端</span>
-          </div>
-          <select id="cfg-subconfig-select" class="form-control" onchange="handleSubconfigChange()">
-            <option value="https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Bespoke.ini">🔥 默认规则: ACL4SSR_Online_Bespoke (自定义精细化分流规则)</option>
-          </select>
-        </div>
-
-        <!-- 智能自适应订阅 -->
+        <!-- Sing-box 订阅 (推荐首选) -->
         <div class="sub-item" style="border: 1px solid rgba(59, 130, 246, 0.4); background: rgba(59, 130, 246, 0.05);">
           <div class="sub-header">
-            <span class="sub-name" style="color: #60a5fa;">✨ 智能自适应订阅 (推荐首选)</span>
-            <span style="font-size:0.75rem; color:var(--text-muted);">自动识别客户端 User-Agent (Clash / sing-box / V2Ray)</span>
-          </div>
-          <div class="sub-url-row">
-            <input type="text" id="sub-adaptive-url" class="form-control" readonly>
-            <button class="btn btn-secondary btn-sm" onclick="copyInputText('sub-adaptive-url')">复制</button>
-            <button class="btn btn-sm" onclick="showQRModal('智能自适应订阅', document.getElementById('sub-adaptive-url').value)">📱 二维码</button>
-          </div>
-        </div>
-        
-        <!-- Clash Meta 订阅 -->
-        <div class="sub-item">
-          <div class="sub-header">
-            <span class="sub-name">🐱 Clash Meta / Mihomo 完整订阅</span>
-            <span style="font-size:0.75rem; color:var(--text-muted);">通过 subapi.19910417.xyz 在线规则转换</span>
-          </div>
-          <div class="sub-url-row">
-            <input type="text" id="sub-clash-url" class="form-control" readonly>
-            <button class="btn btn-secondary btn-sm" onclick="copyInputText('sub-clash-url')">复制</button>
-            <button class="btn btn-sm" onclick="showQRModal('Clash Meta 订阅', document.getElementById('sub-clash-url').value)">📱 二维码</button>
-          </div>
-        </div>
-
-        <!-- Sing-box 订阅 -->
-        <div class="sub-item">
-          <div class="sub-header">
-            <span class="sub-name">📦 Sing-box 完整配置订阅</span>
-            <span style="font-size:0.75rem; color:var(--text-muted);">开箱即用 JSON 规则转换配置</span>
+            <span class="sub-name" style="color: #60a5fa;">📦 Sing-box 完整配置订阅 (推荐首选)</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">开箱即用 JSON 规则转换配置，直接导入 sing-box 客户端</span>
           </div>
           <div class="sub-url-row">
             <input type="text" id="sub-singbox-url" class="form-control" readonly>
             <button class="btn btn-secondary btn-sm" onclick="copyInputText('sub-singbox-url')">复制</button>
             <button class="btn btn-sm" onclick="showQRModal('Sing-box 订阅', document.getElementById('sub-singbox-url').value)">📱 二维码</button>
+          </div>
+        </div>
+
+        <!-- 智能自适应订阅 -->
+        <div class="sub-item">
+          <div class="sub-header">
+            <span class="sub-name">✨ 智能自适应订阅</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">自动识别客户端 User-Agent (优先返回 Sing-box 配置)</span>
+          </div>
+          <div class="sub-url-row">
+            <input type="text" id="sub-adaptive-url" class="form-control" readonly>
+            <button class="btn btn-secondary btn-sm" onclick="copyInputText('sub-adaptive-url')">复制</button>
+            <button class="btn btn-sm" onclick="showQRModal('智能自适应订阅', document.getElementById('sub-adaptive-url').value)">📱 二维码</button>
           </div>
         </div>
 
@@ -617,18 +589,16 @@ function getAdminHTML(host, adminPath) {
         <div class="form-group">
           <label class="form-label">住宅 IP / 上游代理 (Upstream Residential Proxy)</label>
           <div class="input-with-action" style="align-items: flex-start;">
-            <textarea id="cfg-upstream" rows="2" class="form-control" style="resize: vertical; font-family: monospace; font-size: 0.85rem;" placeholder="例如: socks5://user:pass@host:1080 或 openvpn://vpn:vpn@ip:443 或粘贴 .ovpn 文本"></textarea>
+            <textarea id="cfg-upstream" rows="2" class="form-control" style="resize: vertical; font-family: monospace; font-size: 0.85rem;" placeholder="例如: 粘贴原生 .ovpn 文本 / Base64 字符串 或 openvpn://vpn:vpn@ip:443 或 socks5://user:pass@host:1080"></textarea>
             <button class="btn btn-secondary" style="height: 42px; flex-shrink: 0;" onclick="testUpstreamLive()">⚡ 测试连通性</button>
           </div>
           <div id="upstream-test-res" class="test-result-box"></div>
           <p class="help-text">
-            支持 <b>SOCKS5</b>、<b>HTTP</b> 与 <b>OpenVPN</b> 代理格式：<br>
-            • <code>socks5://username:password@ip:port</code><br>
+            支持 <b>OpenVPN</b>、<b>SOCKS5</b> 与 <b>HTTP CONNECT</b> 格式（支持自动链式代理接入 Sing-box）：<br>
+            • 原生 OpenVPN <code>.ovpn</code> 配置文件完整文本或 Base64 字符串（自动生成 Sing-box OpenVPN 出口与 <code>auto-selector-tcp</code> 链式代理）<br>
             • <code>openvpn://username:password@ip:port</code> 或 <code>ovpn://ip:port</code>（默认凭据 vpn:vpn）<br>
-            • <code>http://username:password@ip:port</code><br>
-            • OpenVPN <code>.ovpn</code> 配置文件完整文本或 Base64 编码字符串（自动解析 remote 节点）<br>
-            • <code>ip:port:username:password</code> 或 <code>ip:port</code><br>
-            • 留空则代表直接由 Cloudflare 边缘节点直连目标。
+            • <code>socks5://username:password@ip:port</code> 或 <code>http://username:password@ip:port</code><br>
+            • 留空则代表由 Cloudflare 边缘优选节点直连出站。
           </p>
         </div>
 
@@ -647,9 +617,9 @@ function getAdminHTML(host, adminPath) {
         </div>
 
         <div class="form-group">
-          <label class="form-label">Clash 规则配置文件 URL (Config URL)</label>
-          <input type="text" id="cfg-config-url" class="form-control" placeholder="https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/Clash/config/ACL4SSR_Online_Bespoke.ini">
-          <p class="help-text">用于 subapi 转换生成 Clash Meta 配置时的规则模板。</p>
+          <label class="form-label">Sing-box 规则配置文件 URL (Singbox Config URL)</label>
+          <input type="text" id="cfg-singbox-config-url" class="form-control" placeholder="https://raw.githubusercontent.com/JayYang1991/ACL4SSR/refs/heads/main/sing-box/singbox-template.ini">
+          <p class="help-text">用于 subapi 转换生成 Sing-box 配置时的规则模板。</p>
         </div>
 
         <div class="form-group">
@@ -661,7 +631,7 @@ function getAdminHTML(host, adminPath) {
         <div class="form-group">
           <label class="form-label">Subapi 在线转换接口 URL (SUBAPI_URL)</label>
           <input type="text" id="cfg-subapi-url" class="form-control" placeholder="https://subapi.19910417.xyz">
-          <p class="help-text">用于在线转换生成 Clash 与 Sing-box 客户端配置文件的 subapi 接口（内置默认: <code>https://subapi.19910417.xyz</code>）。</p>
+          <p class="help-text">用于在线转换生成 Sing-box 客户端配置文件的 subapi 接口（内置默认: <code>https://subapi.19910417.xyz</code>）。</p>
         </div>
 
         <div class="form-group">
@@ -695,7 +665,7 @@ function getAdminHTML(host, adminPath) {
         </div>
         
         <div class="form-group">
-          <label class="form-label">1. cURL 快速推送 OpenVPN / SOCKS5 代理示例 (纯文本/单行)</label>
+          <label class="form-label">1. cURL 快速推送 SOCKS5 / HTTP 代理示例 (纯文本/单行)</label>
           <div class="code-block" id="curl-text-example"></div>
         </div>
 
@@ -719,14 +689,6 @@ function getAdminHTML(host, adminPath) {
           <button class="btn btn-secondary btn-sm" onclick="copyText(appData.singbox)">复制代码</button>
         </div>
         <div class="code-block" id="singbox-code"></div>
-      </div>
-
-      <div class="card">
-        <div class="card-title">
-          <span>Clash Meta / Mihomo 配置 (Proxies YAML 片段)</span>
-          <button class="btn btn-secondary btn-sm" onclick="copyText(appData.clash)">复制代码</button>
-        </div>
-        <div class="code-block" id="clash-code"></div>
       </div>
     </div>
 
@@ -970,8 +932,9 @@ function getAdminHTML(host, adminPath) {
         if (document.getElementById('sub-adaptive-url')) {
           document.getElementById('sub-adaptive-url').value = appData.subscriptions.adaptive || '';
         }
-        document.getElementById('sub-clash-url').value = appData.subscriptions.clash || '';
-        document.getElementById('sub-singbox-url').value = appData.subscriptions.singbox || '';
+        if (document.getElementById('sub-singbox-url')) {
+          document.getElementById('sub-singbox-url').value = appData.subscriptions.singbox || '';
+        }
         document.getElementById('sub-vless-url').value = appData.subscriptions.vless || '';
       }
 
@@ -984,8 +947,8 @@ function getAdminHTML(host, adminPath) {
       }
       document.getElementById('cfg-clean-ips').value = appData.config.cleanIPs || '';
       document.getElementById('cfg-node-name').value = appData.config.nodeName || '';
-      if (document.getElementById('cfg-config-url')) {
-        document.getElementById('cfg-config-url').value = appData.config.configUrl || '';
+      if (document.getElementById('cfg-singbox-config-url')) {
+        document.getElementById('cfg-singbox-config-url').value = appData.config.singboxConfigUrl || '';
       }
       if (document.getElementById('cfg-preferred-sub-url')) {
         document.getElementById('cfg-preferred-sub-url').value = appData.config.preferredSubUrl || '';
@@ -1019,8 +982,9 @@ function getAdminHTML(host, adminPath) {
         nodesDiv.appendChild(item);
       });
 
-      document.getElementById('singbox-code').innerText = appData.singbox;
-      document.getElementById('clash-code').innerText = appData.clash;
+      if (document.getElementById('singbox-code')) {
+        document.getElementById('singbox-code').innerText = appData.singbox || '';
+      }
     }
 
     function updateRestSnippets(token) {
@@ -1031,7 +995,7 @@ function getAdminHTML(host, adminPath) {
       }
       if (document.getElementById('curl-text-example')) {
         document.getElementById('curl-text-example').innerText = [
-          '# 推送 OpenVPN 格式或 SOCKS5 代理：',
+          '# 推送 OpenVPN .ovpn 文本 / URL 或 SOCKS5 代理：',
           'curl -X POST ' + restEndpoint + ' \\\\',
           '  -H "Authorization: Bearer ' + curToken + '" \\\\',
           '  -d "openvpn://vpn:vpn@219.100.37.13:443"'
@@ -1040,7 +1004,7 @@ function getAdminHTML(host, adminPath) {
       if (document.getElementById('curl-json-example')) {
         const samplePayload = JSON.stringify({ upstreamProxy: "openvpn://vpn:vpn@219.100.37.13:443", test: true });
         document.getElementById('curl-json-example').innerText = [
-          '# JSON 格式推送并执行在线握手测速：',
+          '# JSON 格式推送（支持原生 .ovpn 文本并执行在线握手测速）：',
           'curl -X POST ' + restEndpoint + ' \\\\',
           '  -H "Authorization: Bearer ' + curToken + '" \\\\',
           '  -H "Content-Type: application/json" \\\\',
@@ -1054,7 +1018,7 @@ function getAdminHTML(host, adminPath) {
           'API_URL = "' + restEndpoint + '"',
           'API_TOKEN = "' + curToken + '"',
           '',
-          '# 推送最优住宅代理 (支持 SOCKS5 / HTTP / OpenVPN 格式)',
+          '# 推送 vpngate 最优 OpenVPN 住宅代理',
           'resp = requests.post(',
           '    API_URL,',
           '    headers={"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"},',

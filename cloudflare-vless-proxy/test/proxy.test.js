@@ -1,42 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseProxyString, wrapOpenVpnDataFrame, unwrapOpenVpnDataFrame } from '../src/upstream.js';
+import { parseProxyString } from '../src/upstream.js';
 import { parseVlessHeader, bytesToUUID } from '../src/vless.js';
-import { generateVlessUrl, generateAllVlessNodes, generateSingboxConfig, generateClashMetaConfig } from '../src/sub.js';
+import { generateVlessUrl, generateAllVlessNodes, generateSingboxConfig, generateSingboxFullProfile, generateBase64Sub } from '../src/sub.js';
 import { hashPassword, normalizePath } from '../src/config.js';
-
-describe('OpenVPN Packet Framing & Tunnel Encapsulation', () => {
-  it('should wrap raw application data into valid OpenVPN TCP data frame', () => {
-    const raw = new TextEncoder().encode('GET /index.html HTTP/1.1\r\nHost: test.com\r\n\r\n');
-    const wrapped = wrapOpenVpnDataFrame(raw, 42);
-    assert.ok(wrapped instanceof Uint8Array);
-    
-    // 2 bytes length header (Big Endian)
-    const expectedPayloadLen = 1 + 4 + raw.length;
-    const actualLenHeader = (wrapped[0] << 8) | wrapped[1];
-    assert.equal(actualLenHeader, expectedPayloadLen);
-    assert.equal(wrapped.length, 2 + expectedPayloadLen);
-
-    // Opcode byte (0x30 = P_DATA_V1)
-    assert.equal(wrapped[2] >> 3, 6);
-
-    // Packet ID (42)
-    const packetId = (wrapped[3] << 24) | (wrapped[4] << 16) | (wrapped[5] << 8) | wrapped[6];
-    assert.equal(packetId, 42);
-
-    // Unwrap
-    const unwrapped = unwrapOpenVpnDataFrame(wrapped);
-    assert.ok(unwrapped);
-    assert.equal(new TextDecoder().decode(unwrapped), 'GET /index.html HTTP/1.1\r\nHost: test.com\r\n\r\n');
-  });
-
-  it('should safely ignore non-data OpenVPN control/ACK frames during unwrapping', () => {
-    // Construct an ACK frame (Opcode 5 << 3 = 0x28)
-    const ackFrame = new Uint8Array([0x00, 0x01, 0x28]);
-    const res = unwrapOpenVpnDataFrame(ackFrame);
-    assert.equal(res, null);
-  });
-});
 
 describe('Upstream Proxy String Parser', () => {
   it('should parse standard socks5:// url with user/pass', () => {
@@ -68,7 +35,8 @@ describe('Upstream Proxy String Parser', () => {
       host: '219.100.37.13',
       port: 443,
       username: 'vpn',
-      password: 'vpn'
+      password: 'vpn',
+      proto: 'tcp',
     });
 
     const res2 = parseProxyString('ovpn://customuser:custompass@104.28.1.2:1194');
@@ -77,22 +45,12 @@ describe('Upstream Proxy String Parser', () => {
       host: '104.28.1.2',
       port: 1194,
       username: 'customuser',
-      password: 'custompass'
+      password: 'custompass',
+      proto: 'tcp',
     });
   });
 
-  it('should parse openvpn:// without user/pass using default vpn:vpn credentials', () => {
-    const res = parseProxyString('openvpn://219.100.37.13:443');
-    assert.deepEqual(res, {
-      protocol: 'openvpn',
-      host: '219.100.37.13',
-      port: 443,
-      username: 'vpn',
-      password: 'vpn'
-    });
-  });
-
-  it('should parse raw .ovpn configuration text', () => {
+  it('should parse raw .ovpn configuration text and Base64 encoded ovpn', () => {
     const ovpnText = `
 client
 dev tun
@@ -116,32 +74,15 @@ MIIB...
     assert.equal(res.host, '219.100.37.13');
     assert.equal(res.port, 443);
     assert.equal(res.username, 'vpn');
-    assert.equal(res.password, 'vpn');
     assert.equal(res.hasCa, true);
     assert.ok(res.ca.includes('BEGIN CERTIFICATE'));
-  });
 
-  it('should parse single-line compressed .ovpn configuration text with comments', () => {
-    const ovpnSingle = '# OpenVPN Sample config dev tun proto tcp remote 219.100.37.13 443 cipher AES-128-CBC auth SHA1 <ca>MIIB...</ca>';
-    const res = parseProxyString(ovpnSingle);
-    assert.ok(res);
-    assert.equal(res.protocol, 'openvpn');
-    assert.equal(res.host, '219.100.37.13');
-    assert.equal(res.port, 443);
-    assert.equal(res.cipher, 'AES-128-CBC');
-    assert.equal(res.auth, 'SHA1');
-    assert.equal(res.hasCa, true);
-  });
-
-  it('should parse Base64 encoded .ovpn configuration string', () => {
-    const ovpnText = `client\ndev tun\nproto tcp\nremote 133.242.18.25 995\n`;
+    // Base64
     const b64 = Buffer.from(ovpnText).toString('base64');
-    const res = parseProxyString(b64);
-    assert.ok(res);
-    assert.equal(res.protocol, 'openvpn');
-    assert.equal(res.host, '133.242.18.25');
-    assert.equal(res.port, 995);
-    assert.equal(res.username, 'vpn');
+    const resB64 = parseProxyString(b64);
+    assert.ok(resB64);
+    assert.equal(resB64.protocol, 'openvpn');
+    assert.equal(resB64.host, '219.100.37.13');
   });
 
   it('should parse host:port:user:pass format', () => {
@@ -173,6 +114,8 @@ MIIB...
     assert.equal(parseProxyString('not a valid proxy format!'), null);
   });
 });
+
+
 
 describe('VLESS Protocol Parser', () => {
   const testUUID = 'd342d11e-d424-4583-b36e-524ab1f0afa4';
@@ -316,35 +259,68 @@ describe('Node & Config Generators', () => {
     assert.equal(nodes[0].category, 'direct');
   });
 
-  it('should generate Sing-box and Clash Meta outbound configurations', () => {
+  it('should generate Sing-box outbound configuration JSON', () => {
     const singboxStr = generateSingboxConfig(config, domain);
     const singboxObj = JSON.parse(singboxStr);
     assert.equal(Array.isArray(singboxObj), true);
     assert.equal(singboxObj[0].type, 'vless');
     assert.equal(singboxObj[0].transport.path, '/my-custom-ws');
-
-    const clashYaml = generateClashMetaConfig(config, domain);
-    assert.ok(clashYaml.includes('type: vless'));
-    assert.ok(clashYaml.includes('network: ws'));
-    assert.ok(clashYaml.includes('path: "/my-custom-ws"'));
+    assert.equal(singboxObj[0].tls.enabled, true);
+    assert.equal(singboxObj[0].tls.server_name, domain);
   });
 
-  it('should generate Sing-box and Clash Meta full subscription profiles', async () => {
-    const { generateSingboxFullProfile, generateClashFullProfile, generateBase64Sub } = await import('../src/sub.js');
+  it('should generate Sing-box full subscription profile with auto-selector-tcp and Base64 subscription', async () => {
+    const { generateSingboxFullProfile, generateBase64Sub, buildUpstreamOutbound, injectSingboxChainProxy } = await import('../src/sub.js');
     
-    // 1. Sing-box Full Profile
+    // 1. Sing-box Full Profile (无上游代理)
     const sbFull = generateSingboxFullProfile(config, domain);
     const sbObj = JSON.parse(sbFull);
     assert.ok(sbObj.inbounds && sbObj.outbounds && sbObj.route);
     assert.equal(sbObj.outbounds[0].tag, '🚀 节点选择');
+    assert.equal(sbObj.outbounds[1].tag, 'auto-selector-tcp');
 
-    // 2. Clash Full Profile
-    const clashFull = generateClashFullProfile(config, domain);
-    assert.ok(clashFull.includes('proxy-groups:'));
-    assert.ok(clashFull.includes('🚀 节点选择'));
-    assert.ok(clashFull.includes('⚡ 自动优选'));
+    // 2. 带有 OpenVPN 的链式代理配置生成
+    const configWithOvpn = {
+      ...config,
+      upstreamProxy: 'openvpn://vpn:vpn@219.100.37.13:443'
+    };
+    const sbWithOvpn = generateSingboxFullProfile(configWithOvpn, domain);
+    const sbOvpnObj = JSON.parse(sbWithOvpn);
+    
+    // 第 1 站：auto-selector-tcp (urltest)
+    const urltestNode = sbOvpnObj.outbounds.find(o => o.tag === 'auto-selector-tcp');
+    assert.ok(urltestNode);
+    assert.equal(urltestNode.type, 'urltest');
+    
+    // 最终出站：OpenVPN 节点，detour 设置为 auto-selector-tcp
+    const ovpnNode = sbOvpnObj.outbounds.find(o => o.tag === '🛡️ OpenVPN 住宅出口');
+    assert.ok(ovpnNode);
+    assert.equal(ovpnNode.type, 'openvpn');
+    assert.equal(ovpnNode.server, '219.100.37.13');
+    assert.equal(ovpnNode.server_port, 443);
+    assert.equal(ovpnNode.detour, 'auto-selector-tcp');
 
-    // 3. Base64 Sub
+    // 主选择组默认指向 OpenVPN
+    assert.equal(sbOvpnObj.outbounds[0].default, '🛡️ OpenVPN 住宅出口');
+    assert.equal(sbOvpnObj.outbounds[0].outbounds[0], '🛡️ OpenVPN 住宅出口');
+
+    // 3. 链式代理注入函数 injectSingboxChainProxy 测试
+    const mockSubapiResponse = JSON.stringify({
+      outbounds: [
+        { type: 'selector', tag: 'PROXY', outbounds: ['⚡ 自动优选', 'DIRECT'], default: '⚡ 自动优选' },
+        { type: 'urltest', tag: '⚡ 自动优选', outbounds: ['node1', 'node2'] },
+        { type: 'vless', tag: 'node1' },
+        { type: 'vless', tag: 'node2' }
+      ]
+    });
+    const injected = injectSingboxChainProxy(mockSubapiResponse, configWithOvpn);
+    const injectedObj = JSON.parse(injected);
+    const injectedOvpn = injectedObj.outbounds.find(o => o.tag === '🛡️ OpenVPN 住宅出口');
+    assert.ok(injectedOvpn);
+    assert.equal(injectedOvpn.detour, 'auto-selector-tcp');
+    assert.equal(injectedObj.outbounds[0].default, '🛡️ OpenVPN 住宅出口');
+
+    // 4. Base64 Sub
     const b64 = generateBase64Sub(config, domain);
     assert.equal(typeof b64, 'string');
     assert.ok(b64.length > 20);
@@ -360,47 +336,6 @@ describe('Node & Config Generators', () => {
     assert.equal(normalizePath('foo'), '/foo');
     assert.equal(normalizePath('/foo/'), '/foo');
     assert.equal(normalizePath(''), '/');
-  });
-
-  it('should remove direct-only select and url-test proxy-groups and clean references', async () => {
-    const { cleanClashDirectOnlyGroups } = await import('../src/sub.js');
-    const mockClashYaml = `
-port: 7890
-proxies:
-  - name: HK-Node
-    type: vless
-proxy-groups:
-  - name: 🚀 节点选择
-    type: select
-    proxies:
-      - 🇭🇰 香港节点
-      - 🇺🇲 美国节点
-      - 🖥️ VPS直连节点
-  - name: 🇭🇰 香港节点
-    type: select
-    proxies:
-      - HK-Node
-  - name: 🇺🇲 美国节点
-    type: select
-    proxies:
-      - DIRECT
-  - name: 🖥️ VPS直连节点
-    type: url-test
-    url: http://www.gstatic.com/generate_204
-    interval: 300
-    proxies:
-      - DIRECT
-rules:
-  - DOMAIN,us.example.com,🇺🇲 美国节点
-  - MATCH,🚀 节点选择
-`;
-
-    const cleaned = cleanClashDirectOnlyGroups(mockClashYaml);
-    assert.ok(!cleaned.includes('🇺🇲 美国节点'));
-    assert.ok(!cleaned.includes('🖥️ VPS直连节点'));
-    assert.ok(cleaned.includes('🇭🇰 香港节点'));
-    assert.ok(cleaned.includes('HK-Node'));
-    assert.ok(cleaned.includes('DOMAIN,us.example.com,DIRECT'));
   });
 });
 
@@ -528,7 +463,7 @@ describe('REST API Proxy Management & Dedicated Token Auth', () => {
     const req = new Request('https://my-worker.workers.dev/api/upstream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ upstreamProxy: 'openvpn://vpn:vpn@219.100.37.13:443' })
+      body: JSON.stringify({ upstreamProxy: 'socks5://user:pass@1.2.3.4:1080' })
     });
     const res = await worker.fetch(req, env, {});
     assert.equal(res.status, 401);
@@ -550,9 +485,9 @@ describe('REST API Proxy Management & Dedicated Token Auth', () => {
     assert.equal(typeof data.upstreamProxy, 'string');
   });
 
-  it('should update upstream proxy with OpenVPN URL format via POST /api/upstream', async () => {
+  it('should update upstream proxy with SOCKS5 URL format via POST /api/upstream', async () => {
     const worker = (await import('../src/index.js')).default;
-    const openvpnUrl = 'openvpn://vpn:vpn@219.100.37.13:443';
+    const socks5Url = 'socks5://user:pass@1.2.3.4:1080';
 
     const req = new Request('https://my-worker.workers.dev/api/upstream', {
       method: 'POST',
@@ -561,7 +496,7 @@ describe('REST API Proxy Management & Dedicated Token Auth', () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        upstreamProxy: openvpnUrl,
+        upstreamProxy: socks5Url,
         enableDirectFallback: true
       })
     });
@@ -569,25 +504,26 @@ describe('REST API Proxy Management & Dedicated Token Auth', () => {
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.success, true);
-    assert.equal(data.upstreamProxy, openvpnUrl);
-    assert.equal(data.parsed.protocol, 'openvpn');
-    assert.equal(data.parsed.host, '219.100.37.13');
-    assert.equal(data.parsed.port, 443);
-    assert.equal(data.parsed.username, 'vpn');
+    assert.equal(data.upstreamProxy, socks5Url);
+    assert.equal(data.parsed.protocol, 'socks5');
+    assert.equal(data.parsed.host, '1.2.3.4');
+    assert.equal(data.parsed.port, 1080);
+    assert.equal(data.parsed.username, 'user');
+    assert.equal(data.parsed.password, 'pass');
 
-    // 验证 GET /api/upstream 读取到更新后的 OpenVPN 配置
+    // 验证 GET /api/upstream 读取到更新后的 SOCKS5 配置
     const checkReq = new Request('https://my-worker.workers.dev/api/upstream', {
       headers: { 'X-API-Token': customApiToken }
     });
     const checkRes = await worker.fetch(checkReq, env, {});
     const checkData = await checkRes.json();
-    assert.equal(checkData.upstreamProxy, openvpnUrl);
-    assert.equal(checkData.parsed.protocol, 'openvpn');
+    assert.equal(checkData.upstreamProxy, socks5Url);
+    assert.equal(checkData.parsed.protocol, 'socks5');
   });
 
-  it('should update upstream proxy with raw .ovpn configuration text via text/plain payload', async () => {
+  it('should update upstream proxy with raw .ovpn configuration text via POST /api/upstream', async () => {
     const worker = (await import('../src/index.js')).default;
-    const ovpnConfig = 'client\ndev tun\nproto tcp\nremote 133.242.18.25 995\nauth-user-pass\n';
+    const ovpnConfig = 'client\ndev tun\nproto tcp\nremote 133.242.18.25 995\nauth-user-pass\n<ca>\nMIIB...\n</ca>';
 
     const req = new Request('https://my-worker.workers.dev/api/upstream', {
       method: 'POST',
@@ -604,6 +540,20 @@ describe('REST API Proxy Management & Dedicated Token Auth', () => {
     assert.equal(data.parsed.protocol, 'openvpn');
     assert.equal(data.parsed.host, '133.242.18.25');
     assert.equal(data.parsed.port, 995);
+    assert.equal(data.parsed.username, 'vpn');
+  });
+
+  it('should respond to /singbox and /sub with valid Sing-box JSON profile', async () => {
+    const worker = (await import('../src/index.js')).default;
+    const token = await hashPassword('AdminPassword123!');
+    const req = new Request(`https://my-worker.workers.dev/singbox?token=${token}`);
+    const res = await worker.fetch(req, env, {});
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('Content-Type'), 'application/json; charset=utf-8');
+    const body = await res.json();
+    assert.ok(body.outbounds && body.inbounds);
+    assert.equal(body.outbounds[0].tag, '🚀 节点选择');
   });
 
   it('should reject invalid proxy format with 400 Bad Request', async () => {

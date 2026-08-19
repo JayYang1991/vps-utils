@@ -4,9 +4,10 @@
  * and online subscription conversion via https://subapi.19910417.xyz
  */
 
-import { DEFAULT_CONFIG_URL, DEFAULT_SINGBOX_CONFIG_URL, PREFERRED_SUB_URL, SUBAPI_URL } from './config.js';
+import { DEFAULT_SINGBOX_CONFIG_URL, PREFERRED_SUB_URL, SUBAPI_URL } from './config.js';
+import { parseProxyString } from './upstream.js';
 
-export { DEFAULT_CONFIG_URL, DEFAULT_SINGBOX_CONFIG_URL, PREFERRED_SUB_URL, SUBAPI_URL };
+export { DEFAULT_SINGBOX_CONFIG_URL, PREFERRED_SUB_URL, SUBAPI_URL };
 export const REMOTE_SUBCONFIG_URL = 'https://raw.githubusercontent.com/JayYang1991/edgetunnel/main/SUBCONFIG.json';
 export const USER_AGENT = 'v2rayN/edgetunnel (https://github.com/cmliu/edgetunnel)';
 
@@ -359,135 +360,7 @@ export async function convertViaSubapi(subUrl, target = 'clash', configUrl = '',
   return '';
 }
 
-/**
- * 清理 Clash 配置中只有 DIRECT 的 select 和 url-test 节点分组，并更新关联引用
- * @param {string} yaml Clash 完整配置 YAML 文本
- * @returns {string} 清理后的 YAML 文本
- */
-export function cleanClashDirectOnlyGroups(yaml) {
-  if (!yaml || typeof yaml !== 'string') return yaml;
 
-  const lines = yaml.split(/\r?\n/);
-  const pgStartIdx = lines.findIndex(l => /^proxy-groups\s*:/.test(l));
-  if (pgStartIdx === -1) return yaml;
-
-  let pgEndIdx = lines.findIndex((l, idx) => idx > pgStartIdx && /^[a-zA-Z0-9_-]+\s*:/.test(l));
-  if (pgEndIdx === -1) pgEndIdx = lines.length;
-
-  const headerLines = lines.slice(0, pgStartIdx + 1);
-  const pgLines = lines.slice(pgStartIdx + 1, pgEndIdx);
-  const footerLines = lines.slice(pgEndIdx);
-
-  const groups = [];
-  let currentGroup = null;
-  let inProxies = false;
-
-  for (let i = 0; i < pgLines.length; i++) {
-    const line = pgLines[i];
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-
-    const groupItemMatch = line.match(/^\s*-\s+name:\s*(.+)$/);
-    if (groupItemMatch) {
-      currentGroup = {
-        name: groupItemMatch[1].trim().replace(/^['\"]|['\"]$/g, ''),
-        fields: [],
-        proxies: [],
-        type: 'select',
-      };
-      groups.push(currentGroup);
-      inProxies = false;
-      continue;
-    }
-
-    if (!currentGroup) continue;
-
-    const typeMatch = line.match(/^\s*type:\s*(.+)$/);
-    if (typeMatch) {
-      currentGroup.type = typeMatch[1].trim().toLowerCase().replace(/^['\"]|['\"]$/g, '');
-      currentGroup.fields.push(line);
-      inProxies = false;
-      continue;
-    }
-
-    if (/^\s*proxies\s*:/.test(line)) {
-      inProxies = true;
-      continue;
-    }
-
-    if (inProxies) {
-      const proxyItemMatch = line.match(/^\s*-\s+(.+)$/);
-      if (proxyItemMatch) {
-        const pName = proxyItemMatch[1].trim().replace(/^['\"]|['\"]$/g, '');
-        currentGroup.proxies.push(pName);
-        continue;
-      } else {
-        inProxies = false;
-      }
-    }
-
-    currentGroup.fields.push(line);
-  }
-
-  let removedAny = true;
-  const removedNames = new Set();
-
-  while (removedAny) {
-    removedAny = false;
-    for (let i = groups.length - 1; i >= 0; i--) {
-      const g = groups[i];
-      const isTargetType = ['select', 'url-test', 'urltest', 'fallback', 'load-balance'].includes(g.type);
-      const isOnlyDirect = g.proxies.length === 0 || g.proxies.every(p => p.toUpperCase() === 'DIRECT');
-
-      if (isTargetType && isOnlyDirect) {
-        removedNames.add(g.name);
-        groups.splice(i, 1);
-        removedAny = true;
-      }
-    }
-
-    if (removedAny) {
-      for (const g of groups) {
-        g.proxies = g.proxies.filter(p => !removedNames.has(p));
-      }
-    }
-  }
-
-  const newPgLines = [];
-  for (const g of groups) {
-    newPgLines.push(`  - name: ${g.name}`);
-    for (const f of g.fields) {
-      newPgLines.push(f);
-    }
-    newPgLines.push('    proxies:');
-    if (g.proxies.length > 0) {
-      for (const p of g.proxies) {
-        newPgLines.push(`      - ${p}`);
-      }
-    } else {
-      newPgLines.push('      - DIRECT');
-    }
-  }
-
-  const newFooterLines = footerLines.map(line => {
-    let modifiedLine = line;
-    for (const rName of removedNames) {
-      if (modifiedLine.includes(rName)) {
-        const parts = modifiedLine.split(',');
-        if (parts.length === 2 && parts[1].trim() === rName) {
-          parts[1] = 'DIRECT';
-          modifiedLine = parts.join(',');
-        } else if (parts.length >= 3 && parts[2].trim() === rName) {
-          parts[2] = 'DIRECT';
-          modifiedLine = parts.join(',');
-        }
-      }
-    }
-    return modifiedLine;
-  });
-
-  return [...headerLines, ...newPgLines, ...newFooterLines].join('\n');
-}
 
 /**
  * 获取远程 SUBCONFIG 规则列表 (用于前端下拉选择)
@@ -581,6 +454,154 @@ export function generateSingboxConfig(nodesOrConfig, workerDomainOrConfig, maybe
 }
 
 /**
+ * 基于 upstreamProxy 配置构造出站代理节点（如 OpenVPN / SOCKS5 / HTTP）
+ * 并将 detour 设置为前置第 1 站（默认 auto-selector-tcp）
+ * @param {string} upstreamProxy 
+ * @param {string} detourTag 
+ * @returns {object|null}
+ */
+export function buildUpstreamOutbound(upstreamProxy, detourTag = 'auto-selector-tcp') {
+  if (!upstreamProxy || typeof upstreamProxy !== 'string') return null;
+  const proxy = parseProxyString(upstreamProxy);
+  if (!proxy) return null;
+
+  if (proxy.protocol === 'openvpn') {
+    const outbound = {
+      type: 'openvpn',
+      tag: '🛡️ OpenVPN 住宅出口',
+      server: proxy.host,
+      server_port: proxy.port,
+      protocol: proxy.proto || 'tcp',
+      auth_type: 'password',
+      username: proxy.username || 'vpn',
+      password: proxy.password || 'vpn',
+      detour: detourTag, // 第 1 站前置节点 (auto-selector-tcp)
+    };
+    if (proxy.ca) outbound.ca = proxy.ca;
+    if (proxy.cert) outbound.certificate = proxy.cert;
+    if (proxy.key) outbound.private_key = proxy.key;
+    return outbound;
+  }
+
+  if (proxy.protocol === 'socks5') {
+    const outbound = {
+      type: 'socks',
+      tag: '🛡️ SOCKS5 住宅出口',
+      server: proxy.host,
+      server_port: proxy.port,
+      detour: detourTag,
+    };
+    if (proxy.username) outbound.username = proxy.username;
+    if (proxy.password) outbound.password = proxy.password;
+    return outbound;
+  }
+
+  if (proxy.protocol === 'http') {
+    const outbound = {
+      type: 'http',
+      tag: '🛡️ HTTP 住宅出口',
+      server: proxy.host,
+      server_port: proxy.port,
+      detour: detourTag,
+    };
+    if (proxy.username) outbound.username = proxy.username;
+    if (proxy.password) outbound.password = proxy.password;
+    return outbound;
+  }
+
+  return null;
+}
+
+/**
+ * 注入 Sing-box 链式代理配置：
+ * 将 auto-selector-tcp 作为第 1 站 (前置 VLESS 优选通道)，
+ * 将 OpenVPN 住宅节点作为最终出站 (第 2 站)。
+ * @param {string|object} singboxContent 
+ * @param {object} config 
+ * @returns {string}
+ */
+export function injectSingboxChainProxy(singboxContent, config = {}) {
+  let profile = {};
+  if (typeof singboxContent === 'string') {
+    try {
+      profile = JSON.parse(singboxContent);
+    } catch (_) {
+      return singboxContent;
+    }
+  } else if (typeof singboxContent === 'object' && singboxContent !== null) {
+    profile = singboxContent;
+  }
+
+  if (!profile.outbounds || !Array.isArray(profile.outbounds)) {
+    return typeof singboxContent === 'string' ? singboxContent : JSON.stringify(profile, null, 2);
+  }
+
+  const upstreamOutbound = buildUpstreamOutbound(config.upstreamProxy, 'auto-selector-tcp');
+
+  // 1. 寻找或规范化 urltest 节点为 auto-selector-tcp
+  let urltestGroup = profile.outbounds.find(o => o.type === 'urltest');
+  if (urltestGroup) {
+    // 确保 tag 统一为 auto-selector-tcp
+    const oldTag = urltestGroup.tag;
+    urltestGroup.tag = 'auto-selector-tcp';
+
+    // 同步更新 profile 内其它引用旧 tag 的地方
+    if (oldTag !== 'auto-selector-tcp') {
+      for (const ob of profile.outbounds) {
+        if (ob.outbounds && Array.isArray(ob.outbounds)) {
+          ob.outbounds = ob.outbounds.map(t => (t === oldTag ? 'auto-selector-tcp' : t));
+        }
+        if (ob.default === oldTag) {
+          ob.default = 'auto-selector-tcp';
+        }
+        if (ob.detour === oldTag) {
+          ob.detour = 'auto-selector-tcp';
+        }
+      }
+    }
+  } else {
+    // 如果没有 urltest 组，根据所有 vless 节点构造 auto-selector-tcp
+    const vlessTags = profile.outbounds.filter(o => o.type === 'vless').map(o => o.tag);
+    if (vlessTags.length > 0) {
+      urltestGroup = {
+        type: 'urltest',
+        tag: 'auto-selector-tcp',
+        outbounds: vlessTags,
+        url: 'https://www.gstatic.com/generate_204',
+        interval: '3m',
+        tolerance: 50,
+      };
+      profile.outbounds.unshift(urltestGroup);
+    }
+  }
+
+  // 2. 如果存在住宅上游出站（如 OpenVPN）
+  if (upstreamOutbound) {
+    // 移除可能已存在的同 tag 节点
+    profile.outbounds = profile.outbounds.filter(o => o.tag !== upstreamOutbound.tag);
+
+    // 将 OpenVPN 节点插入到 urltest 组之后
+    const urltestIdx = profile.outbounds.findIndex(o => o.tag === 'auto-selector-tcp');
+    if (urltestIdx !== -1) {
+      profile.outbounds.splice(urltestIdx + 1, 0, upstreamOutbound);
+    } else {
+      profile.outbounds.unshift(upstreamOutbound);
+    }
+
+    // 3. 在所有 selector 节点中，将 OpenVPN 置于首位并设为 default
+    for (const ob of profile.outbounds) {
+      if (ob.type === 'selector' && Array.isArray(ob.outbounds)) {
+        ob.outbounds = ob.outbounds.filter(t => t !== upstreamOutbound.tag);
+        ob.outbounds.unshift(upstreamOutbound.tag);
+        ob.default = upstreamOutbound.tag;
+      }
+    }
+  }
+
+  return JSON.stringify(profile, null, 2);
+}
+
+/**
  * 生成 Sing-box 客户端开箱即用完整配置文件 (本地兜底 Profile JSON)
  */
 export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, maybeWorkerDomain) {
@@ -599,44 +620,60 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
   }
 
   const nodeTags = nodes.map(n => n.name);
+  const upstreamOutbound = buildUpstreamOutbound(config.upstreamProxy, 'auto-selector-tcp');
+
+  const selectorOutbounds = [];
+  if (upstreamOutbound) {
+    selectorOutbounds.push(upstreamOutbound.tag);
+  }
+  selectorOutbounds.push('auto-selector-tcp', ...nodeTags, 'DIRECT');
 
   const outbounds = [
     {
       type: 'selector',
       tag: '🚀 节点选择',
-      outbounds: ['⚡ 自动测优', ...nodeTags, 'DIRECT'],
-      default: '⚡ 自动测优',
+      outbounds: selectorOutbounds,
+      default: upstreamOutbound ? upstreamOutbound.tag : 'auto-selector-tcp',
     },
     {
       type: 'urltest',
-      tag: '⚡ 自动测优',
+      tag: 'auto-selector-tcp',
       outbounds: [...nodeTags],
       url: 'https://www.gstatic.com/generate_204',
       interval: '3m',
       tolerance: 50,
     },
-    ...nodes.map((node) => ({
-      type: 'vless',
-      tag: node.name,
-      server: node.host,
-      server_port: node.port,
-      uuid: config.uuid,
-      tls: {
+  ];
+
+  if (upstreamOutbound) {
+    outbounds.push(upstreamOutbound);
+  }
+
+  // 加入所有底层 VLESS 优选节点
+  outbounds.push(...nodes.map((node) => ({
+    type: 'vless',
+    tag: node.name,
+    server: node.host,
+    server_port: node.port,
+    uuid: config.uuid,
+    tls: {
+      enabled: true,
+      server_name: workerDomain || node.host,
+      utls: {
         enabled: true,
-        server_name: workerDomain || node.host,
-        utls: {
-          enabled: true,
-          fingerprint: 'chrome',
-        },
+        fingerprint: 'chrome',
       },
-      transport: {
-        type: 'ws',
-        path: config.proxyPath || '/',
-        headers: {
-          Host: workerDomain || node.host,
-        },
+    },
+    transport: {
+      type: 'ws',
+      path: config.proxyPath || '/',
+      headers: {
+        Host: workerDomain || node.host,
       },
-    })),
+    },
+  })));
+
+  outbounds.push(
     {
       type: 'direct',
       tag: 'DIRECT',
@@ -648,8 +685,8 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
     {
       type: 'dns',
       tag: 'dns-out',
-    },
-  ];
+    }
+  );
 
   const profile = {
     log: {
@@ -708,124 +745,5 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
   return JSON.stringify(profile, null, 2);
 }
 
-/**
- * 生成 Clash Meta (Mihomo) Outbound 节点 YAML 代码片段
- */
-export function generateClashMetaConfig(nodesOrConfig, workerDomainOrConfig, maybeWorkerDomain) {
-  let nodes = [];
-  let workerDomain = '';
-  let config = {};
 
-  if (Array.isArray(nodesOrConfig)) {
-    nodes = nodesOrConfig;
-    config = workerDomainOrConfig || {};
-    workerDomain = maybeWorkerDomain || '';
-  } else {
-    config = nodesOrConfig || {};
-    workerDomain = workerDomainOrConfig || '';
-    nodes = generateAllVlessNodesSync(config, workerDomain);
-  }
-
-  const yamlLines = ['proxies:'];
-
-  for (const node of nodes) {
-    yamlLines.push(`  - name: "${node.name}"`);
-    yamlLines.push(`    type: vless`);
-    yamlLines.push(`    server: ${node.host}`);
-    yamlLines.push(`    port: ${node.port}`);
-    yamlLines.push(`    uuid: ${config.uuid}`);
-    yamlLines.push(`    network: ws`);
-    yamlLines.push(`    tls: true`);
-    yamlLines.push(`    udp: true`);
-    yamlLines.push(`    sni: ${workerDomain || node.host}`);
-    yamlLines.push(`    client-fingerprint: chrome`);
-    yamlLines.push(`    ws-opts:`);
-    yamlLines.push(`      path: "${config.proxyPath || '/'}"`);
-    yamlLines.push(`      headers:`);
-    yamlLines.push(`        Host: ${workerDomain || node.host}`);
-    yamlLines.push('');
-  }
-
-  return yamlLines.join('\n');
-}
-
-/**
- * 生成 Clash Meta (Mihomo) 客户端开箱即用完整配置文件 (本地兜底 Profile YAML)
- */
-export function generateClashFullProfile(nodesOrConfig, workerDomainOrConfig, maybeWorkerDomain) {
-  let nodes = [];
-  let workerDomain = '';
-  let config = {};
-
-  if (Array.isArray(nodesOrConfig)) {
-    nodes = nodesOrConfig;
-    config = workerDomainOrConfig || {};
-    workerDomain = maybeWorkerDomain || '';
-  } else {
-    config = nodesOrConfig || {};
-    workerDomain = workerDomainOrConfig || '';
-    nodes = generateAllVlessNodesSync(config, workerDomain);
-  }
-
-  const nodeNames = nodes.map(n => `"${n.name}"`);
-
-  let yaml = `port: 7890
-socks-port: 7891
-allow-lan: false
-mode: rule
-log-level: info
-unified-delay: true
-
-dns:
-  enable: true
-  listen: 0.0.0.0:1053
-  ipv6: false
-  default-nameserver: [223.5.5.5, 119.29.29.29]
-  nameserver: [https://1.1.1.1/dns-query, https://8.8.8.8/dns-query]
-
-proxies:
-`;
-
-  for (const node of nodes) {
-    yaml += `  - name: "${node.name}"
-    type: vless
-    server: ${node.host}
-    port: ${node.port}
-    uuid: ${config.uuid}
-    network: ws
-    tls: true
-    udp: true
-    sni: ${workerDomain || node.host}
-    client-fingerprint: chrome
-    ws-opts:
-      path: "${config.proxyPath || '/'}"
-      headers:
-        Host: ${workerDomain || node.host}
-`;
-  }
-
-  yaml += `
-proxy-groups:
-  - name: "🚀 节点选择"
-    type: select
-    proxies:
-      - "⚡ 自动优选"
-      ${nodeNames.map(n => `- ${n}`).join('\n      ')}
-      - "DIRECT"
-
-  - name: "⚡ 自动优选"
-    type: url-test
-    proxies:
-      ${nodeNames.map(n => `- ${n}`).join('\n      ')}
-    url: "https://www.gstatic.com/generate_204"
-    interval: 300
-    tolerance: 50
-
-rules:
-  - GEOIP,LAN,DIRECT
-  - MATCH,🚀 节点选择
-`;
-
-  return yaml;
-}
 

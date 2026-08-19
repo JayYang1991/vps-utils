@@ -116,7 +116,7 @@ async function handleUpdateProxyApi(request, env, config) {
     if (!parsed) {
       return jsonResponse({
         success: false,
-        error: '无法解析上游代理格式。支持 SOCKS5 (socks5://...)、HTTP (http://...)、OpenVPN (openvpn://... 或 ovpn://... 或 .ovpn 文本/base64)、host:port 等格式。',
+        error: '无法解析上游代理格式。支持 OpenVPN (原生 .ovpn 文本/Base64、openvpn:// 或 ovpn://)、SOCKS5 (socks5://...)、HTTP (http://...)、host:port 等格式。',
         raw: trimmedProxy,
       }, 400);
     }

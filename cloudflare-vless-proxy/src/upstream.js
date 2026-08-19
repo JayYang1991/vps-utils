@@ -123,18 +123,11 @@ export function parseOpenVpnConfig(content) {
     cert = certMatch[1].trim();
   }
 
-  // 提取 <key> 客户端私钥
+  // 提取 <key> 私钥
   let key = null;
   const keyMatch = text.match(/<key>([\s\S]*?)<\/key>/i);
   if (keyMatch) {
     key = keyMatch[1].trim();
-  }
-
-  // 提取 <tls-auth>
-  let tlsAuth = null;
-  const tlsAuthMatch = text.match(/<tls-auth>([\s\S]*?)<\/tls-auth>/i);
-  if (tlsAuthMatch) {
-    tlsAuth = tlsAuthMatch[1].trim();
   }
 
   if (!host) return null;
@@ -146,13 +139,13 @@ export function parseOpenVpnConfig(content) {
     username,
     password,
     proto,
-    cipher: cipher || undefined,
-    auth: auth || undefined,
-    hasCa: Boolean(ca),
+    cipher: cipher || 'AES-128-CBC',
+    auth: auth || 'SHA1',
+    hasCa: !!ca,
     ca: ca || undefined,
     cert: cert || undefined,
     key: key || undefined,
-    tlsAuth: tlsAuth || undefined,
+    raw: text,
   };
 }
 
@@ -161,13 +154,11 @@ export function parseOpenVpnConfig(content) {
  * 支持格式：
  * 1. socks5://user:pass@host:port 或 socks5://host:port
  * 2. http://user:pass@host:port 或 http://host:port
- * 3. openvpn://user:pass@host:port 或 openvpn://host:port (默认凭据 vpn:vpn)
- * 4. ovpn://user:pass@host:port 或 ovpn://host:port (默认凭据 vpn:vpn)
- * 5. OpenVPN .ovpn 原始配置文件文本 (包含 remote host port)
- * 6. Base64 编码的 .ovpn 配置文件内容
- * 7. user:pass@host:port (默认为 socks5)
- * 8. host:port:user:pass (默认为 socks5)
- * 9. host:port (默认为 socks5)
+ * 3. openvpn://user:pass@host:port 或 ovpn://host:port
+ * 4. 原生 .ovpn 配置文件文本或 Base64 字符串
+ * 5. user:pass@host:port (默认为 socks5)
+ * 6. host:port:user:pass (默认为 socks5)
+ * 7. host:port (默认为 socks5)
  * @param {string} rawProxy
  * @returns {object|null}
  */
@@ -177,23 +168,23 @@ export function parseProxyString(rawProxy) {
   if (!str) return null;
 
   try {
-    // 1. OpenVPN / OVPN 协议头
+    // 1. OpenVPN / .ovpn 文本或 base64
+    const ovpn = parseOpenVpnConfig(str);
+    if (ovpn) return ovpn;
+
+    // 2. OpenVPN URL 协议头 (openvpn:// 或 ovpn://)
     if (str.startsWith('openvpn://') || str.startsWith('ovpn://')) {
-      const cleanStr = str.replace(/^ovpn:\/\//i, 'openvpn://');
-      const url = new URL(cleanStr);
+      const isOvpn = str.startsWith('ovpn://');
+      const cleanUrl = isOvpn ? str.replace('ovpn://', 'http://') : str.replace('openvpn://', 'http://');
+      const url = new URL(cleanUrl);
       return {
         protocol: 'openvpn',
         host: url.hostname,
         port: parseInt(url.port, 10) || 443,
-        username: decodeURIComponent(url.username || '') || 'vpn',
-        password: decodeURIComponent(url.password || '') || 'vpn',
+        username: decodeURIComponent(url.username || 'vpn') || 'vpn',
+        password: decodeURIComponent(url.password || 'vpn') || 'vpn',
+        proto: 'tcp',
       };
-    }
-
-    // 2. OpenVPN .ovpn 文本或 Base64 字符串
-    const ovpnParsed = parseOpenVpnConfig(str);
-    if (ovpnParsed) {
-      return ovpnParsed;
     }
 
     // 3. SOCKS5 / HTTP 协议头
@@ -283,15 +274,12 @@ export async function createUpstreamConnection(targetHost, targetPort, upstreamP
   }
 
   // 通过住宅代理转发
-  console.log(`[Upstream:Proxy] 正在处理上游代理 -> 目标: ${targetHost}:${targetPort} | 代理服务器: ${proxy.protocol.toUpperCase()}://${proxy.host}:${proxy.port}`);
+  console.log(`[Upstream:Proxy] 正在通过住宅代理转发 -> 目标: ${targetHost}:${targetPort} | 代理服务器: ${proxy.protocol.toUpperCase()}://${proxy.host}:${proxy.port}`);
   try {
     if (proxy.protocol === 'socks5') {
       return await connectViaSocks5(proxy, targetHost, targetPort);
     } else if (proxy.protocol === 'http') {
       return await connectViaHttpConnect(proxy, targetHost, targetPort);
-    } else if (proxy.protocol === 'openvpn' || proxy.protocol === 'ovpn') {
-      console.log(`[Upstream:OpenVPN:Tunnel] 正在建立 OpenVPN 隧道中继封装 -> 目标: ${targetHost}:${targetPort} | 节点: ${proxy.host}:${proxy.port}`);
-      return await connectViaOpenVpn(proxy, targetHost, targetPort);
     } else {
       throw new Error(`Unsupported proxy protocol: ${proxy.protocol}`);
     }
@@ -561,182 +549,7 @@ async function readExactBytes(reader, length, timeoutMs = 2500) {
   return result;
 }
 
-/**
- * 封装 OpenVPN Data Channel TCP 报文 (Data Framing)
- * @param {Uint8Array} rawData 原始应用层数据载荷
- * @param {number} packetId 递增数据包序号
- * @returns {Uint8Array} 封装后的 OpenVPN TCP 报文 (含 2 字节包长、Opcode 与 4 字节 Packet ID)
- */
-export function wrapOpenVpnDataFrame(rawData, packetId = 1) {
-  const payloadLen = 1 + 4 + rawData.length;
-  const packet = new Uint8Array(2 + payloadLen);
-  
-  // 2 字节 TCP Frame 长度 (Big-Endian)
-  packet[0] = (payloadLen >> 8) & 0xff;
-  packet[1] = payloadLen & 0xff;
-  
-  // OpenVPN Data Header (P_DATA_V1, Opcode 6 << 3)
-  packet[2] = 0x30;
-  
-  // 4 字节 Packet ID (Big-Endian)
-  packet[3] = (packetId >>> 24) & 0xff;
-  packet[4] = (packetId >>> 16) & 0xff;
-  packet[5] = (packetId >>> 8) & 0xff;
-  packet[6] = packetId & 0xff;
-  
-  // 载荷数据
-  packet.set(rawData, 7);
-  return packet;
-}
 
-/**
- * 解封 OpenVPN TCP 数据报文
- * @param {Uint8Array} frame 完整的单个 OpenVPN TCP 帧
- * @returns {Uint8Array|null} 解封后的原始应用层载荷
- */
-export function unwrapOpenVpnDataFrame(frame) {
-  if (!frame || frame.length < 3) return null;
-  const opcode = frame[2] >> 3;
-  
-  // P_DATA_V1 (6), P_DATA_V2 (9)
-  if (opcode === 6 || opcode === 9) {
-    if (frame.length > 7) {
-      return frame.subarray(7);
-    }
-  } else if (opcode === 5 || opcode === 7 || opcode === 8) {
-    return null;
-  }
-  
-  return frame.length > 2 ? frame.subarray(2) : null;
-}
-
-/**
- * 通过 OpenVPN TCP 隧道封装转发 VLESS 进来的全部流量
- */
-async function connectViaOpenVpn(proxy, targetHost, targetPort) {
-  const connect = await getConnectFn();
-  let socket;
-  try {
-    socket = connect({
-      hostname: proxy.host,
-      port: proxy.port,
-    });
-  } catch (sockErr) {
-    console.error(`[OpenVPN:Socket:Error] 连接 OpenVPN 代理服务器 ${proxy.host}:${proxy.port} 失败:`, sockErr.message || sockErr);
-    throw sockErr;
-  }
-
-  const rawReader = socket.readable.getReader();
-  const rawWriter = socket.writable.getWriter();
-
-  try {
-    // 1. 发送 OpenVPN P_CONTROL_HARD_RESET_CLIENT_V2 握手包 (16 字节)
-    const payloadLen = 14;
-    const resetPacket = new Uint8Array(16);
-    resetPacket[0] = (payloadLen >> 8) & 0xff;
-    resetPacket[1] = payloadLen & 0xff;
-    resetPacket[2] = 0x38; // Opcode 7 << 3
-    crypto.getRandomValues(resetPacket.subarray(3, 11)); // 8 字节随机 Session ID
-    resetPacket[11] = 0;
-    resetPacket[12] = 0;
-    resetPacket[13] = 0;
-    resetPacket[14] = 0;
-    resetPacket[15] = 0;
-
-    await rawWriter.write(resetPacket);
-
-    // 2. 读取服务端响应 (带 2.5 秒超时快速保护)
-    const readPromise = rawReader.read();
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('OpenVPN 握手响应超时 (2.5s)')), 2500)
-    );
-
-    const { value, done } = await Promise.race([readPromise, timeoutPromise]);
-    if (done || !value || value.length < 3) {
-      throw new Error('未收到有效的 OpenVPN 服务端重置握手响应');
-    }
-
-    const respOpcode = value[2] >> 3;
-    const isValid = respOpcode === 8 || respOpcode === 5 || respOpcode === 7 || value[0] === 0x16 || value[2] === 0x16;
-    if (!isValid) {
-      throw new Error(`收到非 OpenVPN 协议响应 (Opcode: ${respOpcode})`);
-    }
-
-    console.log(`[OpenVPN:Handshake:OK] OpenVPN 握手建立成功 [${proxy.host}:${proxy.port}] (Opcode: ${respOpcode})，启用 OpenVPN Framing 隧道数据流封装`);
-
-    // 3. 构造 ACK 确认报文并发送
-    const ackPacket = new Uint8Array(10);
-    ackPacket[0] = 0x00;
-    ackPacket[1] = 0x08; // len 8
-    ackPacket[2] = 0x28; // P_ACK_V1 (Opcode 5 << 3)
-    if (value.length >= 11) {
-      ackPacket.set(value.subarray(3, 11), 3); // Echo server session id
-    }
-    await rawWriter.write(ackPacket);
-
-    rawReader.releaseLock();
-    rawWriter.releaseLock();
-
-    // 4. 创建双向 OpenVPN 数据帧包装器流
-    let packetSeq = 1;
-
-    // 写入流转换器：将输入的数据封装为 OpenVPN Data Frame
-    const transformWritable = new TransformStream({
-      transform(chunk, controller) {
-        if (!chunk || chunk.length === 0) return;
-        const wrapped = wrapOpenVpnDataFrame(chunk, packetSeq++);
-        controller.enqueue(wrapped);
-      }
-    });
-
-    // 读取流转换器：按 2 字节包长解包 OpenVPN 帧并提取 Payload
-    let buffer = new Uint8Array(0);
-    const transformReadable = new TransformStream({
-      transform(chunk, controller) {
-        if (!chunk || chunk.length === 0) return;
-        const merged = new Uint8Array(buffer.length + chunk.length);
-        merged.set(buffer);
-        merged.set(chunk, buffer.length);
-        buffer = merged;
-
-        while (buffer.length >= 2) {
-          const frameLen = (buffer[0] << 8) | buffer[1];
-          const totalPacketLen = 2 + frameLen;
-          if (buffer.length < totalPacketLen) {
-            break; // 需等待更多字节
-          }
-
-          const frame = buffer.subarray(0, totalPacketLen);
-          buffer = buffer.subarray(totalPacketLen);
-
-          const unwrapped = unwrapOpenVpnDataFrame(frame);
-          if (unwrapped && unwrapped.length > 0) {
-            controller.enqueue(unwrapped);
-          }
-        }
-      }
-    });
-
-    // 桥接管道
-    transformWritable.readable.pipeTo(socket.writable).catch(() => {});
-    socket.readable.pipeThrough(transformReadable);
-
-    const tunnelSocket = {
-      readable: transformReadable.readable,
-      writable: transformWritable.writable,
-      close: () => {
-        try { socket.close(); } catch (_) {}
-      }
-    };
-
-    return { socket: tunnelSocket };
-  } catch (err) {
-    try { rawReader.releaseLock(); } catch (_) {}
-    try { rawWriter.releaseLock(); } catch (_) {}
-    try { socket.close(); } catch (_) {}
-    throw err;
-  }
-}
 
 /**
  * 解析 IPv6 字符串为 16 字节 Uint8Array
