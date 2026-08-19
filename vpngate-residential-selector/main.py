@@ -171,6 +171,58 @@ def _render_nodes_table(nodes: List[Dict[str, Any]]) -> None:
     print("")
 
 
+def clean_historical_data(results_dir: str = "results") -> int:
+    """Cleans all historical node databases, state pools, and fraud score caches."""
+    search_dirs = [
+        results_dir,
+        os.path.join(SCRIPT_DIR, results_dir),
+        "/usr/local/bin/vpngate-residential-selector/results",
+        os.path.expanduser("~/.local/bin/vpngate-residential-selector/results")
+    ]
+
+    cleaned_files = []
+    target_filenames = [
+        "all_discovered_nodes.json",
+        "residential_pool.json",
+        "scamalytics_cache.json",
+        "residential_nodes.json",
+        "proxies.txt",
+        "upstream_gateway.txt",
+        "vpngate_top20.txt",
+        "singbox_outbounds.json",
+        "summary.md"
+    ]
+
+    for r_dir in set(search_dirs):
+        if not os.path.exists(r_dir):
+            continue
+        for fname in target_filenames:
+            fpath = os.path.join(r_dir, fname)
+            if os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                    cleaned_files.append(fpath)
+                except Exception as e:
+                    logging.warning(f"删除 {fpath} 失败: {e}")
+        try:
+            for f in os.listdir(r_dir):
+                if f.startswith("proxies_") and f.endswith(".txt"):
+                    fpath = os.path.join(r_dir, f)
+                    os.remove(fpath)
+                    cleaned_files.append(fpath)
+        except Exception:
+            pass
+
+    if cleaned_files:
+        print(f"\n🧹 已成功清理 {len(cleaned_files)} 个历史数据库与缓存文件:")
+        for f in sorted(set(cleaned_files)):
+            print(f"   • 已删除: {f}")
+        print("✅ 历史沉淀库、状态池与威胁分缓存已彻底清空！下次运行将重新全量拉取与测速。\n")
+    else:
+        print(f"\nℹ️ 未发现任何需要清理的历史数据库或缓存文件。\n")
+    return 0
+
+
 def parse_arguments() -> argparse.Namespace:
     """Parses command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -182,6 +234,12 @@ def parse_arguments() -> argparse.Namespace:
         "--list", "-l",
         action="store_true",
         help="查看当前已选出的全部住宅节点列表 (从本地状态文件直接读取展示，不重新测速)"
+    )
+
+    parser.add_argument(
+        "--clean", "-C",
+        action="store_true",
+        help="清理本地历史沉淀节点数据库与 Scamalytics 威胁分缓存"
     )
 
     parser.add_argument(
@@ -310,16 +368,23 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     """Main CLI execution flow."""
-    # Check if invoked as vpngate-nodes or with list positional arg
+    # Check if invoked as vpngate-nodes or with list/clean positional args
     if len(sys.argv) > 1 and sys.argv[1] in ("list", "nodes", "show"):
         sys.argv.pop(1)
         sys.argv.append("--list")
+    elif len(sys.argv) > 1 and sys.argv[1] in ("clean", "clear"):
+        sys.argv.pop(1)
+        sys.argv.append("--clean")
     elif os.path.basename(sys.argv[0]) == "vpngate-nodes":
         if "--list" not in sys.argv and "-l" not in sys.argv:
             sys.argv.append("--list")
 
     args = parse_arguments()
     setup_logging(verbose=args.verbose, quiet=args.quiet)
+
+    # Fast path: clean historical data
+    if args.clean:
+        return clean_historical_data(results_dir=args.output)
 
     # Fast path: display current selected nodes
     if args.list:

@@ -115,20 +115,22 @@ stop_existing_service() {
 install_files() {
     info "正在执行完全覆盖安装至 ${INSTALL_DIR} ..."
 
-    # 1. 临时备份现有历史状态与缓存数据
-    local tmp_backup_dir
-    tmp_backup_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'vpngate_bak')
-
-    if [ -d "${INSTALL_DIR}/results" ]; then
-        [ -f "${INSTALL_DIR}/results/residential_pool.json" ] && cp -f "${INSTALL_DIR}/results/residential_pool.json" "${tmp_backup_dir}/" 2>/dev/null || true
-        [ -f "${INSTALL_DIR}/results/all_discovered_nodes.json" ] && cp -f "${INSTALL_DIR}/results/all_discovered_nodes.json" "${tmp_backup_dir}/" 2>/dev/null || true
-        [ -f "${INSTALL_DIR}/results/scamalytics_cache.json" ] && cp -f "${INSTALL_DIR}/results/scamalytics_cache.json" "${tmp_backup_dir}/" 2>/dev/null || true
-    fi
-
-    if [ -d "${SCRIPT_DIR}/results" ]; then
-        [ -f "${SCRIPT_DIR}/results/residential_pool.json" ] && cp -f "${SCRIPT_DIR}/results/residential_pool.json" "${tmp_backup_dir}/" 2>/dev/null || true
-        [ -f "${SCRIPT_DIR}/results/all_discovered_nodes.json" ] && cp -f "${SCRIPT_DIR}/results/all_discovered_nodes.json" "${tmp_backup_dir}/" 2>/dev/null || true
-        [ -f "${SCRIPT_DIR}/results/scamalytics_cache.json" ] && cp -f "${SCRIPT_DIR}/results/scamalytics_cache.json" "${tmp_backup_dir}/" 2>/dev/null || true
+    # 1. 临时备份现有历史状态与缓存数据 (若传入 --clean 则不备份，执行全新初始化)
+    local tmp_backup_dir=""
+    if [ "${CLEAN_MODE}" != true ]; then
+        tmp_backup_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'vpngate_bak')
+        if [ -d "${INSTALL_DIR}/results" ]; then
+            [ -f "${INSTALL_DIR}/results/residential_pool.json" ] && cp -f "${INSTALL_DIR}/results/residential_pool.json" "${tmp_backup_dir}/" 2>/dev/null || true
+            [ -f "${INSTALL_DIR}/results/all_discovered_nodes.json" ] && cp -f "${INSTALL_DIR}/results/all_discovered_nodes.json" "${tmp_backup_dir}/" 2>/dev/null || true
+            [ -f "${INSTALL_DIR}/results/scamalytics_cache.json" ] && cp -f "${INSTALL_DIR}/results/scamalytics_cache.json" "${tmp_backup_dir}/" 2>/dev/null || true
+        fi
+        if [ -d "${SCRIPT_DIR}/results" ]; then
+            [ -f "${SCRIPT_DIR}/results/residential_pool.json" ] && cp -f "${SCRIPT_DIR}/results/residential_pool.json" "${tmp_backup_dir}/" 2>/dev/null || true
+            [ -f "${SCRIPT_DIR}/results/all_discovered_nodes.json" ] && cp -f "${SCRIPT_DIR}/results/all_discovered_nodes.json" "${tmp_backup_dir}/" 2>/dev/null || true
+            [ -f "${SCRIPT_DIR}/results/scamalytics_cache.json" ] && cp -f "${SCRIPT_DIR}/results/scamalytics_cache.json" "${tmp_backup_dir}/" 2>/dev/null || true
+        fi
+    else
+        info "🧹 正在执行纯净全新安装 (--clean): 清除全部历史数据库与缓存..."
     fi
 
     # 2. 完全清除旧版安装目录
@@ -150,16 +152,18 @@ install_files() {
     cp -f "${SCRIPT_DIR}/service.sh" "${INSTALL_DIR}/"
 
     # 4. 恢复历史状态与缓存
-    if [ -f "${tmp_backup_dir}/residential_pool.json" ]; then
-        cp -f "${tmp_backup_dir}/residential_pool.json" "${INSTALL_DIR}/results/"
+    if [ -n "${tmp_backup_dir}" ] && [ -d "${tmp_backup_dir}" ]; then
+        if [ -f "${tmp_backup_dir}/residential_pool.json" ]; then
+            cp -f "${tmp_backup_dir}/residential_pool.json" "${INSTALL_DIR}/results/"
+        fi
+        if [ -f "${tmp_backup_dir}/all_discovered_nodes.json" ]; then
+            cp -f "${tmp_backup_dir}/all_discovered_nodes.json" "${INSTALL_DIR}/results/"
+        fi
+        if [ -f "${tmp_backup_dir}/scamalytics_cache.json" ]; then
+            cp -f "${tmp_backup_dir}/scamalytics_cache.json" "${INSTALL_DIR}/results/"
+        fi
+        rm -rf "${tmp_backup_dir}" 2>/dev/null || true
     fi
-    if [ -f "${tmp_backup_dir}/all_discovered_nodes.json" ]; then
-        cp -f "${tmp_backup_dir}/all_discovered_nodes.json" "${INSTALL_DIR}/results/"
-    fi
-    if [ -f "${tmp_backup_dir}/scamalytics_cache.json" ]; then
-        cp -f "${tmp_backup_dir}/scamalytics_cache.json" "${INSTALL_DIR}/results/"
-    fi
-    rm -rf "${tmp_backup_dir}" 2>/dev/null || true
 
     # 5. 清理可能存在的 __pycache__ 缓存
     find "${INSTALL_DIR}" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -254,8 +258,19 @@ SERVICE_EOF
 }
 
 main() {
+    CLEAN_MODE=false
+    for arg in "$@"; do
+        if [ "$arg" = "--clean" ] || [ "$arg" = "-c" ] || [ "$arg" = "clean" ]; then
+            CLEAN_MODE=true
+        fi
+    done
+
     echo -e "${BLUE}==================================================================${NC}"
-    echo -e "${BLUE}  🌐 VPNGATE 7国住宅 IP 优选与 Systemd 服务完全覆盖安装脚本       ${NC}"
+    if [ "${CLEAN_MODE}" = true ]; then
+        echo -e "${BLUE}  🌐 VPNGATE 7国住宅 IP 优选与 Systemd 服务纯净全新覆盖安装脚本  ${NC}"
+    else
+        echo -e "${BLUE}  🌐 VPNGATE 7国住宅 IP 优选与 Systemd 服务完全覆盖安装脚本       ${NC}"
+    fi
     echo -e "${BLUE}==================================================================${NC}"
 
     check_dependencies

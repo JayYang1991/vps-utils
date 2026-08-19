@@ -94,6 +94,9 @@ vpngate-selector -l
 # 查看全部已选出节点列表
 vpngate-service list
 
+# 清理历史节点沉淀库、7国保活状态池与 Scamalytics 威胁分缓存并重置
+vpngate-service clean
+
 # 查看服务运行状态及当前 7 国保活节点统计看板
 vpngate-service status
 
@@ -123,10 +126,13 @@ vpngate-service uninstall
 # 1. 默认精选全球 TOP 20 纯净住宅节点 (威胁分 < 20)
 vpngate-selector
 
-# 2. 指定提取数量 (如精选最优 TOP 10)
+# 2. 清理全部历史沉淀库与 Scamalytics 威胁分缓存
+vpngate-selector --clean
+
+# 3. 指定提取数量 (如精选最优 TOP 10)
 vpngate-selector -n 10
 
-# 3. 指定筛选特定国家 (如仅筛选日本、韩国、美国)
+# 4. 指定筛选特定国家 (如仅筛选日本、韩国、美国)
 vpngate-selector -c JP,KR,US -n 10
 
 # 4. 自定义 Scamalytics 威胁分阈值 (如严格筛选低于 5 分的极致纯净节点)

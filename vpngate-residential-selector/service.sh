@@ -82,6 +82,29 @@ uninstall_service() {
     info "✅ ${SERVICE_NAME} 服务与 ${BIN_DIR} 依赖文件已彻底清理卸载！"
 }
 
+clean_history() {
+    info "正在清理历史节点沉淀库、7国保活状态池与 Scamalytics 威胁分缓存..."
+    local was_active=false
+    if ${SYSTEMCTL_CMD} is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+        was_active=true
+        ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" 2>/dev/null || true
+    fi
+
+    # 清理安装目录与源码目录中的历史数据与缓存
+    rm -rf "${INSTALL_DIR}/results"/* 2>/dev/null || true
+    mkdir -p "${INSTALL_DIR}/results"
+
+    rm -rf "${SCRIPT_DIR}/results"/* 2>/dev/null || true
+    mkdir -p "${SCRIPT_DIR}/results"
+
+    info "✅ 历史节点数据库与威胁分缓存已彻底清空！"
+
+    if [ "$was_active" = true ]; then
+        info "正在重新启动 ${SERVICE_NAME} 服务并触发全新一轮全量测速构建..."
+        ${SYSTEMCTL_CMD} start "${SERVICE_NAME}"
+    fi
+}
+
 list_nodes() {
     shift || true
     if [ -x "${INSTALL_DIR}/main.py" ]; then
@@ -96,10 +119,11 @@ list_nodes() {
 
 usage() {
     echo -e "${BLUE}VPNGATE 7国住宅代理 Systemd 后台服务管理脚本${NC}"
-    echo "用法: $0 {list|status|logs|start|stop|restart|install|uninstall} [参数]"
+    echo "用法: $0 {list|clean|status|logs|start|stop|restart|install|uninstall} [参数]"
     echo ""
     echo "命令选项:"
     echo "  list|nodes 查看当前已选出的全部保活住宅节点列表 (支持 -c JP,US 筛选)"
+    echo "  clean      清理历史节点沉淀库、7国状态池与 Scamalytics 威胁分缓存并重置"
     echo "  status     查看后台服务运行状态与进程信息"
     echo "  logs       实时追踪查看 5 分钟健康检查与节点热替换日志"
     echo "  start      启动后台保活服务"
@@ -110,7 +134,7 @@ usage() {
     echo ""
     echo "示例:"
     echo "  $0 list           # 查看当前全部 7 国已选出的节点"
-    echo "  $0 list -c JP     # 仅查看日本 (JP) 节点"
+    echo "  $0 clean          # 清理全部历史数据库并重新初始化"
     echo "  $0 logs           # 实时跟踪日志"
     echo ""
 }
@@ -118,6 +142,9 @@ usage() {
 case "$1" in
     list|nodes|show)
         list_nodes "$@"
+        ;;
+    clean|clear)
+        clean_history
         ;;
     install)
         install_service
