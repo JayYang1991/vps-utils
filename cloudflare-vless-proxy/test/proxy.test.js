@@ -1,9 +1,42 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseProxyString } from '../src/upstream.js';
+import { parseProxyString, wrapOpenVpnDataFrame, unwrapOpenVpnDataFrame } from '../src/upstream.js';
 import { parseVlessHeader, bytesToUUID } from '../src/vless.js';
 import { generateVlessUrl, generateAllVlessNodes, generateSingboxConfig, generateClashMetaConfig } from '../src/sub.js';
 import { hashPassword, normalizePath } from '../src/config.js';
+
+describe('OpenVPN Packet Framing & Tunnel Encapsulation', () => {
+  it('should wrap raw application data into valid OpenVPN TCP data frame', () => {
+    const raw = new TextEncoder().encode('GET /index.html HTTP/1.1\r\nHost: test.com\r\n\r\n');
+    const wrapped = wrapOpenVpnDataFrame(raw, 42);
+    assert.ok(wrapped instanceof Uint8Array);
+    
+    // 2 bytes length header (Big Endian)
+    const expectedPayloadLen = 1 + 4 + raw.length;
+    const actualLenHeader = (wrapped[0] << 8) | wrapped[1];
+    assert.equal(actualLenHeader, expectedPayloadLen);
+    assert.equal(wrapped.length, 2 + expectedPayloadLen);
+
+    // Opcode byte (0x30 = P_DATA_V1)
+    assert.equal(wrapped[2] >> 3, 6);
+
+    // Packet ID (42)
+    const packetId = (wrapped[3] << 24) | (wrapped[4] << 16) | (wrapped[5] << 8) | wrapped[6];
+    assert.equal(packetId, 42);
+
+    // Unwrap
+    const unwrapped = unwrapOpenVpnDataFrame(wrapped);
+    assert.ok(unwrapped);
+    assert.equal(new TextDecoder().decode(unwrapped), 'GET /index.html HTTP/1.1\r\nHost: test.com\r\n\r\n');
+  });
+
+  it('should safely ignore non-data OpenVPN control/ACK frames during unwrapping', () => {
+    // Construct an ACK frame (Opcode 5 << 3 = 0x28)
+    const ackFrame = new Uint8Array([0x00, 0x01, 0x28]);
+    const res = unwrapOpenVpnDataFrame(ackFrame);
+    assert.equal(res, null);
+  });
+});
 
 describe('Upstream Proxy String Parser', () => {
   it('should parse standard socks5:// url with user/pass', () => {
