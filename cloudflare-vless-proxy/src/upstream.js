@@ -80,6 +80,35 @@ export function parseOpenVpnConfig(content) {
     }
   }
 
+  // 正则回退提取（防止换行符丢失或单行被压缩的情况）
+  if (!host) {
+    const remoteMatch = text.match(/(?:^|\s)remote\s+([a-zA-Z0-9\.\-\_]+)(?:\s+(\d+))?/i);
+    if (remoteMatch) {
+      host = remoteMatch[1].trim();
+      if (remoteMatch[2]) {
+        const parsedPort = parseInt(remoteMatch[2].trim(), 10);
+        if (!isNaN(parsedPort) && parsedPort > 0) {
+          port = parsedPort;
+        }
+      }
+    }
+  }
+
+  if (!cipher) {
+    const cipherMatch = text.match(/(?:^|\s)cipher\s+([a-zA-Z0-9\-\_]+)/i);
+    if (cipherMatch) cipher = cipherMatch[1].trim();
+  }
+
+  if (!auth) {
+    const authMatch = text.match(/(?:^|\s)auth\s+([a-zA-Z0-9\-\_]+)/i);
+    if (authMatch) auth = authMatch[1].trim();
+  }
+
+  const protoMatch = text.match(/(?:^|\s)proto\s+(tcp|udp)/i);
+  if (protoMatch) {
+    proto = protoMatch[1].toLowerCase();
+  }
+
   // 提取 <ca> 根证书
   let ca = null;
   const caMatch = text.match(/<ca>([\s\S]*?)<\/ca>/i);

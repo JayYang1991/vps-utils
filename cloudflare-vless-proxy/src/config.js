@@ -11,7 +11,7 @@ export const DEFAULT_CONFIG = {
   uuid: 'd342d11e-d424-4583-b36e-524ab1f0afa4',
   proxyPath: '/data-ws',
   adminPath: '/admin',
-  adminPassword: 'AdminPassword123!',
+  adminPassword: 'test1234!',
   apiToken: '',
   upstreamProxy: '',
   cleanIPs: 'cloudflare.com\ncf.090227.xyz\nvisa.cn\nicook.hk',

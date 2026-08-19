@@ -458,7 +458,11 @@ function getAdminHTML(host, adminPath) {
       <div class="form-group">
         <input type="password" id="login-pass" class="form-control" placeholder="输入管理密码..." onkeydown="if(event.key==='Enter') doLogin()">
       </div>
-      <button class="btn" style="width: 100%; justify-content: center;" onclick="doLogin()">登 录</button>
+      <button id="btn-do-login" class="btn" style="width: 100%; justify-content: center;" onclick="doLogin()">登 录</button>
+      <div id="login-error-msg" style="margin-top: 12px; font-size: 0.85rem; color: #ef4444; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); padding: 8px 12px; border-radius: 6px; display: none;"></div>
+      <p style="margin-top: 16px; font-size: 0.78rem; color: var(--text-muted); text-align: center; border-top: 1px solid var(--card-border); padding-top: 12px;">
+        💡 初始默认密码为 <code>test1234!</code><br>(可于 wrangler.toml 或 KV 中自定义修改)
+      </p>
     </div>
   </div>
 
@@ -612,9 +616,9 @@ function getAdminHTML(host, adminPath) {
 
         <div class="form-group">
           <label class="form-label">住宅 IP / 上游代理 (Upstream Residential Proxy)</label>
-          <div class="input-with-action">
-            <input type="text" id="cfg-upstream" class="form-control" placeholder="例如: socks5://user:pass@host:1080 或 openvpn://vpn:vpn@ip:443 或 http://user:pass@host:8080">
-            <button class="btn btn-secondary" onclick="testUpstreamLive()">⚡ 测试连通性</button>
+          <div class="input-with-action" style="align-items: flex-start;">
+            <textarea id="cfg-upstream" rows="2" class="form-control" style="resize: vertical; font-family: monospace; font-size: 0.85rem;" placeholder="例如: socks5://user:pass@host:1080 或 openvpn://vpn:vpn@ip:443 或粘贴 .ovpn 文本"></textarea>
+            <button class="btn btn-secondary" style="height: 42px; flex-shrink: 0;" onclick="testUpstreamLive()">⚡ 测试连通性</button>
           </div>
           <div id="upstream-test-res" class="test-result-box"></div>
           <p class="help-text">
@@ -736,8 +740,28 @@ function getAdminHTML(host, adminPath) {
     let subconfigsLoaded = false;
 
     async function doLogin() {
-      const pass = document.getElementById('login-pass').value;
-      if (!pass) return showToast('请输入密码', 'error');
+      const passInput = document.getElementById('login-pass');
+      const errorDiv = document.getElementById('login-error-msg');
+      const loginBtn = document.getElementById('btn-do-login');
+      const pass = passInput ? passInput.value.trim() : '';
+
+      if (errorDiv) {
+        errorDiv.style.display = 'none';
+        errorDiv.innerText = '';
+      }
+
+      if (!pass) {
+        if (errorDiv) {
+          errorDiv.innerText = '❌ 请输入管理密码';
+          errorDiv.style.display = 'block';
+        }
+        return showToast('请输入密码', 'error');
+      }
+
+      if (loginBtn) {
+        loginBtn.disabled = true;
+        loginBtn.innerText = '⏳ 正在验证并登录...';
+      }
 
       try {
         const res = await fetch('${adminPath}/api/login', {
@@ -750,12 +774,28 @@ function getAdminHTML(host, adminPath) {
           localStorage.setItem('vless_token', data.token);
           document.getElementById('login-overlay').style.display = 'none';
           document.getElementById('app-container').style.display = 'block';
+          showToast('✅ 登录成功！', 'success');
           loadDashboard();
         } else {
-          showToast(data.message || '密码错误', 'error');
+          const errMsg = data.message || '密码错误，请重试';
+          if (errorDiv) {
+            errorDiv.innerText = '❌ ' + errMsg;
+            errorDiv.style.display = 'block';
+          }
+          showToast(errMsg, 'error');
         }
       } catch (err) {
-        showToast('登录请求失败', 'error');
+        const errMsg = '登录请求异常: ' + (err.message || err);
+        if (errorDiv) {
+          errorDiv.innerText = '❌ ' + errMsg;
+          errorDiv.style.display = 'block';
+        }
+        showToast(errMsg, 'error');
+      } finally {
+        if (loginBtn) {
+          loginBtn.disabled = false;
+          loginBtn.innerText = '登 录';
+        }
       }
     }
 
@@ -766,6 +806,8 @@ function getAdminHTML(host, adminPath) {
 
     async function loadDashboard() {
       const token = localStorage.getItem('vless_token');
+      const errorDiv = document.getElementById('login-error-msg');
+
       if (!token) {
         document.getElementById('login-overlay').style.display = 'flex';
         return;
@@ -778,7 +820,16 @@ function getAdminHTML(host, adminPath) {
         if (res.status === 401) {
           localStorage.removeItem('vless_token');
           document.getElementById('login-overlay').style.display = 'flex';
+          if (errorDiv) {
+            errorDiv.innerText = '🔐 登录会话已失效，请重新输入密码登录';
+            errorDiv.style.display = 'block';
+          }
           return;
+        }
+
+        if (!res.ok) {
+          const errText = await res.text();
+          throw new Error('服务端返回 HTTP ' + res.status + ': ' + errText);
         }
 
         appData = await res.json();
