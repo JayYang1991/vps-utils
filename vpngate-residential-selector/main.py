@@ -382,6 +382,12 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--push", "-P",
+        action="store_true",
+        help="手动推送当前最优住宅代理 (.ovpn) 至 Cloudflare VLESS 代理网关 (直接提取本地最优节点并推送)"
+    )
+
+    parser.add_argument(
         "--quiet", "-q",
         action="store_true",
         help="静默模式 (仅输出最终简要信息)"
@@ -398,7 +404,12 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     """Main CLI execution flow."""
-    # Check if invoked as vpngate-nodes or with list/clean positional args
+    # Check if invoked as vpngate-nodes or with list/clean/push positional args
+    if len(sys.argv) > 1 and sys.argv[1] in ("push", "cf-push"):
+        from pusher import main as pusher_main
+        sys.argv.pop(1)
+        return pusher_main()
+
     if len(sys.argv) > 1 and sys.argv[1] in ("list", "nodes", "show"):
         sys.argv.pop(1)
         sys.argv.append("--list")
@@ -411,6 +422,11 @@ def main() -> int:
 
     args = parse_arguments()
     setup_logging(verbose=args.verbose, quiet=args.quiet)
+
+    # Fast path: manual push to Cloudflare
+    if args.push:
+        from pusher import main as pusher_main
+        return pusher_main()
 
     # Fast path: clean historical data
     if args.clean:

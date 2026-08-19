@@ -319,25 +319,27 @@ class TestVpnGateSelector(unittest.TestCase):
 
     def test_pusher_unconfigured(self):
         import tempfile
+        from unittest.mock import patch
         from pusher import CloudflareVlessPusher
 
         with tempfile.TemporaryDirectory() as test_dir:
-            pusher = CloudflareVlessPusher(push_url="", api_token="", state_dir=test_dir)
-            self.assertFalse(pusher.is_configured())
+            with patch.dict(os.environ, {"CF_VLESS_PUSH_URL": "", "CF_VLESS_API_TOKEN": "", "CF_PUSH_URL": "", "CF_PUSH_TOKEN": ""}):
+                pusher = CloudflareVlessPusher(push_url="", api_token="", state_dir=test_dir, auto_save=False)
+                self.assertFalse(pusher.is_configured())
 
-            s = VpnGateServer(
-                hostname="s1", ip="219.100.37.13", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
-                country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
-                total_users=1, total_traffic=1, operator="", message=""
-            )
-            r = BenchmarkResult(
-                server=s, reachable=True, protocol="openvpn", real_latency_ms=15.0, min_latency_ms=14.0,
-                max_latency_ms=16.0, jitter_ms=1.0, packet_loss_rate=0.0,
-                tested_port=443, composite_score=1000.0
-            )
+                s = VpnGateServer(
+                    hostname="s1", ip="219.100.37.13", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+                    country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
+                    total_users=1, total_traffic=1, operator="", message=""
+                )
+                r = BenchmarkResult(
+                    server=s, reachable=True, protocol="openvpn", real_latency_ms=15.0, min_latency_ms=14.0,
+                    max_latency_ms=16.0, jitter_ms=1.0, packet_loss_rate=0.0,
+                    tested_port=443, composite_score=1000.0
+                )
 
-            res = pusher.push_best_node_if_changed(r)
-            self.assertEqual(res["status"], "unconfigured")
+                res = pusher.push_best_node_if_changed(r)
+                self.assertEqual(res["status"], "unconfigured")
 
     def test_pusher_ovpn_generation_and_change_detection(self):
         import tempfile
@@ -415,6 +417,79 @@ class TestVpnGateSelector(unittest.TestCase):
             # 验证状态更新为节点 B
             state_updated = pusher.get_last_pushed_state()
             self.assertEqual(state_updated["node_key"], "125.132.8.21:995")
+
+    def test_pusher_find_best_node_and_manual_push(self):
+        import tempfile
+        from unittest.mock import patch, MagicMock
+        from pusher import find_best_node_from_results, CloudflareVlessPusher
+
+        with tempfile.TemporaryDirectory() as test_dir:
+            pool_data = {
+                "pools": {
+                    "JP": [
+                        {"ip": "219.100.37.13", "port": 443, "country_short": "JP", "composite_score": 1200.0, "fraud_score": 0, "ovpn_b64": "ZHVtbXk="},
+                        {"ip": "219.100.37.14", "port": 992, "country_short": "JP", "composite_score": 900.0, "fraud_score": 5, "ovpn_b64": "ZHVtbXk="},
+                    ],
+                    "US": [
+                        {"ip": "104.28.1.1", "port": 443, "country_short": "US", "composite_score": 1100.0, "fraud_score": 2, "ovpn_b64": "ZHVtbXk="},
+                    ]
+                }
+            }
+            with open(os.path.join(test_dir, "residential_pool.json"), "w", encoding="utf-8") as f:
+                json.dump(pool_data, f)
+
+            # 1. 查找最优节点 (应为 JP 219.100.37.13)
+            best = find_best_node_from_results(test_dir)
+            self.assertIsNotNone(best)
+            self.assertEqual(best["ip"], "219.100.37.13")
+            self.assertEqual(best["port"], 443)
+
+            # 2. 手动直接推送字典格式节点
+            mock_resp = MagicMock()
+            mock_resp.getcode.return_value = 200
+            mock_resp.read.return_value = json.dumps({"success": True}).encode("utf-8")
+            mock_resp.__enter__.return_value = mock_resp
+
+            pusher = CloudflareVlessPusher(
+                push_url="https://worker.dev/api/upstream",
+                api_token="test_token",
+                state_dir=test_dir
+            )
+
+            with patch("urllib.request.urlopen", return_value=mock_resp) as mock_urlopen:
+                res = pusher.push_best_node_if_changed(best, force=True)
+                self.assertEqual(res["status"], "success")
+                self.assertEqual(res["node_key"], "219.100.37.13:443")
+                self.assertEqual(mock_urlopen.call_count, 1)
+
+    def test_pusher_config_persistence_and_normalization(self):
+        import tempfile
+        from pusher import save_push_config, load_push_config, normalize_push_url, CloudflareVlessPusher
+
+        # 1. Test URL normalization
+        self.assertEqual(normalize_push_url("my-worker.workers.dev"), "https://my-worker.workers.dev/api/upstream")
+        self.assertEqual(normalize_push_url("http://my-worker.workers.dev/"), "http://my-worker.workers.dev/api/upstream")
+        self.assertEqual(normalize_push_url("https://my-worker.workers.dev/api/upstream"), "https://my-worker.workers.dev/api/upstream")
+        self.assertEqual(normalize_push_url("https://my-worker.workers.dev/api/proxy"), "https://my-worker.workers.dev/api/proxy")
+
+        with tempfile.TemporaryDirectory() as test_dir:
+            # 2. Test saving configuration
+            saved_file = save_push_config(
+                {"push_url": "vless.domain.com", "api_token": "cf-push-123456"},
+                base_dir=test_dir
+            )
+            self.assertTrue(os.path.exists(saved_file))
+
+            # 3. Test loading configuration from saved file
+            loaded = load_push_config(base_dir=test_dir)
+            self.assertEqual(loaded["push_url"], "https://vless.domain.com/api/upstream")
+            self.assertEqual(loaded["api_token"], "cf-push-123456")
+
+            # 4. Test CloudflareVlessPusher auto-loading and auto-saving
+            pusher = CloudflareVlessPusher(state_dir=test_dir, auto_save=True)
+            self.assertTrue(pusher.is_configured())
+            self.assertEqual(pusher.push_url, "https://vless.domain.com/api/upstream")
+            self.assertEqual(pusher.api_token, "cf-push-123456")
 
 
 if __name__ == "__main__":

@@ -65,19 +65,41 @@ sudo ./install.sh
 
 ## 💻 服务安装后的全局命令用法 (Command Usage)
 
-安装完成后，系统已注册以下 **5 个全局快捷命令**，可在任意目录下直接调用：
+安装完成后，系统已注册以下 **6 个全局快捷命令**，可在任意目录下直接调用：
 
 ```
-• vpngate-nodes     -> 🚀 查看当前已选出的全部 7 国住宅代理节点列表 (支持 -c JP)
-• vpngate-service   -> ⚙️ 管理后台 Systemd 自动保活服务 (支持 list/status/logs/启停)
-• vpngate-selector  -> 🔍 手动单次运行全量测速与纯净住宅节点提取 (支持 -l 查看)
-• vpngate-bridge    -> 🌉 启动本地 SOCKS5 (10808) / HTTP (10809) 住宅中继网桥
-• vpngate-daemon    -> 🛡️ 前台直接运行 7 国保活守护进程
+• vpngate-push     -> 🚀 手动推送当前最优住宅代理 (.ovpn) 至 Cloudflare 网关
+• vpngate-nodes    -> 📋 查看当前已选出的全部 7 国住宅代理节点列表 (支持 -c JP)
+• vpngate-service  -> ⚙️ 管理后台 Systemd 自动保活服务 (支持 list/push/status/logs/启停)
+• vpngate-selector -> 🔍 手动单次运行全量测速与纯净住宅节点提取 (支持 push/list)
+• vpngate-bridge   -> 🌉 启动本地 SOCKS5 (10808) / HTTP (10809) 住宅中继网桥
+• vpngate-daemon   -> 🛡️ 前台直接运行 7 国保活守护进程
 ```
 
 ---
 
-### 1️⃣ `vpngate-nodes` & `vpngate-service list` — 查看当前已选出的所有节点
+### 1️⃣ `vpngate-push` & `vpngate-service push` — 手动一键推送最优代理 (✨ 新增)
+
+直接提取本地当前评分最高的纯净家庭宽带节点，生成完整 `.ovpn` 文件并立即推送到 Cloudflare VLESS Proxy 网关：
+
+```bash
+# 1. 直接一键推送 (从本地提取评分最高的住宅节点立即推送)
+vpngate-push
+
+# 2. 通过 vpngate-service 或 vpngate-selector 同样可快捷推送
+vpngate-service push
+vpngate-selector push
+
+# 3. 查看上次成功推送的历史记录与网关返回状态
+vpngate-push --status
+
+# 4. 临时指定推送端点与 API Token
+vpngate-push --url "https://<你的Worker域名>/api/upstream" --token "cf-push-xxx"
+```
+
+---
+
+### 2️⃣ `vpngate-nodes` & `vpngate-service list` — 查看当前已选出的所有节点
 
 直接打印当前 7 国已通过 Scamalytics 纯净风控与协议验证的可用节点列表，包含国旗、IP:端口、威胁分、实测延迟与代理全路径：
 
@@ -97,11 +119,14 @@ vpngate-selector -l
 
 ---
 
-### 2️⃣ `vpngate-service` — 管理后台 Systemd 保活服务
+### 3️⃣ `vpngate-service` — 管理后台 Systemd 保活服务
 
 用于管理守护进程、监控 5 分钟健康检查与节点热替换日志：
 
 ```bash
+# 一键推送当前最优住宅节点到 Cloudflare 网关
+vpngate-service push
+
 # 查看全部已选出节点列表
 vpngate-service list
 
@@ -254,30 +279,38 @@ vpngate-daemon --interval 600 --top-per-country 10
   - **若节点未发生变化**：自动跳过网络请求保持不变，杜绝无意义的重复推送与 KV 频繁写入。
   - **若节点发生轮换/失效替换**：自动通过 REST API 发起 HTTP POST 请求并更新 Cloudflare Worker 上游网关。
 
-### 2. 配置方式 (任选其一)
+### 2. 配置方式 (域名与 Token 自动持久化 ✨)
 
-#### 方式一：环境变量配置 (推荐)
+无论是通过 `vpngate-push`、`vpngate-service config`、`vpngate-daemon` 还是 `vpngate-selector`，**只要在命令中指定过域名和 Token，系统就会自动将其持久化保存在 `cf_push_config.json` 中**，后续所有命令与后台守护服务均会自动复用，无需重复输入！
+
+#### 方式一：命令行一键设置并持久化 (推荐 ⚡)
+```bash
+# 1. 设置域名与专属 Token (自动持久化到 cf_push_config.json)
+vpngate-push --url "https://<你的Worker域名>" --token "cf-push-xxxxxxxx"
+
+# 2. 或仅保存配置而不立即推送
+vpngate-push --url "https://<你的Worker域名>" --token "cf-push-xxxxxxxx" --config-only
+
+# 3. 或通过服务管理命令快速设置
+vpngate-service config --url "https://<你的Worker域名>" --token "cf-push-xxxxxxxx"
+
+# 4. 查看当前已保存并生效的配置
+vpngate-push --show-config
+```
+
+#### 方式二：环境变量配置
 ```bash
 export CF_VLESS_PUSH_URL="https://<你的Worker域名>/api/upstream"
 export CF_VLESS_API_TOKEN="<在Worker后台生成的专属API_TOKEN>"
 ```
 
-#### 方式二：配置文件 `cf_push_config.json`
+#### 方式三：手动编辑 `cf_push_config.json`
 在项目目录或 `results/` 目录下创建 `cf_push_config.json`：
 ```json
 {
   "push_url": "https://<你的Worker域名>/api/upstream",
   "api_token": "cf-push-xxxxxxxxxxxxxxxxxxxxxxxx"
 }
-```
-
-#### 方式三：命令行参数
-```bash
-# 启动守护进程并配置自动推送
-vpngate-daemon --cf-url "https://<你的Worker域名>/api/upstream" --cf-token "cf-push-xxx"
-
-# 单次测速并推送
-vpngate-selector --cf-url "https://<你的Worker域名>/api/upstream" --cf-token "cf-push-xxx"
 ```
 
 ---

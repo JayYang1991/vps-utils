@@ -178,24 +178,27 @@ install_files() {
     chmod +x "${INSTALL_DIR}/main.py"
     chmod +x "${INSTALL_DIR}/daemon.py"
     chmod +x "${INSTALL_DIR}/bridge.py"
+    chmod +x "${INSTALL_DIR}/pusher.py"
     chmod +x "${INSTALL_DIR}/service.sh"
 
     # 7. 创建全局快捷命令软链接
     info "正在重新创建全局快捷命令软链接至 ${BIN_DIR} ..."
-    rm -f "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-service" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-daemon"
+    rm -f "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-service" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-push"
 
     ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-nodes"
     ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-selector"
     ln -sf "${INSTALL_DIR}/service.sh" "${BIN_DIR}/vpngate-service"
     ln -sf "${INSTALL_DIR}/bridge.py" "${BIN_DIR}/vpngate-bridge"
     ln -sf "${INSTALL_DIR}/daemon.py" "${BIN_DIR}/vpngate-daemon"
+    ln -sf "${INSTALL_DIR}/pusher.py" "${BIN_DIR}/vpngate-push"
 
     info "✅ 全局快捷命令已重新绑定就绪:"
-    info "   • vpngate-nodes     -> 查看当前已选出的全部 7 国住宅代理节点列表 (支持 -c JP)"
-    info "   • vpngate-selector  -> 手动单次协议测速与提取 TOP 住宅节点 (可带 -l/--list 查看列表)"
-    info "   • vpngate-service   -> 管理后台 systemd 服务 (支持 vpngate-service list/status/logs)"
-    info "   • vpngate-bridge    -> 启动本地 SOCKS5/HTTP 住宅中继网桥"
-    info "   • vpngate-daemon    -> 前台运行 7 国守护保活进程"
+    info "   • vpngate-push     -> 🚀 手动推送当前最优住宅代理 (.ovpn) 至 Cloudflare 网关"
+    info "   • vpngate-nodes    -> 📋 查看当前已选出的全部 7 国住宅代理节点列表 (支持 -c JP)"
+    info "   • vpngate-selector -> 🔍 手动单次协议测速与提取 TOP 住宅节点 (可带 -l/--list 查看列表)"
+    info "   • vpngate-service  -> ⚙️ 管理后台 systemd 服务 (支持 vpngate-service list/push/status/logs)"
+    info "   • vpngate-bridge   -> 🌉 启动本地 SOCKS5/HTTP 住宅中继网桥"
+    info "   • vpngate-daemon   -> 🛡️ 前台运行 7 国守护保活进程"
 }
 
 setup_systemd() {

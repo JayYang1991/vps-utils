@@ -128,11 +128,37 @@ list_nodes() {
     fi
 }
 
+push_proxy() {
+    shift || true
+    if [ -f "${INSTALL_DIR}/pusher.py" ]; then
+        python3 "${INSTALL_DIR}/pusher.py" "$@"
+    elif [ -f "${SCRIPT_DIR}/pusher.py" ]; then
+        python3 "${SCRIPT_DIR}/pusher.py" "$@"
+    else
+        error "未找到推送模块 pusher.py"
+        exit 1
+    fi
+}
+
+set_config() {
+    shift || true
+    if [ -f "${INSTALL_DIR}/pusher.py" ]; then
+        python3 "${INSTALL_DIR}/pusher.py" "$@"
+    elif [ -f "${SCRIPT_DIR}/pusher.py" ]; then
+        python3 "${SCRIPT_DIR}/pusher.py" "$@"
+    else
+        error "未找到推送模块 pusher.py"
+        exit 1
+    fi
+}
+
 usage() {
     echo -e "${BLUE}VPNGATE 7国住宅代理 Systemd 后台服务管理脚本${NC}"
-    echo "用法: $0 {list|clean|status|logs|start|stop|restart|install|uninstall} [参数]"
+    echo "用法: $0 {list|push|config|clean|status|logs|start|stop|restart|install|uninstall} [参数]"
     echo ""
     echo "命令选项:"
+    echo "  push       手动推送当前最优住宅节点 (.ovpn) 至 Cloudflare VLESS 代理网关"
+    echo "  config     配置或查看 Cloudflare 域名与 API Token (持久化保存至 cf_push_config.json)"
     echo "  list|nodes 查看当前已选出的全部保活住宅节点列表 (支持 -c JP,US 筛选)"
     echo "  clean      清理历史节点沉淀库、7国状态池与 Scamalytics 威胁分缓存并重置"
     echo "  status     查看后台服务运行状态与进程信息"
@@ -144,13 +170,22 @@ usage() {
     echo "  uninstall  停止并彻底卸载 Systemd 服务"
     echo ""
     echo "示例:"
-    echo "  $0 list           # 查看当前全部 7 国已选出的节点"
-    echo "  $0 clean          # 清理全部历史数据库并重新初始化"
-    echo "  $0 logs           # 实时跟踪日志"
+    echo "  $0 push                                           # 手动推送当前最优住宅代理至 Cloudflare 网关"
+    echo "  $0 config --url \"https://<域名>\" --token \"<Token>\" # 设置并保存域名和 Token"
+    echo "  $0 config --show-config                           # 查看当前生效的配置"
+    echo "  $0 list                                           # 查看当前全部 7 国已选出的节点"
+    echo "  $0 clean                                          # 清理全部历史数据库并重新初始化"
+    echo "  $0 logs                                           # 实时跟踪日志"
     echo ""
 }
 
 case "$1" in
+    push|cf-push)
+        push_proxy "$@"
+        ;;
+    config|set-config|cf-config)
+        set_config "$@"
+        ;;
     list|nodes|show)
         list_nodes "$@"
         ;;
