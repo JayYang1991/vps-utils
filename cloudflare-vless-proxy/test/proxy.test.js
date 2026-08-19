@@ -613,7 +613,7 @@ describe('REST API Proxy Management & Dedicated Token Auth', () => {
   });
 });
 
-describe('Static Landing Page', () => {
+describe('Static Landing Page & Admin HTML Integrity', () => {
   it('should render Han Wudi biography landing page with proper DOM structure', async () => {
     const { renderLandingPage } = await import('../src/landing.js');
     const html = renderLandingPage();
@@ -623,6 +623,26 @@ describe('Static Landing Page', () => {
     assert.ok(html.includes('封狼居胥'));
     assert.ok(html.includes('丝绸之路'));
     assert.ok(html.includes('<!DOCTYPE html>'));
+  });
+
+  it('should render valid Admin SPA HTML with 100% syntactically compilable client JavaScript', async () => {
+    const { handleAdmin } = await import('../src/admin.js');
+    const res = await handleAdmin(new Request('https://domain/admin'), {}, new URL('https://domain/admin'), { adminPath: '/admin' });
+    const html = await res.text();
+    assert.equal(res.status, 200);
+    assert.ok(html.includes('id="login-overlay"'));
+    assert.ok(html.includes('id="login-pass"'));
+    assert.ok(html.includes('doLogin()'));
+
+    // Extract script tag and verify with node:vm Script
+    const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+    assert.ok(scriptMatch, 'script tag must exist in admin HTML');
+    const scriptCode = scriptMatch[1];
+    
+    const vm = await import('node:vm');
+    assert.doesNotThrow(() => {
+      new vm.Script(scriptCode);
+    }, 'Client-side script in admin HTML must compile without any SyntaxError');
   });
 });
 

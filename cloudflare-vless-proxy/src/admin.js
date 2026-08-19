@@ -979,33 +979,39 @@ function getAdminHTML(host, adminPath) {
         document.getElementById('rest-endpoint-url').innerText = restEndpoint;
       }
       if (document.getElementById('curl-text-example')) {
-        document.getElementById('curl-text-example').innerText = 
-          '# 推送 OpenVPN 格式或 SOCKS5 代理：\n' +
-          'curl -X POST ' + restEndpoint + ' \\\n' +
-          '  -H "Authorization: Bearer ' + curToken + '" \\\n' +
-          '  -d "openvpn://vpn:vpn@219.100.37.13:443"';
+        document.getElementById('curl-text-example').innerText = [
+          '# 推送 OpenVPN 格式或 SOCKS5 代理：',
+          'curl -X POST ' + restEndpoint + ' \\\\',
+          '  -H "Authorization: Bearer ' + curToken + '" \\\\',
+          '  -d "openvpn://vpn:vpn@219.100.37.13:443"'
+        ].join('\\n');
       }
       if (document.getElementById('curl-json-example')) {
-        document.getElementById('curl-json-example').innerText = 
-          '# JSON 格式推送并执行在线握手测速：\n' +
-          'curl -X POST ' + restEndpoint + ' \\\n' +
-          '  -H "Authorization: Bearer ' + curToken + '" \\\n' +
-          '  -H "Content-Type: application/json" \\\n' +
-          '  -d \'{"upstreamProxy":"openvpn://vpn:vpn@219.100.37.13:443","test":true}\'';
+        const samplePayload = JSON.stringify({ upstreamProxy: "openvpn://vpn:vpn@219.100.37.13:443", test: true });
+        document.getElementById('curl-json-example').innerText = [
+          '# JSON 格式推送并执行在线握手测速：',
+          'curl -X POST ' + restEndpoint + ' \\\\',
+          '  -H "Authorization: Bearer ' + curToken + '" \\\\',
+          '  -H "Content-Type: application/json" \\\\',
+          "  -d '" + samplePayload + "'"
+        ].join('\\n');
       }
       if (document.getElementById('python-push-example')) {
-        document.getElementById('python-push-example').innerText =
-          'import requests\n\n' +
-          'API_URL = "' + restEndpoint + '"\n' +
-          'API_TOKEN = "' + curToken + '"\n\n' +
-          '# 推送最优住宅代理 (支持 SOCKS5 / HTTP / OpenVPN 格式)\n' +
-          'resp = requests.post(\n' +
-          '    API_URL,\n' +
-          '    headers={"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"},\n' +
-          '    json={"upstreamProxy": "openvpn://vpn:vpn@219.100.37.13:443", "test": True},\n' +
-          '    timeout=15\n' +
-          ')\n' +
-          'print("Response:", resp.json())';
+        document.getElementById('python-push-example').innerText = [
+          'import requests',
+          '',
+          'API_URL = "' + restEndpoint + '"',
+          'API_TOKEN = "' + curToken + '"',
+          '',
+          '# 推送最优住宅代理 (支持 SOCKS5 / HTTP / OpenVPN 格式)',
+          'resp = requests.post(',
+          '    API_URL,',
+          '    headers={"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"},',
+          '    json={"upstreamProxy": "openvpn://vpn:vpn@219.100.37.13:443", "test": True},',
+          '    timeout=15',
+          ')',
+          'print("Response:", resp.json())'
+        ].join('\\n');
       }
     }
 
