@@ -23,6 +23,10 @@ export default {
       const config = await getConfig(env);
       const url = new URL(request.url);
       const pathname = url.pathname;
+      const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || 'unknown';
+      const upgradeHeader = request.headers.get('Upgrade') || 'none';
+
+      console.log(`[Router:Inbound] ${request.method} ${pathname} | IP: ${clientIp} | Upgrade: ${upgradeHeader} | Host: ${url.host}`);
 
       // 2. 路由 A：VLESS WebSocket 代理处理
       const isProxyPathMatch = pathname === config.proxyPath || pathname.startsWith(`${config.proxyPath}/`);
@@ -30,8 +34,10 @@ export default {
 
       if (isProxyPathMatch) {
         if (isWebSocketUpgrade) {
+          console.log(`[Router:VLESS] 命中 VLESS WS 代理路径 ${pathname} (IP: ${clientIp})`);
           return await handleVlessWebSocket(request, config);
         }
+        console.warn(`[Router:Probe] 普通 HTTP 探测代理路径 ${pathname} (IP: ${clientIp}) -> 返回伪装落地页`);
         // 如果是普通 HTTP GET 访问代理路径，返回伪装静态页面，防止被网络探测探针指纹识别
         return new Response(renderLandingPage(), {
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -51,6 +57,7 @@ export default {
         const token = url.searchParams.get('token') || '';
         const expectedToken = await hashPassword(config.adminPassword);
         if (token !== expectedToken) {
+          console.warn(`[Router:Sub:Unauthorized] 订阅 Token 校验失败 (路径: ${pathname}, IP: ${clientIp})`);
           return new Response(renderLandingPage(), {
             status: 200,
             headers: { 'Content-Type': 'text/html; charset=utf-8' },

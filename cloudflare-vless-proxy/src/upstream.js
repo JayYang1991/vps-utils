@@ -102,15 +102,22 @@ export async function createUpstreamConnection(targetHost, targetPort, upstreamP
 
   // 未配置代理，直接直连
   if (!proxy) {
-    const connect = await getConnectFn();
-    const socket = connect({
-      hostname: targetHost,
-      port: targetPort,
-    });
-    return { socket };
+    console.log(`[Upstream:Direct] 正在建立直连 -> ${targetHost}:${targetPort}`);
+    try {
+      const connect = await getConnectFn();
+      const socket = connect({
+        hostname: targetHost,
+        port: targetPort,
+      });
+      return { socket };
+    } catch (directErr) {
+      console.error(`[Upstream:Direct:Error] 直连失败 -> ${targetHost}:${targetPort}:`, directErr.message || directErr);
+      throw directErr;
+    }
   }
 
   // 通过住宅代理转发
+  console.log(`[Upstream:Proxy] 正在通过住宅代理转发 -> 目标: ${targetHost}:${targetPort} | 代理服务器: ${proxy.protocol.toUpperCase()}://${proxy.host}:${proxy.port}`);
   try {
     if (proxy.protocol === 'socks5') {
       return await connectViaSocks5(proxy, targetHost, targetPort);
@@ -120,15 +127,20 @@ export async function createUpstreamConnection(targetHost, targetPort, upstreamP
       throw new Error(`Unsupported proxy protocol: ${proxy.protocol}`);
     }
   } catch (proxyErr) {
-    console.error(`Residential proxy [${proxy.protocol}://${proxy.host}:${proxy.port}] connection failed:`, proxyErr.message);
+    console.error(`[Upstream:Proxy:Error] 住宅代理连接失败 [${proxy.protocol}://${proxy.host}:${proxy.port}] 目标: ${targetHost}:${targetPort} -> ${proxyErr.message}`);
     if (enableFallback) {
-      console.log(`Falling back to direct connection for ${targetHost}:${targetPort}`);
-      const connect = await getConnectFn();
-      const socket = connect({
-        hostname: targetHost,
-        port: targetPort,
-      });
-      return { socket };
+      console.warn(`[Upstream:Fallback] 住宅代理异常，正在回退至边缘直连模式 -> ${targetHost}:${targetPort}`);
+      try {
+        const connect = await getConnectFn();
+        const socket = connect({
+          hostname: targetHost,
+          port: targetPort,
+        });
+        return { socket };
+      } catch (fbErr) {
+        console.error(`[Upstream:Fallback:Error] 代理故障回退直连亦失败 -> ${targetHost}:${targetPort}:`, fbErr.message || fbErr);
+        throw fbErr;
+      }
     }
     throw proxyErr;
   }
@@ -139,10 +151,16 @@ export async function createUpstreamConnection(targetHost, targetPort, upstreamP
  */
 async function connectViaSocks5(proxy, targetHost, targetPort) {
   const connect = await getConnectFn();
-  const socket = connect({
-    hostname: proxy.host,
-    port: proxy.port,
-  });
+  let socket;
+  try {
+    socket = connect({
+      hostname: proxy.host,
+      port: proxy.port,
+    });
+  } catch (sockErr) {
+    console.error(`[SOCKS5:Socket:Error] 连接 SOCKS5 代理服务器 ${proxy.host}:${proxy.port} 失败:`, sockErr.message || sockErr);
+    throw sockErr;
+  }
 
   const reader = socket.readable.getReader();
   const writer = socket.writable.getWriter();
@@ -158,7 +176,7 @@ async function connectViaSocks5(proxy, targetHost, targetPort) {
 
     const greetingRes = await readExactBytes(reader, 2);
     if (greetingRes[0] !== 0x05) {
-      throw new Error(`Invalid SOCKS5 version response: ${greetingRes[0]}`);
+      throw new Error(`SOCKS5 握手版本错误 (期望 0x05, 收到 0x${greetingRes[0].toString(16)})`);
     }
 
     const selectedMethod = greetingRes[1];

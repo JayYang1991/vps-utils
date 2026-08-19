@@ -8,8 +8,11 @@ import { renderLandingPage } from './landing.js';
  * @returns {Response}
  */
 export async function handleVlessWebSocket(request, config) {
+  const clientIp = request.headers.get('cf-connecting-ip') || request.headers.get('x-real-ip') || 'unknown';
   const upgradeHeader = request.headers.get('Upgrade');
+  
   if (!upgradeHeader || upgradeHeader.toLowerCase() !== 'websocket') {
+    console.warn(`[VLESS:WS] Received non-WebSocket request on proxy path from IP: ${clientIp}`);
     return new Response(renderLandingPage(), {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -26,14 +29,15 @@ export async function handleVlessWebSocket(request, config) {
       preDecodedEarlyData = base64UrlToUint8Array(earlyDataHeader);
       const earlyCheck = parseVlessHeader(preDecodedEarlyData, config.uuid);
       if (!earlyCheck.success) {
-        console.warn('Early-Data VLESS auth failed, fallback to static landing page:', earlyCheck.error);
+        console.error(`[VLESS:Auth:EarlyData] UUID 鉴权失败 (来自 IP: ${clientIp}): ${earlyCheck.error} (配置 UUID: ${config.uuid})`);
         return new Response(renderLandingPage(), {
           status: 200,
           headers: { 'Content-Type': 'text/html; charset=utf-8' },
         });
       }
+      console.log(`[VLESS:Auth:EarlyData] EarlyData 校验通过 (来自 IP: ${clientIp}, 目标: ${earlyCheck.address}:${earlyCheck.port})`);
     } catch (e) {
-      console.warn('Malformed Early-Data header, fallback to static landing page:', e);
+      console.error(`[VLESS:EarlyData:Error] 解析 Early-Data 协议头异常 (来自 IP: ${clientIp}):`, e.message || e);
       return new Response(renderLandingPage(), {
         status: 200,
         headers: { 'Content-Type': 'text/html; charset=utf-8' },
@@ -41,14 +45,21 @@ export async function handleVlessWebSocket(request, config) {
     }
   }
 
+  const clientInfo = {
+    ip: clientIp,
+    ua: request.headers.get('user-agent') || 'none',
+    url: request.url,
+  };
+
   const webSocketPair = new WebSocketPair();
   const [clientWs, serverWs] = Object.values(webSocketPair);
 
   serverWs.accept();
+  console.log(`[VLESS:WS] WebSocket 握手成功 (Client IP: ${clientIp}, EarlyData: ${!!preDecodedEarlyData})`);
 
   // 异步处理 VLESS 会话
-  processVlessSession(serverWs, preDecodedEarlyData, config).catch((err) => {
-    console.error('VLESS session error:', err);
+  processVlessSession(serverWs, preDecodedEarlyData, config, clientInfo).catch((err) => {
+    console.error(`[VLESS:Session:Fatal] 会话未捕获异常 (IP: ${clientIp}):`, err.stack || err.message || err);
     safeCloseWebSocket(serverWs);
   });
 
@@ -62,12 +73,13 @@ export async function handleVlessWebSocket(request, config) {
 /**
  * 处理 VLESS 会话生命周期
  */
-async function processVlessSession(ws, earlyDataHeader, config) {
+async function processVlessSession(ws, earlyData, config, clientInfo = {}) {
   let isHeaderParsed = false;
   let remoteSocket = null;
   let remoteWriter = null;
   let targetAddress = '';
   let targetPort = 0;
+  const clientIp = clientInfo.ip || 'unknown';
 
   // 辅助关闭连接
   const cleanup = () => {
@@ -89,7 +101,7 @@ async function processVlessSession(ws, earlyDataHeader, config) {
         // 解析 VLESS 首包
         const parseResult = parseVlessHeader(buffer, config.uuid);
         if (!parseResult.success) {
-          console.error('VLESS header validation failed:', parseResult.error);
+          console.error(`[VLESS:Header:Error] VLESS 请求头校验失败 (IP: ${clientIp}): ${parseResult.error} | 服务端配置 UUID: ${config.uuid}`);
           cleanup();
           return;
         }
@@ -98,16 +110,28 @@ async function processVlessSession(ws, earlyDataHeader, config) {
         targetAddress = parseResult.address;
         targetPort = parseResult.port;
 
-        // 连接目标或住宅代理
-        const { socket, initialBuffer } = await createUpstreamConnection(
-          targetAddress,
-          targetPort,
-          config.upstreamProxy,
-          config.enableDirectFallback
-        );
+        console.log(`[VLESS:Connect] 开始建立上游连接 -> 目标: ${targetAddress}:${targetPort} (命令: ${parseResult.command === 1 ? 'TCP' : 'UDP'}, 上游模式: ${config.upstreamProxy ? '住宅代理中继' : '边缘直连'})`);
 
+        // 连接目标或住宅代理
+        let connResult;
+        try {
+          connResult = await createUpstreamConnection(
+            targetAddress,
+            targetPort,
+            config.upstreamProxy,
+            config.enableDirectFallback
+          );
+        } catch (connErr) {
+          console.error(`[VLESS:Upstream:Fail] 建立上游连接失败 [${targetAddress}:${targetPort}] (IP: ${clientIp}): ${connErr.message}`);
+          cleanup();
+          return;
+        }
+
+        const { socket, initialBuffer } = connResult;
         remoteSocket = socket;
         remoteWriter = remoteSocket.writable.getWriter();
+
+        console.log(`[VLESS:Connected] 上游 Socket 连接成功 [${targetAddress}:${targetPort}]，开始向客户端回送响应`);
 
         // 向客户端回送 VLESS 响应头 (Version: 0x00, Addon Len: 0x00)
         const vlessResponseHeader = new Uint8Array([parseResult.version, 0x00]);
@@ -123,7 +147,7 @@ async function processVlessSession(ws, earlyDataHeader, config) {
         }
 
         // 启动从远端 Socket 读取并回传给 WebSocket 的管道
-        pipeRemoteToWebSocket(remoteSocket, ws, cleanup);
+        pipeRemoteToWebSocket(remoteSocket, ws, cleanup, targetAddress, targetPort);
 
         // 如果首包中包含初始载荷 (Payload)，写入远端 Socket
         if (parseResult.payload && parseResult.payload.length > 0) {
@@ -136,7 +160,7 @@ async function processVlessSession(ws, earlyDataHeader, config) {
         }
       }
     } catch (err) {
-      console.error(`Error streaming data to remote [${targetAddress}:${targetPort}]:`, err.message);
+      console.error(`[VLESS:Stream:Error] 数据转发流异常 [${targetAddress}:${targetPort}] (IP: ${clientIp}):`, err.message || err);
       cleanup();
     }
   };
@@ -147,7 +171,7 @@ async function processVlessSession(ws, earlyDataHeader, config) {
       const decodedEarly = earlyData instanceof Uint8Array ? earlyData : base64UrlToUint8Array(earlyData);
       await handleClientData(decodedEarly);
     } catch (e) {
-      console.warn('Failed to parse Early-Data:', e);
+      console.error(`[VLESS:EarlyData:Error] 处理 Early-Data 数据异常 (IP: ${clientIp}):`, e.message || e);
     }
   }
 
@@ -156,12 +180,13 @@ async function processVlessSession(ws, earlyDataHeader, config) {
     await handleClientData(event.data);
   });
 
-  ws.addEventListener('close', () => {
+  ws.addEventListener('close', (event) => {
+    console.log(`[VLESS:WS:Close] 客户端断开连接 (IP: ${clientIp}, 目标: ${targetAddress}:${targetPort}, Code: ${event.code})`);
     cleanup();
   });
 
   ws.addEventListener('error', (err) => {
-    console.error('WebSocket client error:', err);
+    console.error(`[VLESS:WS:Error] WebSocket 异常 (IP: ${clientIp}, 目标: ${targetAddress}:${targetPort}):`, err.message || err);
     cleanup();
   });
 }
@@ -169,13 +194,15 @@ async function processVlessSession(ws, earlyDataHeader, config) {
 /**
  * 将远端 Socket 的可读流传输至 WebSocket 客户端
  */
-async function pipeRemoteToWebSocket(remoteSocket, ws, cleanup) {
+async function pipeRemoteToWebSocket(remoteSocket, ws, cleanup, targetAddress, targetPort) {
   let reader = null;
   try {
     reader = remoteSocket.readable.getReader();
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        break;
+      }
       if (value && value.length > 0) {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(value);
@@ -185,7 +212,7 @@ async function pipeRemoteToWebSocket(remoteSocket, ws, cleanup) {
       }
     }
   } catch (err) {
-    // 静默忽略流关闭异常
+    console.error(`[VLESS:Pipe:Error] 远端到客户端转发异常 [${targetAddress}:${targetPort}]:`, err.message || err);
   } finally {
     if (reader) {
       try { reader.releaseLock(); } catch (_) {}
