@@ -19,7 +19,7 @@ if SCRIPT_DIR not in sys.path:
 
 from fetcher import fetch_all_vpngate_servers, VpnGateServer
 from filter import filter_servers, filter_by_fraud_score
-from tester import benchmark_servers, select_top_servers, BenchmarkResult
+from tester import benchmark_servers, select_top_servers, select_top_servers_by_country, BenchmarkResult
 from exporter import export_results, get_country_flag
 
 
@@ -43,25 +43,31 @@ def print_banner() -> None:
     """Prints tool banner."""
     banner = """
 ==================================================================
-  🌐 VPNGATE 纯净住宅 IP 优选与高并发测速工具 (VPNGATE Selector)
-  🛡️ Scamalytics 威胁分纯净筛选 (<20) -> 协议握手测速 -> 优选 TOP 20
+  🌐 VPNGATE 纯净住宅 IP 优选与高并发测速系统
+  1️⃣ 全量拉取 -> 2️⃣ Scamalytics风控筛选(<20) -> 3️⃣ 各国精选TOP 5
 ==================================================================
 """
     print(banner)
 
 
-def print_table(results: List[BenchmarkResult]) -> None:
+def print_table(
+    results: List[BenchmarkResult],
+    pools_by_country: Optional[Dict[str, List[BenchmarkResult]]] = None
+) -> None:
     """Prints a beautiful CLI summary table."""
     if not results:
         print("\n❌ 未找到符合条件的可用节点。\n")
         return
 
-    print("\n" + "=" * 125)
-    print(f"  🏆 测速完成！精选最优 TOP {len(results)} Scamalytics纯净验证(<20分)住宅/志愿代理列表:")
-    print("=" * 125)
-    print(f"{'排名':<4} | {'地区':<6} | {'IP地址:端口':<22} | {'威胁分':<8} | {'协议':<10} | {'实测延迟':<10} | {'官方带宽':<12} | {'综合得分':<10} | {'SOCKS5代理全路径'}")
-    print(f"{'-'*4}-+-{'-'*6}-+-{'-'*22}-+-{'-'*8}-+-{'-'*10}-+-{'-'*10}-+-{'-'*12}-+-{'-'*10}-+-{'-'*35}")
+    total_countries = len(pools_by_country) if pools_by_country else len(set(r.server.country_short for r in results))
 
+    print("\n" + "=" * 135)
+    print(f"  🏆 测速完成！精选 {total_countries} 个国家各自 TOP 住宅代理 (共 {len(results)} 个 Scamalytics纯净验证<20分 节点):")
+    print("=" * 135)
+    print(f"{'序号':<4} | {'地区':<10} | {'IP地址:端口':<22} | {'威胁分':<8} | {'协议':<8} | {'实测延迟':<10} | {'官方带宽':<12} | {'综合得分':<10} | {'SOCKS5代理全路径'}")
+    print(f"{'-'*4}-+-{'-'*10}-+-{'-'*22}-+-{'-'*8}-+-{'-'*8}-+-{'-'*10}-+-{'-'*12}-+-{'-'*10}-+-{'-'*35}")
+
+    by_country: Dict[str, int] = {}
     for i, res in enumerate(results, 1):
         flag = get_country_flag(res.server.country_short)
         c_tag = f"{flag} {res.server.country_short}"
@@ -71,9 +77,14 @@ def print_table(results: List[BenchmarkResult]) -> None:
         spd = f"{res.server.speed_mbps:.2f} Mbps"
         score = f"{res.composite_score:.1f}"
         fraud_str = f"{res.fraud_score} / 100" if res.fraud_score >= 0 else "N/A"
-        print(f"{i:<4d} | {c_tag:<6} | {addr:<22} | {fraud_str:<8} | {proto:<10} | {lat:<10} | {spd:<12} | {score:<10} | {res.socks5_url}")
+        by_country[res.server.country_short] = by_country.get(res.server.country_short, 0) + 1
+        print(f"{i:<4d} | {c_tag:<10} | {addr:<22} | {fraud_str:<8} | {proto:<8} | {lat:<10} | {spd:<12} | {score:<10} | {res.socks5_url}")
 
-    print("=" * 125 + "\n")
+    print("=" * 135)
+    print("📈 各地区精选节点分布统计:")
+    for c, cnt in by_country.items():
+        print(f"   • {get_country_flag(c)} {c}: {cnt} 个纯净可用节点")
+    print("")
 
 
 def show_current_nodes(results_dir: str = "results", country: Optional[str] = None) -> int:
@@ -243,10 +254,17 @@ def parse_arguments() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--top-per-country", "-k",
+        type=int,
+        default=5,
+        help="按国家选取各自 TOP N 的纯净住宅节点 (默认: 5)"
+    )
+
+    parser.add_argument(
         "--top", "-n",
         type=int,
         default=20,
-        help="精选出的最优节点数量 (默认: 20)"
+        help="精选出的最优节点总数量上限"
     )
 
     parser.add_argument(
@@ -442,23 +460,25 @@ def main() -> int:
             logging.error("❌ 所有候选节点连通性测试均失败，请检查当前网络状态。")
             return 1
 
-        # 5. 综合加权排序精选最优 TOP N
-        top_servers = select_top_servers(
+        # 5. 按照国家选取各自 TOP 5 的节点 (只选择 Scamalytics 威胁分 < 20 的节点，威胁分低的加权分高)
+        top_servers, pools_by_country = select_top_servers_by_country(
             benchmark_results,
-            top_n=args.top,
-            sort_by=args.sort_by
+            top_per_country=args.top_per_country,
+            sort_by=args.sort_by,
+            target_countries=countries
         )
 
-        # 5. 打印终端预览
+        # 6. 打印终端预览
         if not args.quiet:
-            print_table(top_servers)
+            print_table(top_servers, pools_by_country=pools_by_country)
 
-        # 6. 导出结果文件
+        # 7. 导出结果文件 (包含全量 proxies.txt、各分国 proxies_JP.txt 及 residential_pool.json)
         exported = export_results(
             top_servers,
             output_dir=args.output,
             proxy_type=args.proxy_type,
-            save_ovpn=args.save_ovpn
+            save_ovpn=args.save_ovpn,
+            pools_by_country=pools_by_country
         )
 
         # 若指定了自定义单个输出文件

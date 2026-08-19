@@ -9,7 +9,7 @@ import os
 import json
 import base64
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from tester import BenchmarkResult
@@ -36,7 +36,8 @@ def export_results(
     selected_results: List[BenchmarkResult],
     output_dir: str = "results",
     proxy_type: str = "socks5",
-    save_ovpn: bool = True
+    save_ovpn: bool = True,
+    pools_by_country: Optional[Dict[str, List[BenchmarkResult]]] = None
 ) -> Dict[str, str]:
     """
     Exports benchmarked TOP servers into multiple formats.
@@ -62,6 +63,62 @@ def export_results(
             else:  # default socks5
                 f.write(f"{res.socks5_url}\n")
     generated_files["proxies_txt"] = proxies_txt_path
+
+    # Export per-country proxy files (proxies_JP.txt, proxies_US.txt, etc.)
+    by_country_dict: Dict[str, List[BenchmarkResult]] = pools_by_country if pools_by_country else {}
+    if not by_country_dict:
+        for res in selected_results:
+            c = res.server.country_short.upper()
+            if c not in by_country_dict:
+                by_country_dict[c] = []
+            by_country_dict[c].append(res)
+
+    for c_code, c_nodes in by_country_dict.items():
+        c_path = os.path.join(output_dir, f"proxies_{c_code}.txt")
+        with open(c_path, "w", encoding="utf-8") as f:
+            for r in c_nodes:
+                f.write(f"{r.socks5_url}\n")
+
+    # Export residential_pool.json (for bridge and daemon consistency)
+    pool_path = os.path.join(output_dir, "residential_pool.json")
+    json_pools: Dict[str, List[Dict[str, Any]]] = {}
+    for c_code, c_nodes in by_country_dict.items():
+        json_pools[c_code] = []
+        for i, res in enumerate(c_nodes, 1):
+            json_pools[c_code].append({
+                "rank": i,
+                "ip": res.server.ip,
+                "port": res.tested_port,
+                "protocol": res.protocol,
+                "fraud_score": res.fraud_score,
+                "country_short": res.server.country_short,
+                "country_long": res.server.country_long,
+                "flag": get_country_flag(res.server.country_short),
+                "operator": res.server.operator,
+                "real_latency_ms": res.real_latency_ms,
+                "min_latency_ms": res.min_latency_ms,
+                "max_latency_ms": res.max_latency_ms,
+                "jitter_ms": res.jitter_ms,
+                "packet_loss_rate": res.packet_loss_rate,
+                "speed_mbps": res.server.speed_mbps,
+                "composite_score": res.composite_score,
+                "uptime_hours": round(res.server.uptime_seconds / 3600, 1),
+                "sessions": res.server.sessions,
+                "ovpn_b64": res.server.openvpn_config_b64,
+                "proxy_urls": {
+                    "socks5": res.socks5_url,
+                    "socks5_noauth": res.socks5_noauth_url,
+                    "http": res.http_url,
+                    "direct": res.direct_address
+                }
+            })
+    with open(pool_path, "w", encoding="utf-8") as f:
+        json.dump({
+            "updated_at": timestamp_str,
+            "total_pools": len(json_pools),
+            "pools": json_pools
+        }, f, indent=2, ensure_ascii=False)
+    generated_files["residential_pool"] = pool_path
 
     # 2. Export upstream gateway string for cloudflare-vless-proxy: upstream_gateway.txt
     gateway_path = os.path.join(output_dir, "upstream_gateway.txt")

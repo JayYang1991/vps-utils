@@ -236,11 +236,12 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 ### 8. [vpngate-residential-selector](./vpngate-residential-selector) — VPNGATE 纯净住宅 IP 优选与全自动保活系统
 
 - **多源全量聚合与历史沉淀**：突破单接口 ~100 限制，并发聚合官方、每日镜像（`sites.aspx`）与社区节点池（180+ 全球节点），并在后台持续沉淀扩展。
-- **Scamalytics 威胁分筛选 (<20分)**：自动并发查询 `scamalytics.com` 威胁分，严格剔除机房/被标记 IP，仅保留 0~19 分纯净家庭宽带住宅 IP。
+- **Scamalytics 威胁分纯净筛选 (<20分)**：自动并发查询 `scamalytics.com` 威胁分，严格剔除机房/被标记 IP，仅保留 0~19 分纯净家庭宽带住宅 IP（威胁分越低加权分越高）。
+- **按国家精选 TOP 5 住宅节点**：独立为每个国家筛选 TOP 5 最优纯净节点，并生成各分国代理文件（`proxies_JP.txt`、`proxies_US.txt` 等）与全局保活状态池。
 - **真实应用层协议握手测速**：发送 OpenVPN 真实握手帧验证服务端状态，计算真实时延与丢包率，剔除假活节点。
-- **7 国 Systemd 5 分钟自愈保活**：独立维护 US、JP、HK、SG、KR、DE、AU 7 国 TOP 20 节点池，支持全量可用跳过刷新与失效 1 对 1 热替换。
-- **本地住宅代理中继网桥**：提供 `vpngate-bridge` 快速在本地开启 `socks5://127.0.0.1:10808` 与 `http://127.0.0.1:10809` 双协议中继网关。
-- **全局快捷命令体系**：`vpngate-service`、`vpngate-selector`、`vpngate-bridge`、`vpngate-daemon`。
+- **7 国 Systemd 5 分钟自愈保活**：独立维护 US、JP、HK、SG、KR、DE、AU 7 国节点池，支持全量可用跳过刷新与失效 1 对 1 热替换。
+- **本地住宅代理中继网桥 (`vpngate-bridge`)**：默认自动选用全局最优住宅节点，在本地开启 `socks5://127.0.0.1:10808` 与 `http://127.0.0.1:10809`；全面支持手动指定 IP:端口、国家、排名或自定义 OVPN。
+- **全局快捷命令体系**：`vpngate-nodes`、`vpngate-service`、`vpngate-selector`、`vpngate-bridge`、`vpngate-daemon`。
 
 ---
 

@@ -87,39 +87,113 @@ def try_auto_install_openvpn() -> Optional[str]:
     return find_openvpn_binary()
 
 
-def find_best_node(results_dir: str, country: Optional[str] = None) -> Optional[dict]:
-    """Finds the best verified node from residential_pool.json or residential_nodes.json."""
-    pool_file = os.path.join(results_dir, "residential_pool.json")
-    if os.path.exists(pool_file):
+def resolve_bridge_node(
+    results_dir: str,
+    country: Optional[str] = None,
+    target_node: Optional[str] = None,
+    rank: int = 1,
+    ovpn_file: Optional[str] = None
+) -> Optional[dict]:
+    """
+    Resolves the target OpenVPN node for bridging:
+    1. If ovpn_file is provided, loads and builds a custom node dict.
+    2. If target_node (IP or IP:Port) is provided, finds that specific node.
+    3. Otherwise, picks the optimal node (optionally filtered by country and rank).
+    """
+    # 1. Custom OVPN file
+    if ovpn_file and os.path.exists(ovpn_file):
         try:
-            with open(pool_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            pools = data.get("pools", {})
-            if country and country.upper() in pools:
-                nodes = pools[country.upper()]
-                if nodes:
-                    return nodes[0]
-            all_nodes = []
-            for c_code, n_list in pools.items():
-                all_nodes.extend(n_list)
-            if all_nodes:
-                all_nodes.sort(key=lambda x: (x.get("real_latency_ms", 9999)))
-                return all_nodes[0]
+            with open(ovpn_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            b64_str = base64.b64encode(content.encode("utf-8")).decode("ascii")
+            return {
+                "ip": "Custom-OVPN",
+                "port": 443,
+                "country_short": "CUSTOM",
+                "real_latency_ms": 0.0,
+                "fraud_score": 0,
+                "ovpn_b64": b64_str
+            }
         except Exception as e:
-            logging.debug(f"Failed to read residential_pool.json: {e}")
+            logging.error(f"读取指定 OVPN 文件失败: {e}")
+            return None
 
-    nodes_file = os.path.join(results_dir, "residential_nodes.json")
-    if os.path.exists(nodes_file):
-        try:
-            with open(nodes_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            nodes = data.get("nodes", [])
-            if nodes:
-                return nodes[0]
-        except Exception as e:
-            logging.debug(f"Failed to read residential_nodes.json: {e}")
+    # Search in multiple potential result directories
+    search_dirs = [
+        results_dir,
+        os.path.join(SCRIPT_DIR, results_dir),
+        "/usr/local/bin/vpngate-residential-selector/results",
+        os.path.expanduser("~/.local/bin/vpngate-residential-selector/results")
+    ]
 
-    return None
+    all_candidate_nodes: List[dict] = []
+
+    for r_dir in search_dirs:
+        if not os.path.exists(r_dir):
+            continue
+
+        pool_file = os.path.join(r_dir, "residential_pool.json")
+        if os.path.exists(pool_file):
+            try:
+                with open(pool_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                pools = data.get("pools", {})
+                for c_code, n_list in pools.items():
+                    all_candidate_nodes.extend(n_list)
+            except Exception:
+                pass
+
+        nodes_file = os.path.join(r_dir, "residential_nodes.json")
+        if os.path.exists(nodes_file):
+            try:
+                with open(nodes_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                nodes = data.get("nodes", [])
+                all_candidate_nodes.extend(nodes)
+            except Exception:
+                pass
+
+    if not all_candidate_nodes:
+        return None
+
+    # Deduplicate by IP:port and keep valid ovpn_b64
+    seen = set()
+    unique_candidates = []
+    for n in all_candidate_nodes:
+        key = f"{n.get('ip')}:{n.get('port')}"
+        if key not in seen and n.get("ovpn_b64"):
+            seen.add(key)
+            unique_candidates.append(n)
+
+    # 2. Specific node query (e.g. "221.71.170.232", "221.71.170.232:1379", or "JP")
+    if target_node:
+        target_clean = target_node.strip()
+        for n in unique_candidates:
+            ip = str(n.get("ip", ""))
+            port = str(n.get("port", ""))
+            if target_clean == f"{ip}:{port}" or target_clean == ip:
+                return n
+        # If not matched as IP and target_clean is 2 letters, treat as country
+        if len(target_clean) == 2 and not country:
+            country = target_clean
+
+    # 3. Country filtering
+    if country:
+        c_upper = country.strip().upper()
+        unique_candidates = [n for n in unique_candidates if n.get("country_short", "").upper() == c_upper]
+
+    if not unique_candidates:
+        return None
+
+    # Sort: highest composite score, lowest fraud score, lowest latency
+    unique_candidates.sort(key=lambda x: (
+        -x.get("composite_score", 0.0),
+        x.get("fraud_score", 999) if x.get("fraud_score", -1) >= 0 else 999,
+        x.get("real_latency_ms", 9999)
+    ))
+
+    idx = max(0, min(rank - 1, len(unique_candidates) - 1))
+    return unique_candidates[idx]
 
 
 def forward_stream(src: socket.socket, dst: socket.socket):
@@ -341,29 +415,45 @@ def run_bridge(
     socks_port: int = 10808,
     http_port: int = 10809,
     country: Optional[str] = None,
+    target_node: Optional[str] = None,
+    rank: int = 1,
+    ovpn_file: Optional[str] = None,
     results_dir: str = "results"
 ) -> int:
-    """Launches local proxy bridge forwarding through top VPNGATE OpenVPN node."""
+    """Launches local proxy bridge forwarding through optimal or specified VPNGATE OpenVPN node."""
     if not os.path.isabs(results_dir):
         results_dir = os.path.join(SCRIPT_DIR, results_dir)
 
-    node = find_best_node(results_dir, country)
+    node = resolve_bridge_node(
+        results_dir=results_dir,
+        country=country,
+        target_node=target_node,
+        rank=rank,
+        ovpn_file=ovpn_file
+    )
+
     if not node:
-        logging.error(f"❌ 未在 {results_dir} 找到任何已通过协议验证的住宅节点，请先运行 vpngate-selector 测速优选。")
+        c_hint = f" ({country})" if country else ""
+        n_hint = f" (指定节点: {target_node})" if target_node else ""
+        logging.error(f"❌ 未找到符合条件的住宅代理节点{c_hint}{n_hint}。")
+        logging.info("👉 请先运行 'vpngate-selector' 或启动 'vpngate-service start' 进行测速优选。")
         return 1
 
     ip = node.get("ip")
     port = node.get("port", 443)
     country_code = node.get("country_short", "UN")
     latency = node.get("real_latency_ms", 0.0)
+    fraud = node.get("fraud_score", -1)
+    fraud_str = f"{fraud} / 100" if fraud >= 0 else "N/A"
+    score = node.get("composite_score", 0.0)
     ovpn_b64 = node.get("ovpn_b64", "")
 
-    logging.info("=" * 75)
-    logging.info(f"🌉 VPNGATE 本地住宅代理中继网桥启动中")
-    logging.info(f"   • 选定住宅节点: [{country_code}] {ip}:{port} (实测握手延迟: {latency} ms)")
+    logging.info("=" * 85)
+    logging.info("🌉 VPNGATE 本地住宅代理中继网桥正在启动")
+    logging.info(f"   • 选定住宅节点: [{country_code}] {ip}:{port} (实测握手延迟: {latency:.2f} ms | 威胁分: {fraud_str} | 评分: {score:.1f})")
     logging.info(f"   • 本地 SOCKS5 代理网关: socks5://127.0.0.1:{socks_port}")
     logging.info(f"   • 本地 HTTP 代理网关:   http://127.0.0.1:{http_port}")
-    logging.info("=" * 75)
+    logging.info("=" * 85)
 
     if not ovpn_b64:
         logging.error("❌ 该节点缺少 OpenVPN base64 配置数据。")
@@ -386,9 +476,9 @@ def run_bridge(
 
     ovpn_content = base64.b64decode(ovpn_b64).decode("utf-8", errors="ignore")
 
-    with tempfile.NamedTemporaryFile("w", suffix=".ovpn", delete=False) as ovpn_file:
-        ovpn_file.write(ovpn_content)
-        ovpn_path = ovpn_file.name
+    with tempfile.NamedTemporaryFile("w", suffix=".ovpn", delete=False) as ovpn_file_tmp:
+        ovpn_file_tmp.write(ovpn_content)
+        ovpn_path = ovpn_file_tmp.name
 
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as auth_file:
         auth_file.write("vpn\nvpn\n")
@@ -438,10 +528,22 @@ def run_bridge(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="VPNGATE 本地住宅代理网桥")
+    parser = argparse.ArgumentParser(
+        description="VPNGATE 本地住宅代理网桥 (默认选择最优节点，支持手动指定节点)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "target",
+        nargs="?",
+        default="",
+        help="可选的目标节点 IP:端口 或 国家代码 (如 '221.71.170.232:1379' 或 'JP')"
+    )
+    parser.add_argument("--node", "-n", "--ip", type=str, default="", help="手动指定代理节点 IP 或 IP:端口")
+    parser.add_argument("--country", "-c", type=str, default="", help="指定桥接的国家 (如 JP, KR, US)")
+    parser.add_argument("--rank", "-r", type=int, default=1, help="指定选择该国家或全局排名第几的最优节点 (默认: 1)")
+    parser.add_argument("--ovpn", "-f", type=str, default="", help="直接指定自定义 .ovpn 配置文件路径")
     parser.add_argument("--socks-port", type=int, default=10808, help="本地 SOCKS5 监听端口")
     parser.add_argument("--http-port", type=int, default=10809, help="本地 HTTP 监听端口")
-    parser.add_argument("--country", "-c", type=str, default="", help="指定桥接的国家 (如 JP, KR, US)")
     parser.add_argument("--results-dir", "-d", type=str, default="results", help="结果文件目录")
     parser.add_argument("--verbose", "-v", action="store_true", help="输出调试日志")
 
@@ -451,10 +553,19 @@ def main() -> int:
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
+    target_node = args.node if args.node else args.target
+    country = args.country
+    if not country and target_node and len(target_node.strip()) == 2 and target_node.isalpha():
+        country = target_node.strip().upper()
+        target_node = ""
+
     return run_bridge(
         socks_port=args.socks_port,
         http_port=args.http_port,
-        country=args.country if args.country else None,
+        country=country if country else None,
+        target_node=target_node if target_node else None,
+        rank=args.rank,
+        ovpn_file=args.ovpn if args.ovpn else None,
         results_dir=args.results_dir
     )
 

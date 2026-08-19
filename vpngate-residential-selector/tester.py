@@ -12,7 +12,7 @@ import time
 import socket
 import struct
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -190,12 +190,12 @@ def test_single_server_protocol(
             # 1. Real Protocol Latency Score: 1000 / (avg_lat + 1) * 10
             # 2. Bandwidth Score: speed_mbps * 2.0
             # 3. Stability Multiplier: 1.0 - (loss_rate * 0.5)
-            # 4. Clean Residential Bonus: (20 - fraud_score) * 15
+            # 4. Clean Residential Bonus: (20 - fraud_score) * 25.0 (Lower fraud score gets higher weight)
             latency_score = (1000.0 / (avg_lat + 1.0)) * 10.0
             speed_score = min(server.speed_mbps, 1000.0) * 2.0
             stability_multiplier = 1.0 - (loss_rate * 0.5)
             quality_score = min(server.score / 10000.0, 500.0)
-            clean_bonus = max(20 - server.fraud_score, 0) * 15.0 if (server.fraud_score >= 0 and server.fraud_score <= 20) else 0.0
+            clean_bonus = max(20 - server.fraud_score, 0) * 25.0 if (0 <= server.fraud_score <= 20) else 0.0
 
             composite = (latency_score + speed_score + quality_score + clean_bonus) * stability_multiplier
 
@@ -266,23 +266,70 @@ def benchmark_servers(
     return results
 
 
+def select_top_servers_by_country(
+    results: List[BenchmarkResult],
+    top_per_country: int = 5,
+    sort_by: str = "composite",
+    target_countries: Optional[List[str]] = None
+) -> Tuple[List[BenchmarkResult], Dict[str, List[BenchmarkResult]]]:
+    """
+    Groups benchmarked servers by country, ranks each country's servers using composite score
+    (low Scamalytics threat score gets high weight bonus), and selects TOP N servers per country.
+    Returns: (flattened_selected_results, by_country_pool_dict)
+    """
+    if not results:
+        return [], {}
+
+    by_country: Dict[str, List[BenchmarkResult]] = {}
+    for r in results:
+        c_code = r.server.country_short.upper()
+        if target_countries:
+            normalized_targets = [c.strip().upper() for c in target_countries]
+            if c_code not in normalized_targets:
+                continue
+        if c_code not in by_country:
+            by_country[c_code] = []
+        by_country[c_code].append(r)
+
+    selected_pools: Dict[str, List[BenchmarkResult]] = {}
+    flattened: List[BenchmarkResult] = []
+
+    for c_code in sorted(by_country.keys()):
+        c_results = by_country[c_code]
+        if sort_by == "latency":
+            sorted_list = sorted(c_results, key=lambda x: (x.real_latency_ms, x.fraud_score, -x.server.speed_mbps))
+        elif sort_by == "speed":
+            sorted_list = sorted(c_results, key=lambda x: (-x.server.speed_mbps, x.fraud_score, x.real_latency_ms))
+        else:
+            sorted_list = sorted(c_results, key=lambda x: (-x.composite_score, x.fraud_score, x.real_latency_ms))
+
+        top_nodes = sorted_list[:top_per_country]
+        selected_pools[c_code] = top_nodes
+        flattened.extend(top_nodes)
+        logger.info(f"🎯 [{c_code}] 从 {len(c_results)} 个纯净可用节点中精选出 TOP {len(top_nodes)} 住宅代理")
+
+    # Sort flattened globally by composite score
+    flattened.sort(key=lambda x: (-x.composite_score, x.fraud_score, x.real_latency_ms))
+    return flattened, selected_pools
+
+
 def select_top_servers(
     results: List[BenchmarkResult],
     top_n: int = 20,
     sort_by: str = "composite"
 ) -> List[BenchmarkResult]:
     """
-    Sorts verified benchmark results and selects the TOP N best servers.
+    Sorts verified benchmark results and selects the TOP N best servers globally.
     """
     if not results:
         return []
 
     if sort_by == "latency":
-        sorted_list = sorted(results, key=lambda x: (x.real_latency_ms, -x.server.speed_mbps))
+        sorted_list = sorted(results, key=lambda x: (x.real_latency_ms, x.fraud_score, -x.server.speed_mbps))
     elif sort_by == "speed":
-        sorted_list = sorted(results, key=lambda x: (-x.server.speed_mbps, x.real_latency_ms))
+        sorted_list = sorted(results, key=lambda x: (-x.server.speed_mbps, x.fraud_score, x.real_latency_ms))
     else:
-        sorted_list = sorted(results, key=lambda x: (-x.composite_score, x.real_latency_ms))
+        sorted_list = sorted(results, key=lambda x: (-x.composite_score, x.fraud_score, x.real_latency_ms))
 
     selected = sorted_list[:top_n]
     logger.info(f"🎯 已从 {len(results)} 个协议验证可用节点中精选出最优 TOP {len(selected)} 住宅代理")

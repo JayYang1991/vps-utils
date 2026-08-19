@@ -32,7 +32,18 @@
    - `results/upstream_gateway.txt`：TOP 1 最优节点（直接适配 Cloudflare VLESS 上游中继）。
    - `results/singbox_outbounds.json`：sing-box 客户端原生出站配置。
    - `results/ovpn/*.ovpn`：各节点的独立 OpenVPN 配置文件（内嵌证书）。
-   - `results/summary.md`：7 国代理看板与威胁分明细。
+
+## 🎯 节点优选与桥接标准流程 (3 步核心逻辑)
+
+1. 🌐 **第一步：拉取全量节点列表**
+   - 多源并发抓取 VPNGATE 官方接口、筑波大学每日镜像（`sites.aspx`）与社区节点源，并结合历史沉淀数据库（`all_discovered_nodes.json`）持续扩充全量节点库。
+2. 🛡️ **第二步：按国家选取各自 TOP 5 住宅节点**
+   - **严格风控筛选**：只选择 **Scamalytics 威胁分小于 20** 的节点（0~19 判定为纯净住宅 IP，彻底剔除机房与高危代理）。
+   - **低威胁分高加权**：威胁分越低加权奖励分越高（0 分节点获得 +500 分最高奖励），结合 OpenVPN 握手延迟、带宽与丢包率综合排序。
+   - **分国独立精选**：为每个国家精选 TOP 5 节点，并自动导出各自分国代理文件（如 `proxies_JP.txt`、`proxies_US.txt`）与全局池。
+3. 🌉 **第三步：本地网桥智能中继 (`vpngate-bridge`)**
+   - **默认模式**：自动选择当前综合评分最高（威胁分最低 + 握手延迟最低）的住宅代理节点。
+   - **手动指定**：支持指定具体 IP:端口（如 `vpngate-bridge 219.100.37.13:443`）、指定国家（如 `vpngate-bridge -c JP`）、指定排名（`--rank 2`）或自定义 OVPN 文件（`--ovpn`）。
 
 ---
 
@@ -161,18 +172,31 @@ vpngate-selector --save-ovpn
 
 ---
 
+---
+
 ### 3️⃣ `vpngate-bridge` — 启动本地 SOCKS5 / HTTP 代理中继网桥
 
-自动读取当前选出的最优住宅 OpenVPN 节点，并在本地开启 SOCKS5 / HTTP 网关：
+默认选择评分最优的纯净住宅节点，并在本地开启 SOCKS5 / HTTP 双协议代理网关；同时**全面支持手动指定节点、指定国家、指定排名或自定义 OVPN**：
 
 ```bash
-# 1. 默认桥接全球延迟最低的纯净住宅节点 (监听 10808 / 10809 端口)
+# 1. 默认模式：自动选用全局综合评分最优 (威胁分最低+握手延迟最低) 的住宅节点
 vpngate-bridge
 
-# 2. 桥接指定国家的最优住宅节点 (如日本 JP)
+# 2. 手动指定国家最优节点 (如日本 JP、美国 US、韩国 KR)
 vpngate-bridge -c JP
+vpngate-bridge US
 
-# 3. 自定义本地监听端口
+# 3. 手动指定具体的 IP 或 IP:端口 节点
+vpngate-bridge 219.100.37.13:443
+vpngate-bridge --node 219.100.37.13:443
+
+# 4. 指定该国家或全局排名第几的最优节点 (如日本第 2 名)
+vpngate-bridge -c JP --rank 2
+
+# 5. 直接指定本地自定义 OpenVPN 配置文件 (.ovpn)
+vpngate-bridge --ovpn /path/to/my_server.ovpn
+
+# 6. 自定义本地监听端口
 vpngate-bridge --socks-port 10808 --http-port 10809
 ```
 

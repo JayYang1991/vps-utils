@@ -179,29 +179,92 @@ class TestVpnGateSelector(unittest.TestCase):
             active_ips = manager2.get_all_active_ips()
             self.assertIn("219.100.37.13", active_ips)
 
-    def test_fraud_checker_and_filter(self):
-        from fraud_checker import MEMORY_CACHE
-        from filter import filter_by_fraud_score
+    def test_select_top_servers_by_country(self):
+        from tester import select_top_servers_by_country
 
-        # Pre-seed cache
-        MEMORY_CACHE["1.1.1.1"] = (0, 9999999999.0)   # Clean (< 20)
-        MEMORY_CACHE["2.2.2.2"] = (85, 9999999999.0)  # Datacenter (>= 20)
-
-        s1 = VpnGateServer(
-            hostname="clean1", ip="1.1.1.1", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+        s_jp1 = VpnGateServer(
+            hostname="jp1", ip="1.1.1.1", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
             country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
-            total_users=1, total_traffic=1, operator="", message=""
+            total_users=1, total_traffic=1, operator="", message="", fraud_score=0
         )
-        s2 = VpnGateServer(
-            hostname="dirty1", ip="2.2.2.2", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+        s_jp2 = VpnGateServer(
+            hostname="jp2", ip="1.1.1.2", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
             country_short="JP", country_long="Japan", sessions=1, uptime_seconds=10,
-            total_users=1, total_traffic=1, operator="", message=""
+            total_users=1, total_traffic=1, operator="", message="", fraud_score=15
+        )
+        s_us1 = VpnGateServer(
+            hostname="us1", ip="2.2.2.1", score=5000, ping=10, speed_bps=10, speed_mbps=100.0,
+            country_short="US", country_long="United States", sessions=1, uptime_seconds=10,
+            total_users=1, total_traffic=1, operator="", message="", fraud_score=2
         )
 
-        clean = filter_by_fraud_score([s1, s2], max_fraud_score=20, cache_path=None)
-        self.assertEqual(len(clean), 1)
-        self.assertEqual(clean[0].ip, "1.1.1.1")
-        self.assertEqual(clean[0].fraud_score, 0)
+        r_jp1 = BenchmarkResult(
+            server=s_jp1, reachable=True, protocol="openvpn", real_latency_ms=20.0, min_latency_ms=19.0,
+            max_latency_ms=21.0, jitter_ms=2.0, packet_loss_rate=0.0,
+            tested_port=443, composite_score=1000.0, fraud_score=0
+        )
+        r_jp2 = BenchmarkResult(
+            server=s_jp2, reachable=True, protocol="openvpn", real_latency_ms=20.0, min_latency_ms=19.0,
+            max_latency_ms=21.0, jitter_ms=2.0, packet_loss_rate=0.0,
+            tested_port=443, composite_score=600.0, fraud_score=15
+        )
+        r_us1 = BenchmarkResult(
+            server=s_us1, reachable=True, protocol="openvpn", real_latency_ms=50.0, min_latency_ms=49.0,
+            max_latency_ms=51.0, jitter_ms=2.0, packet_loss_rate=0.0,
+            tested_port=443, composite_score=800.0, fraud_score=2
+        )
+
+        flattened, pools = select_top_servers_by_country([r_jp2, r_jp1, r_us1], top_per_country=1)
+        self.assertIn("JP", pools)
+        self.assertIn("US", pools)
+        self.assertEqual(len(pools["JP"]), 1)
+        # JP1 has fraud_score 0 (higher composite score), should rank 1st
+        self.assertEqual(pools["JP"][0].server.ip, "1.1.1.1")
+        self.assertEqual(len(pools["US"]), 1)
+        self.assertEqual(pools["US"][0].server.ip, "2.2.2.1")
+        self.assertEqual(len(flattened), 2)
+
+    def test_resolve_bridge_node(self):
+        import tempfile
+        from bridge import resolve_bridge_node
+
+        with tempfile.TemporaryDirectory() as test_dir:
+            # Write a dummy residential_pool.json
+            pool_path = os.path.join(test_dir, "residential_pool.json")
+            data = {
+                "pools": {
+                    "JP": [
+                        {"ip": "1.1.1.1", "port": 443, "country_short": "JP", "real_latency_ms": 10.0, "composite_score": 1000.0, "fraud_score": 0, "ovpn_b64": "ZHVtbXk="},
+                        {"ip": "1.1.1.2", "port": 992, "country_short": "JP", "real_latency_ms": 15.0, "composite_score": 800.0, "fraud_score": 5, "ovpn_b64": "ZHVtbXk="}
+                    ],
+                    "US": [
+                        {"ip": "2.2.2.1", "port": 443, "country_short": "US", "real_latency_ms": 60.0, "composite_score": 700.0, "fraud_score": 2, "ovpn_b64": "ZHVtbXk="}
+                    ]
+                }
+            }
+            with open(pool_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+
+            # Test 1: Default to optimal node (JP 1.1.1.1)
+            best = resolve_bridge_node(results_dir=test_dir)
+            self.assertIsNotNone(best)
+            self.assertEqual(best["ip"], "1.1.1.1")
+
+            # Test 2: Filter by country US
+            best_us = resolve_bridge_node(results_dir=test_dir, country="US")
+            self.assertIsNotNone(best_us)
+            self.assertEqual(best_us["ip"], "2.2.2.1")
+
+            # Test 3: Specify manual node IP:port
+            manual = resolve_bridge_node(results_dir=test_dir, target_node="1.1.1.2:992")
+            self.assertIsNotNone(manual)
+            self.assertEqual(manual["ip"], "1.1.1.2")
+            self.assertEqual(manual["port"], 992)
+
+            # Test 4: Specify rank 2 in JP
+            rank2 = resolve_bridge_node(results_dir=test_dir, country="JP", rank=2)
+            self.assertIsNotNone(rank2)
+            self.assertEqual(rank2["ip"], "1.1.1.2")
 
 
 if __name__ == "__main__":
