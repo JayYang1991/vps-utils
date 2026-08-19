@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-VPNGATE Local SOCKS5 / HTTP Gateway Bridge
-Bridges VPNGATE OpenVPN volunteer nodes into a local SOCKS5 / HTTP proxy listener (e.g. 127.0.0.1:10808)
+VPNGATE Local SOCKS5 & HTTP Gateway Bridge
+Bridges VPNGATE OpenVPN volunteer nodes into local SOCKS5 (10808) & HTTP (10809) proxy listeners
 allowing Cloudflare Worker VLESS, Clash, browsers, or curl to connect seamlessly.
 """
 
@@ -147,19 +147,15 @@ def handle_socks5_client(client_sock: socket.socket):
     """Handles an incoming SOCKS5 client connection."""
     try:
         client_sock.settimeout(10.0)
-        # SOCKS5 Greeting: [VER, NMETHODS, METHODS...]
         greeting = client_sock.recv(260)
         if not greeting or greeting[0] != 0x05:
             client_sock.close()
             return
 
-        # Respond with NO AUTH REQUIRED (0x05, 0x00)
         client_sock.sendall(b"\x05\x00")
 
-        # Read Request: [VER, CMD, RSV, ATYP, DST.ADDR, DST.PORT]
         req = client_sock.recv(260)
         if len(req) < 7 or req[0] != 0x05 or req[1] != 0x01:  # 0x01 = CONNECT
-            # Command not supported
             client_sock.sendall(b"\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00")
             client_sock.close()
             return
@@ -179,22 +175,19 @@ def handle_socks5_client(client_sock: socket.socket):
             client_sock.close()
             return
 
-        # Connect to destination
         remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         remote_sock.settimeout(10.0)
         remote_sock.connect((dest_host, dest_port))
         remote_sock.settimeout(None)
         client_sock.settimeout(None)
 
-        # Send SOCKS5 Success response: 0x05, 0x00 (SUCCESS), 0x00, 0x01 (IPv4), 0.0.0.0:0
         client_sock.sendall(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
 
-        # Bidirectional forwarder
         t1 = threading.Thread(target=forward_stream, args=(client_sock, remote_sock), daemon=True)
         t2 = threading.Thread(target=forward_stream, args=(remote_sock, client_sock), daemon=True)
         t1.start()
         t2.start()
-    except Exception as e:
+    except Exception:
         try:
             client_sock.close()
         except Exception:
@@ -208,7 +201,7 @@ def start_socks5_server(port: int = 10808, host: str = "0.0.0.0"):
     try:
         server_sock.bind((host, port))
         server_sock.listen(128)
-        logging.info(f"🟢 SOCKS5 代理网关监听已就绪: socks5://127.0.0.1:{port} (全网卡 0.0.0.0:{port})")
+        logging.info(f"🟢 SOCKS5 代理网关监听就绪: socks5://127.0.0.1:{port} (全网卡 0.0.0.0:{port})")
     except Exception as e:
         logging.error(f"❌ 绑定 SOCKS5 端口 {port} 失败: {e}")
         return
@@ -218,6 +211,120 @@ def start_socks5_server(port: int = 10808, host: str = "0.0.0.0"):
             server_sock.settimeout(1.0)
             client, addr = server_sock.accept()
             t = threading.Thread(target=handle_socks5_client, args=(client,), daemon=True)
+            t.start()
+        except socket.timeout:
+            continue
+        except Exception:
+            break
+
+    try:
+        server_sock.close()
+    except Exception:
+        pass
+
+
+def handle_http_client(client_sock: socket.socket):
+    """Handles an incoming HTTP proxy client connection (CONNECT & standard HTTP forward)."""
+    try:
+        client_sock.settimeout(10.0)
+        req_data = client_sock.recv(4096)
+        if not req_data:
+            client_sock.close()
+            return
+
+        first_line = req_data.split(b"\r\n")[0].decode("utf-8", errors="ignore")
+        parts = first_line.split()
+        if len(parts) < 2:
+            client_sock.close()
+            return
+
+        method, target = parts[0].upper(), parts[1]
+
+        if method == "CONNECT":
+            # HTTPS Tunneling: target is host:port
+            if ":" in target:
+                host, port_str = target.split(":", 1)
+                port = int(port_str)
+            else:
+                host, port = target, 443
+
+            remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            remote_sock.settimeout(10.0)
+            remote_sock.connect((host, port))
+            remote_sock.settimeout(None)
+            client_sock.settimeout(None)
+
+            # Send 200 Connection Established
+            client_sock.sendall(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: VPNGATE-Bridge/1.0\r\n\r\n")
+
+            t1 = threading.Thread(target=forward_stream, args=(client_sock, remote_sock), daemon=True)
+            t2 = threading.Thread(target=forward_stream, args=(remote_sock, client_sock), daemon=True)
+            t1.start()
+            t2.start()
+        else:
+            # Standard HTTP Forward Proxy
+            host = None
+            port = 80
+            if target.startswith("http://"):
+                url_without_proto = target[7:]
+                host_part = url_without_proto.split("/")[0]
+                if ":" in host_part:
+                    host, port_str = host_part.split(":", 1)
+                    port = int(port_str)
+                else:
+                    host = host_part
+            else:
+                for line in req_data.split(b"\r\n"):
+                    if line.lower().startswith(b"host:"):
+                        host_header = line.split(b":", 1)[1].strip().decode("utf-8", errors="ignore")
+                        if ":" in host_header:
+                            host, port_str = host_header.split(":", 1)
+                            port = int(port_str)
+                        else:
+                            host = host_header
+                        break
+
+            if not host:
+                client_sock.close()
+                return
+
+            remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            remote_sock.settimeout(10.0)
+            remote_sock.connect((host, port))
+            remote_sock.settimeout(None)
+            client_sock.settimeout(None)
+
+            # Send original request data
+            remote_sock.sendall(req_data)
+
+            t1 = threading.Thread(target=forward_stream, args=(client_sock, remote_sock), daemon=True)
+            t2 = threading.Thread(target=forward_stream, args=(remote_sock, client_sock), daemon=True)
+            t1.start()
+            t2.start()
+    except Exception:
+        try:
+            client_sock.close()
+        except Exception:
+            pass
+
+
+def start_http_server(port: int = 10809, host: str = "0.0.0.0"):
+    """Starts local HTTP proxy server listening thread."""
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        server_sock.bind((host, port))
+        server_sock.listen(128)
+        logging.info(f"🟢 HTTP 代理网关监听就绪:   http://127.0.0.1:{port}   (全网卡 0.0.0.0:{port})")
+    except Exception as e:
+        logging.error(f"❌ 绑定 HTTP 端口 {port} 失败: {e}")
+        return
+
+    while RUNNING:
+        try:
+            server_sock.settimeout(1.0)
+            client, addr = server_sock.accept()
+            t = threading.Thread(target=handle_http_client, args=(client,), daemon=True)
             t.start()
         except socket.timeout:
             continue
@@ -252,7 +359,7 @@ def run_bridge(
     ovpn_b64 = node.get("ovpn_b64", "")
 
     logging.info("=" * 75)
-    logging.info(f"🌉 VPNGATE 本地代理中继网桥正在启动")
+    logging.info(f"🌉 VPNGATE 本地住宅代理中继网桥启动中")
     logging.info(f"   • 选定住宅节点: [{country_code}] {ip}:{port} (实测握手延迟: {latency} ms)")
     logging.info(f"   • 本地 SOCKS5 代理网关: socks5://127.0.0.1:{socks_port}")
     logging.info(f"   • 本地 HTTP 代理网关:   http://127.0.0.1:{http_port}")
@@ -287,9 +394,16 @@ def run_bridge(
         auth_file.write("vpn\nvpn\n")
         auth_path = auth_file.name
 
-    # Start local SOCKS5 server thread
+    # 1. Start local SOCKS5 proxy server thread on 10808
     socks_thread = threading.Thread(target=start_socks5_server, args=(socks_port,), daemon=True)
     socks_thread.start()
+
+    # 2. Start local HTTP proxy server thread on 10809
+    http_thread = threading.Thread(target=start_http_server, args=(http_port,), daemon=True)
+    http_thread.start()
+
+    time.sleep(0.2)
+    logging.info("✨ 本地 SOCKS5 & HTTP 双代理监听器启动完毕！")
 
     try:
         logging.info(f"🚀 正在建立到 [{country_code}] {ip}:{port} 的 OpenVPN 加密隧道连接...")
@@ -301,7 +415,7 @@ def run_bridge(
             "--verb", "3"
         ]
         logging.info(f"执行命令: {' '.join(cmd)}")
-        logging.info("💡 隧道建立后，即可通过 socks5://127.0.0.1:10808 享受真实住宅宽带出海！")
+        logging.info("💡 隧道建立后，即可通过 SOCKS5(10808) / HTTP(10809) 享受真实住宅宽带出海！")
         logging.info("按 Ctrl+C 停止网桥。")
 
         proc = subprocess.Popen(cmd)

@@ -169,9 +169,9 @@ StandardError=journal
 WantedBy=default.target
 SERVICE_EOF
 
-        systemctl --user daemon-reload
-        systemctl --user enable "${SERVICE_NAME}"
-        systemctl --user restart "${SERVICE_NAME}"
+        systemctl --user daemon-reload || true
+        systemctl --user enable "${SERVICE_NAME}" || true
+        systemctl --user restart --no-block "${SERVICE_NAME}" || true
         info "✅ ${SERVICE_NAME} 用户级服务已启动并配置为开机自启！"
     else
         cat << SERVICE_EOF > "${SYSTEMD_DIR}/${SERVICE_FILE}"
@@ -195,9 +195,9 @@ StandardError=journal
 WantedBy=multi-user.target
 SERVICE_EOF
 
-        systemctl daemon-reload
-        systemctl enable "${SERVICE_NAME}"
-        systemctl restart "${SERVICE_NAME}"
+        systemctl daemon-reload || true
+        systemctl enable "${SERVICE_NAME}" || true
+        systemctl restart --no-block "${SERVICE_NAME}" || true
         info "✅ ${SERVICE_NAME} 系统级服务已启动并配置为开机自启！"
     fi
 }
