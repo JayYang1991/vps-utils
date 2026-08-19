@@ -9,6 +9,7 @@ and saves the TOP 20 residential proxy endpoints into result files.
 import sys
 import os
 import json
+import shutil
 import argparse
 import logging
 from typing import List, Optional, Dict, Any
@@ -34,8 +35,8 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
 
     logging.basicConfig(
         level=level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S"
+        format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
     )
 
 
@@ -87,14 +88,32 @@ def print_table(
     print("")
 
 
+def get_all_search_dirs(results_dir: str = "results") -> List[str]:
+    """Returns a list of all potential directories where results/state files can be saved."""
+    dirs = [
+        results_dir,
+        os.path.abspath(results_dir),
+        os.path.join(SCRIPT_DIR, results_dir),
+        os.path.abspath(os.path.join(SCRIPT_DIR, results_dir)),
+        "/usr/local/bin/vpngate-residential-selector/results",
+        "/root/.local/bin/vpngate-residential-selector/results",
+        "/root/vps-utils/vpngate-residential-selector/results",
+        os.path.expanduser("~/.local/bin/vpngate-residential-selector/results"),
+        os.path.expanduser("~/vps-utils/vpngate-residential-selector/results"),
+    ]
+    seen = set()
+    unique = []
+    for d in dirs:
+        norm = os.path.normpath(d)
+        if norm not in seen:
+            seen.add(norm)
+            unique.append(norm)
+    return unique
+
+
 def show_current_nodes(results_dir: str = "results", country: Optional[str] = None) -> int:
     """Reads and displays currently selected nodes from residential_pool.json or residential_nodes.json."""
-    search_dirs = [
-        results_dir,
-        os.path.join(SCRIPT_DIR, results_dir),
-        "/usr/local/bin/vpngate-residential-selector/results",
-        os.path.expanduser("~/.local/bin/vpngate-residential-selector/results")
-    ]
+    search_dirs = get_all_search_dirs(results_dir)
 
     for r_dir in search_dirs:
         if not os.path.exists(r_dir):
@@ -144,9 +163,9 @@ def show_current_nodes(results_dir: str = "results", country: Optional[str] = No
             except Exception as e:
                 logging.debug(f"读取 {nodes_file} 失败: {e}")
 
-    print(f"\n❌ 未找到任何已选出的节点记录文件 (尝试目录: {results_dir})。")
-    print("👉 请先运行 'vpngate-selector' 或启动 'vpngate-service start' 进行测速与优选。\n")
-    return 1
+    print(f"\nℹ️ 当前未发现任何已保存的住宅节点记录 (历史数据库已彻底清空或尚未测速)。")
+    print("👉 请先运行 'vpngate-selector' 执行一次测速优选，或运行 'vpngate-service start' 启动后台保活服务。\n")
+    return 0
 
 
 def _render_nodes_table(nodes: List[Dict[str, Any]]) -> None:
@@ -183,52 +202,30 @@ def _render_nodes_table(nodes: List[Dict[str, Any]]) -> None:
 
 
 def clean_historical_data(results_dir: str = "results") -> int:
-    """Cleans all historical node databases, state pools, and fraud score caches."""
-    search_dirs = [
-        results_dir,
-        os.path.join(SCRIPT_DIR, results_dir),
-        "/usr/local/bin/vpngate-residential-selector/results",
-        os.path.expanduser("~/.local/bin/vpngate-residential-selector/results")
-    ]
+    """Cleans all historical node databases, state pools, and fraud score caches across all paths."""
+    search_dirs = get_all_search_dirs(results_dir)
 
-    cleaned_files = []
-    target_filenames = [
-        "all_discovered_nodes.json",
-        "residential_pool.json",
-        "scamalytics_cache.json",
-        "residential_nodes.json",
-        "proxies.txt",
-        "upstream_gateway.txt",
-        "vpngate_top20.txt",
-        "singbox_outbounds.json",
-        "summary.md"
-    ]
-
-    for r_dir in set(search_dirs):
+    cleaned_items = []
+    for r_dir in search_dirs:
         if not os.path.exists(r_dir):
             continue
-        for fname in target_filenames:
-            fpath = os.path.join(r_dir, fname)
-            if os.path.exists(fpath):
-                try:
-                    os.remove(fpath)
-                    cleaned_files.append(fpath)
-                except Exception as e:
-                    logging.warning(f"删除 {fpath} 失败: {e}")
         try:
-            for f in os.listdir(r_dir):
-                if f.startswith("proxies_") and f.endswith(".txt"):
-                    fpath = os.path.join(r_dir, f)
-                    os.remove(fpath)
-                    cleaned_files.append(fpath)
-        except Exception:
-            pass
+            for item in os.listdir(r_dir):
+                item_path = os.path.join(r_dir, item)
+                if os.path.isfile(item_path) or os.path.islink(item_path):
+                    os.remove(item_path)
+                    cleaned_items.append(item_path)
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path, ignore_errors=True)
+                    cleaned_items.append(item_path)
+        except Exception as e:
+            logging.warning(f"清理目录 {r_dir} 异常: {e}")
 
-    if cleaned_files:
-        print(f"\n🧹 已成功清理 {len(cleaned_files)} 个历史数据库与缓存文件:")
-        for f in sorted(set(cleaned_files)):
+    if cleaned_items:
+        print(f"\n🧹 已成功清理 {len(cleaned_items)} 个历史数据库、状态池与缓存文件/目录:")
+        for f in sorted(set(cleaned_items)):
             print(f"   • 已删除: {f}")
-        print("✅ 历史沉淀库、状态池与威胁分缓存已彻底清空！下次运行将重新全量拉取与测速。\n")
+        print("✅ 所有历史沉淀库、状态池与威胁分缓存已彻底清空！下次运行将重新全量拉取与测速。\n")
     else:
         print(f"\nℹ️ 未发现任何需要清理的历史数据库或缓存文件。\n")
     return 0

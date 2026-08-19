@@ -83,26 +83,44 @@ uninstall_service() {
 }
 
 clean_history() {
-    info "正在清理历史节点沉淀库、7国保活状态池与 Scamalytics 威胁分缓存..."
-    local was_active=false
-    if ${SYSTEMCTL_CMD} is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
-        was_active=true
-        ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" 2>/dev/null || true
+    info "正在彻底清理历史节点沉淀库、7国保活状态池与 Scamalytics 威胁分缓存..."
+    
+    # 1. 停止后台服务与相关进程
+    ${SYSTEMCTL_CMD} stop "${SERVICE_NAME}" 2>/dev/null || true
+    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+    systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
+    pkill -f "daemon.py" 2>/dev/null || true
+    pkill -f "bridge.py" 2>/dev/null || true
+    sleep 0.5
+
+    # 2. 清除所有已知的可能安装路径和工作路径的 results 目录
+    local clean_dirs=(
+        "${INSTALL_DIR}/results"
+        "${SCRIPT_DIR}/results"
+        "/usr/local/bin/vpngate-residential-selector/results"
+        "${HOME}/.local/bin/vpngate-residential-selector/results"
+        "/root/.local/bin/vpngate-residential-selector/results"
+        "${HOME}/vps-utils/vpngate-residential-selector/results"
+        "/root/vps-utils/vpngate-residential-selector/results"
+        "./results"
+    )
+
+    for dir in "${clean_dirs[@]}"; do
+        if [ -d "${dir}" ]; then
+            rm -rf "${dir:?}"/* 2>/dev/null || true
+            mkdir -p "${dir}"
+        fi
+    done
+
+    # 3. 同时调用 Python 内部全面清理逻辑
+    if [ -x "${INSTALL_DIR}/main.py" ]; then
+        python3 "${INSTALL_DIR}/main.py" --clean >/dev/null 2>&1 || true
+    elif [ -x "${SCRIPT_DIR}/main.py" ]; then
+        python3 "${SCRIPT_DIR}/main.py" --clean >/dev/null 2>&1 || true
     fi
 
-    # 清理安装目录与源码目录中的历史数据与缓存
-    rm -rf "${INSTALL_DIR}/results"/* 2>/dev/null || true
-    mkdir -p "${INSTALL_DIR}/results"
-
-    rm -rf "${SCRIPT_DIR}/results"/* 2>/dev/null || true
-    mkdir -p "${SCRIPT_DIR}/results"
-
-    info "✅ 历史节点数据库与威胁分缓存已彻底清空！"
-
-    if [ "$was_active" = true ]; then
-        info "正在重新启动 ${SERVICE_NAME} 服务并触发全新一轮全量测速构建..."
-        ${SYSTEMCTL_CMD} start "${SERVICE_NAME}"
-    fi
+    info "✅ 所有目录下的历史节点数据库、状态池与威胁分缓存已彻底清空！"
+    info "💡 后台服务已停止。若需开始全新初始化，请运行: vpngate-service start (或 vpngate-selector 重新测速优选)"
 }
 
 list_nodes() {
