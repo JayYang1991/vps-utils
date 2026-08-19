@@ -81,29 +81,72 @@ export async function handleVlessWebSocket(request, config, env = {}) {
  */
 async function processVlessSession(ws, earlyData, config, clientInfo = {}, env = {}) {
   let isHeaderParsed = false;
+  let isConnecting = false;
+  let isClosed = false;
   let remoteSocket = null;
   let remoteWriter = null;
   let targetAddress = '';
   let targetPort = 0;
   const clientIp = clientInfo.ip || 'unknown';
 
+  // 待发送队列与锁，保证严格按序写入 remoteWriter，防止并发调用 remoteWriter.write() 发生异常崩溃
+  const pendingQueue = [];
+  let isWriting = false;
+
+  const flushQueue = async () => {
+    if (isWriting || !remoteWriter || isClosed) return;
+    isWriting = true;
+    try {
+      while (pendingQueue.length > 0 && remoteWriter && !isClosed) {
+        const chunk = pendingQueue.shift();
+        if (chunk && chunk.length > 0) {
+          await remoteWriter.write(chunk);
+        }
+      }
+    } catch (writeErr) {
+      console.error(`[VLESS:Write:Error] 写入上游 Socket 异常 [${targetAddress}:${targetPort}]:`, writeErr.message || writeErr);
+      await logSystem(env, {
+        level: 'ERROR',
+        module: 'VLESS:Write',
+        message: `向目标 [${targetAddress}:${targetPort}] 写入数据失败: ${writeErr.message || writeErr}`,
+        ip: clientIp,
+      });
+      cleanup();
+    } finally {
+      isWriting = false;
+    }
+  };
+
   // 辅助关闭连接
   const cleanup = () => {
+    if (isClosed) return;
+    isClosed = true;
+    pendingQueue.length = 0;
     if (remoteWriter) {
       try { remoteWriter.releaseLock(); } catch (_) {}
+      remoteWriter = null;
     }
     if (remoteSocket) {
       try { remoteSocket.close(); } catch (_) {}
+      remoteSocket = null;
     }
     safeCloseWebSocket(ws);
   };
 
   // 处理从 WebSocket 接收到的二进制数据
   const handleClientData = async (data) => {
+    if (isClosed) return;
     try {
       const buffer = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(await data.arrayBuffer());
+      if (buffer.length === 0) return;
 
       if (!isHeaderParsed) {
+        if (isConnecting) {
+          // 如果首包正在建立连接中，将后续到达的数据压入待发送队列
+          pendingQueue.push(buffer);
+          return;
+        }
+
         // 解析 VLESS 首包
         const parseResult = parseVlessHeader(buffer, config.uuid);
         if (!parseResult.success) {
@@ -113,7 +156,7 @@ async function processVlessSession(ws, earlyData, config, clientInfo = {}, env =
           return;
         }
 
-        isHeaderParsed = true;
+        isConnecting = true;
         targetAddress = parseResult.address;
         targetPort = parseResult.port;
 
@@ -141,9 +184,16 @@ async function processVlessSession(ws, earlyData, config, clientInfo = {}, env =
           return;
         }
 
+        if (isClosed) {
+          try { connResult.socket.close(); } catch (_) {}
+          return;
+        }
+
         const { socket, initialBuffer } = connResult;
         remoteSocket = socket;
         remoteWriter = remoteSocket.writable.getWriter();
+        isHeaderParsed = true;
+        isConnecting = false;
 
         console.log(`[VLESS:Connected] 上游 Socket 连接成功 [${targetAddress}:${targetPort}]，开始向客户端回送响应`);
 
@@ -163,22 +213,24 @@ async function processVlessSession(ws, earlyData, config, clientInfo = {}, env =
         // 启动从远端 Socket 读取并回传给 WebSocket 的管道
         pipeRemoteToWebSocket(remoteSocket, ws, cleanup, targetAddress, targetPort, env, clientIp);
 
-        // 如果首包中包含初始载荷 (Payload)，写入远端 Socket
+        // 如果首包中包含初始载荷 (Payload)，优先写入远端 Socket
         if (parseResult.payload && parseResult.payload.length > 0) {
-          await remoteWriter.write(parseResult.payload);
+          pendingQueue.unshift(parseResult.payload);
         }
+
+        // 刷新队列中的数据到远端 Socket
+        await flushQueue();
       } else {
-        // 后续数据直接写入远端 Socket
-        if (remoteWriter) {
-          await remoteWriter.write(buffer);
-        }
+        // 连接已就绪，压入队列并按序写入
+        pendingQueue.push(buffer);
+        await flushQueue();
       }
     } catch (err) {
       console.error(`[VLESS:Stream:Error] 数据转发流异常 [${targetAddress}:${targetPort}] (IP: ${clientIp}):`, err.message || err);
       await logSystem(env, {
         level: 'ERROR',
         module: 'VLESS:Stream',
-        message: `目标 [${targetAddress}:${targetPort}] 传输流中断/异常: ${err.message}`,
+        message: `目标 [${targetAddress}:${targetPort}] 传输流异常: ${err.message || err}`,
         details: err.stack,
         ip: clientIp,
       });
@@ -208,8 +260,9 @@ async function processVlessSession(ws, earlyData, config, clientInfo = {}, env =
   });
 
   ws.addEventListener('error', async (err) => {
-    console.error(`[VLESS:WS:Error] WebSocket 异常 (IP: ${clientIp}, 目标: ${targetAddress}:${targetPort}):`, err.message || err);
-    await logSystem(env, { level: 'WARN', module: 'VLESS:WS', message: `WebSocket 连接异常 [${targetAddress}:${targetPort}]: ${err.message || err}`, ip: clientIp });
+    const msg = (err && err.message) || String(err || '');
+    console.error(`[VLESS:WS:Error] WebSocket 异常 (IP: ${clientIp}, 目标: ${targetAddress}:${targetPort}):`, msg);
+    await logSystem(env, { level: 'WARN', module: 'VLESS:WS', message: `WebSocket 连接异常 [${targetAddress}:${targetPort}]: ${msg}`, ip: clientIp });
     cleanup();
   });
 }
@@ -219,27 +272,33 @@ async function processVlessSession(ws, earlyData, config, clientInfo = {}, env =
  */
 async function pipeRemoteToWebSocket(remoteSocket, ws, cleanup, targetAddress, targetPort, env = {}, clientIp = '') {
   let reader = null;
+  let totalBytes = 0;
   try {
     reader = remoteSocket.readable.getReader();
     while (true) {
       const { value, done } = await reader.read();
       if (done) {
+        console.log(`[VLESS:Pipe:Done] 远端 Socket 正常读取结束 (EOF) [${targetAddress}:${targetPort}] (总下行: ${totalBytes} bytes)`);
         break;
       }
       if (value && value.length > 0) {
+        totalBytes += value.length;
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(value);
         } else {
+          console.warn(`[VLESS:Pipe:WSClosed] 客户端 WebSocket 已非处于 OPEN 状态 (ReadyState: ${ws.readyState}) [${targetAddress}:${targetPort}]`);
           break;
         }
       }
     }
   } catch (err) {
-    console.error(`[VLESS:Pipe:Error] 远端到客户端转发异常 [${targetAddress}:${targetPort}]:`, err.message || err);
+    const msg = (err && err.message) || String(err || '');
+    console.error(`[VLESS:Pipe:Error] 远端到客户端转发异常 [${targetAddress}:${targetPort}]:`, msg);
     await logSystem(env, {
       level: 'WARN',
       module: 'VLESS:Pipe',
-      message: `远端回传数据中断 [${targetAddress}:${targetPort}]: ${err.message || err}`,
+      message: `远端回传数据中断 [${targetAddress}:${targetPort}]: ${msg}`,
+      details: `已下行传输: ${totalBytes} 字节`,
       ip: clientIp,
     });
   } finally {
