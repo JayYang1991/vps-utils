@@ -32,43 +32,66 @@ info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+install_openvpn_dependency() {
+    info "正在检查并安装 OpenVPN 核心依赖..."
+    if command -v openvpn >/dev/null 2>&1 || [ -x "/usr/sbin/openvpn" ] || [ -x "/usr/bin/openvpn" ] || [ -x "/usr/local/sbin/openvpn" ]; then
+        info "✅ 检测到 OpenVPN 已安装就绪"
+        return 0
+    fi
+
+    info "🔧 正在自动通过系统包管理器安装 OpenVPN..."
+    if [ "$EUID" -eq 0 ]; then
+        if command -v apt-get >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -y && apt-get install -y openvpn ca-certificates
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y epel-release || true
+            dnf install -y openvpn ca-certificates
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y epel-release || true
+            yum install -y openvpn ca-certificates
+        elif command -v apk >/dev/null 2>&1; then
+            apk add openvpn ca-certificates
+        elif command -v pacman >/dev/null 2>&1; then
+            pacman -Sy --noconfirm openvpn ca-certificates
+        fi
+    elif command -v sudo >/dev/null 2>&1; then
+        info "检测到非 root 用户，尝试通过 sudo 自动安装 OpenVPN..."
+        if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y && sudo apt-get install -y openvpn ca-certificates
+        elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y epel-release || true
+            sudo dnf install -y openvpn ca-certificates
+        elif command -v yum >/dev/null 2>&1; then
+            sudo yum install -y epel-release || true
+            sudo yum install -y openvpn ca-certificates
+        fi
+    fi
+
+    if command -v openvpn >/dev/null 2>&1 || [ -x "/usr/sbin/openvpn" ] || [ -x "/usr/bin/openvpn" ] || [ -x "/usr/local/sbin/openvpn" ]; then
+        info "✅ OpenVPN 依赖安装成功！"
+    else
+        warn "⚠️ OpenVPN 自动安装未完成，若需使用网桥请手动运行: sudo apt-get install -y openvpn"
+    fi
+}
+
 check_dependencies() {
     info "正在检查运行环境依赖..."
     if ! command -v python3 >/dev/null 2>&1; then
-        error "未找到 Python 3，请先安装: sudo apt-get install -y python3"
-        exit 1
+        if [ "$EUID" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
+            apt-get update -y && apt-get install -y python3
+        else
+            error "未找到 Python 3，请先安装: sudo apt-get install -y python3"
+            exit 1
+        fi
     fi
 
     local py_version
     py_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
     info "检测到 Python 版本: ${py_version}"
 
-    # 检查并自动安装 OpenVPN
-    if command -v openvpn >/dev/null 2>&1 || [ -x "/usr/sbin/openvpn" ] || [ -x "/usr/bin/openvpn" ]; then
-        info "✅ 检测到 OpenVPN 已就绪"
-    else
-        if [ "$EUID" -eq 0 ]; then
-            info "🔧 未检测到 OpenVPN，正在自动通过系统包管理器安装..."
-            if command -v apt-get >/dev/null 2>&1; then
-                apt-get update -y && apt-get install -y openvpn
-            elif command -v dnf >/dev/null 2>&1; then
-                dnf install -y epel-release openvpn || dnf install -y openvpn
-            elif command -v yum >/dev/null 2>&1; then
-                yum install -y epel-release openvpn || yum install -y openvpn
-            elif command -v apk >/dev/null 2>&1; then
-                apk add openvpn
-            elif command -v pacman >/dev/null 2>&1; then
-                pacman -Sy --noconfirm openvpn
-            fi
-            if command -v openvpn >/dev/null 2>&1 || [ -x "/usr/sbin/openvpn" ]; then
-                info "✅ OpenVPN 安装成功！"
-            else
-                warn "⚠️ OpenVPN 自动安装未能完成，可稍后手动运行: sudo apt-get install -y openvpn"
-            fi
-        else
-            warn "⚠️ 未检测到 OpenVPN，若需要启动本地中继网桥，请先安装: sudo apt-get install -y openvpn"
-        fi
-    fi
+    # 安装并确保 OpenVPN 就绪
+    install_openvpn_dependency
 
     if [ "${IS_USER_MODE}" = true ]; then
         warn "当前以普通用户身份运行，将安装至 ${INSTALL_DIR} 与 ${BIN_DIR} (无需 sudo)"
