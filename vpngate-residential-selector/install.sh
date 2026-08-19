@@ -100,13 +100,44 @@ check_dependencies() {
     fi
 }
 
-install_files() {
-    info "正在安装所有依赖与程序文件至 ${INSTALL_DIR} ..."
+stop_existing_service() {
+    info "正在停止可能正在运行的旧版本服务与进程..."
+    if [ "${IS_USER_MODE}" = true ]; then
+        systemctl --user stop "${SERVICE_NAME}" 2>/dev/null || true
+    else
+        systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+    fi
+    # 终止可能遗留的旧版独立前台后台进程
+    pkill -f "${INSTALL_DIR}/daemon.py" 2>/dev/null || true
+    sleep 0.5
+}
 
+install_files() {
+    info "正在执行完全覆盖安装至 ${INSTALL_DIR} ..."
+
+    # 1. 临时备份现有历史状态与缓存数据
+    local tmp_backup_dir
+    tmp_backup_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'vpngate_bak')
+
+    if [ -d "${INSTALL_DIR}/results" ]; then
+        [ -f "${INSTALL_DIR}/results/residential_pool.json" ] && cp -f "${INSTALL_DIR}/results/residential_pool.json" "${tmp_backup_dir}/" 2>/dev/null || true
+        [ -f "${INSTALL_DIR}/results/all_discovered_nodes.json" ] && cp -f "${INSTALL_DIR}/results/all_discovered_nodes.json" "${tmp_backup_dir}/" 2>/dev/null || true
+        [ -f "${INSTALL_DIR}/results/scamalytics_cache.json" ] && cp -f "${INSTALL_DIR}/results/scamalytics_cache.json" "${tmp_backup_dir}/" 2>/dev/null || true
+    fi
+
+    if [ -d "${SCRIPT_DIR}/results" ]; then
+        [ -f "${SCRIPT_DIR}/results/residential_pool.json" ] && cp -f "${SCRIPT_DIR}/results/residential_pool.json" "${tmp_backup_dir}/" 2>/dev/null || true
+        [ -f "${SCRIPT_DIR}/results/all_discovered_nodes.json" ] && cp -f "${SCRIPT_DIR}/results/all_discovered_nodes.json" "${tmp_backup_dir}/" 2>/dev/null || true
+        [ -f "${SCRIPT_DIR}/results/scamalytics_cache.json" ] && cp -f "${SCRIPT_DIR}/results/scamalytics_cache.json" "${tmp_backup_dir}/" 2>/dev/null || true
+    fi
+
+    # 2. 完全清除旧版安装目录
+    rm -rf "${INSTALL_DIR}"
     mkdir -p "${INSTALL_DIR}"
     mkdir -p "${INSTALL_DIR}/results"
+    mkdir -p "${BIN_DIR}"
 
-    # 复制所有核心 python 模块与脚本
+    # 3. 复制所有核心 python 模块与脚本
     cp -f "${SCRIPT_DIR}/fetcher.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/filter.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/fraud_checker.py" "${INSTALL_DIR}/"
@@ -118,20 +149,32 @@ install_files() {
     cp -f "${SCRIPT_DIR}/main.py" "${INSTALL_DIR}/"
     cp -f "${SCRIPT_DIR}/service.sh" "${INSTALL_DIR}/"
 
-    # 如果有历史状态文件则保留同步
-    if [ -f "${SCRIPT_DIR}/results/residential_pool.json" ]; then
-        cp -f "${SCRIPT_DIR}/results/residential_pool.json" "${INSTALL_DIR}/results/" || true
+    # 4. 恢复历史状态与缓存
+    if [ -f "${tmp_backup_dir}/residential_pool.json" ]; then
+        cp -f "${tmp_backup_dir}/residential_pool.json" "${INSTALL_DIR}/results/"
     fi
+    if [ -f "${tmp_backup_dir}/all_discovered_nodes.json" ]; then
+        cp -f "${tmp_backup_dir}/all_discovered_nodes.json" "${INSTALL_DIR}/results/"
+    fi
+    if [ -f "${tmp_backup_dir}/scamalytics_cache.json" ]; then
+        cp -f "${tmp_backup_dir}/scamalytics_cache.json" "${INSTALL_DIR}/results/"
+    fi
+    rm -rf "${tmp_backup_dir}" 2>/dev/null || true
 
-    # 设置可执行权限
+    # 5. 清理可能存在的 __pycache__ 缓存
+    find "${INSTALL_DIR}" -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+
+    # 6. 设置权限
     chmod +x "${INSTALL_DIR}/main.py"
     chmod +x "${INSTALL_DIR}/daemon.py"
     chmod +x "${INSTALL_DIR}/bridge.py"
     chmod +x "${INSTALL_DIR}/service.sh"
     chmod -R 755 "${INSTALL_DIR}"
 
-    # 创建全局终端调用命令软链接至 /usr/local/bin
-    info "正在创建全局快捷命令软链接至 ${BIN_DIR} ..."
+    # 7. 清理旧软链接并重新创建全局终端调用命令软链接至 BIN_DIR
+    info "正在重新创建全局快捷命令软链接至 ${BIN_DIR} ..."
+    rm -f "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-service"
+
     ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-selector"
     ln -sf "${INSTALL_DIR}/main.py" "${BIN_DIR}/vpngate-nodes"
     ln -sf "${INSTALL_DIR}/daemon.py" "${BIN_DIR}/vpngate-daemon"
@@ -139,7 +182,7 @@ install_files() {
     ln -sf "${INSTALL_DIR}/service.sh" "${BIN_DIR}/vpngate-service"
     chmod +x "${BIN_DIR}/vpngate-selector" "${BIN_DIR}/vpngate-nodes" "${BIN_DIR}/vpngate-daemon" "${BIN_DIR}/vpngate-bridge" "${BIN_DIR}/vpngate-service"
 
-    info "✅ 全局快捷命令已就绪:"
+    info "✅ 全局快捷命令已重新绑定就绪:"
     info "   • vpngate-nodes     -> 查看当前已选出的全部 7 国住宅代理节点列表 (支持 -c JP)"
     info "   • vpngate-selector  -> 手动单次协议测速与提取 TOP 住宅节点 (可带 -l/--list 查看列表)"
     info "   • vpngate-service   -> 管理后台 systemd 服务 (支持 vpngate-service list/status/logs)"
@@ -148,10 +191,14 @@ install_files() {
 }
 
 setup_systemd() {
-    info "正在配置 Systemd 后台自愈服务 (${SERVICE_FILE})..."
+    info "正在重新配置并加载 Systemd 服务 (${SERVICE_FILE})..."
     mkdir -p "${SYSTEMD_DIR}"
 
+    local python_bin
+    python_bin=$(which python3)
+
     if [ "${IS_USER_MODE}" = true ]; then
+        rm -f "${SYSTEMD_DIR}/${SERVICE_FILE}"
         cat << SERVICE_EOF > "${SYSTEMD_DIR}/${SERVICE_FILE}"
 [Unit]
 Description=VPNGATE Multi-Country Residential Proxy Selector & Health Daemon
@@ -161,7 +208,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=$(which python3) ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 20
+ExecStart=${python_bin} ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 20
 Restart=always
 RestartSec=10
 KillMode=process
@@ -175,8 +222,9 @@ SERVICE_EOF
         systemctl --user daemon-reload || true
         systemctl --user enable "${SERVICE_NAME}" || true
         systemctl --user restart --no-block "${SERVICE_NAME}" || true
-        info "✅ ${SERVICE_NAME} 用户级服务已启动并配置为开机自启！"
+        info "✅ ${SERVICE_NAME} 用户级服务已重新加载并启动！"
     else
+        rm -f "${SYSTEMD_DIR}/${SERVICE_FILE}"
         cat << SERVICE_EOF > "${SYSTEMD_DIR}/${SERVICE_FILE}"
 [Unit]
 Description=VPNGATE Multi-Country Residential Proxy Selector & Health Daemon
@@ -187,7 +235,7 @@ Wants=network-online.target
 Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=$(which python3) ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 20
+ExecStart=${python_bin} ${INSTALL_DIR}/daemon.py --interval 300 --top-per-country 20
 Restart=always
 RestartSec=10
 KillMode=process
@@ -201,21 +249,22 @@ SERVICE_EOF
         systemctl daemon-reload || true
         systemctl enable "${SERVICE_NAME}" || true
         systemctl restart --no-block "${SERVICE_NAME}" || true
-        info "✅ ${SERVICE_NAME} 系统级服务已启动并配置为开机自启！"
+        info "✅ ${SERVICE_NAME} 系统级服务已重新加载并启动！"
     fi
 }
 
 main() {
     echo -e "${BLUE}==================================================================${NC}"
-    echo -e "${BLUE}  🌐 VPNGATE 7国住宅 IP 优选与 Systemd 服务一键安装脚本          ${NC}"
+    echo -e "${BLUE}  🌐 VPNGATE 7国住宅 IP 优选与 Systemd 服务完全覆盖安装脚本       ${NC}"
     echo -e "${BLUE}==================================================================${NC}"
 
     check_dependencies
+    stop_existing_service
     install_files
     setup_systemd
 
     echo ""
-    info "🎉 安装全部完成！"
+    info "🎉 完全覆盖安装全部完成！"
     if [ "${IS_USER_MODE}" = true ]; then
         systemctl --user status "${SERVICE_NAME}" --no-pager || true
     else
