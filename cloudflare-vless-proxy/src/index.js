@@ -8,7 +8,7 @@ import { handleVlessWebSocket } from './vless.js';
 import { handleAdmin } from './admin.js';
 import { handleRestApi } from './api.js';
 import { renderLandingPage } from './landing.js';
-import { generateAllVlessNodes, generateBase64Sub, generateSingboxFullProfile, convertViaSubapi, injectSingboxChainProxy } from './sub.js';
+import { generateAllVlessNodes, generateBase64Sub, generateSingboxFullProfile, convertViaSubapi } from './sub.js';
 import { logSystem } from './logger.js';
 
 const handler = {
@@ -94,9 +94,7 @@ const handler = {
         const rawSubUrl = `${url.origin}/v2ray?token=${encodeURIComponent(token)}`;
         const configTemplate = url.searchParams.get('config') || config.singboxConfigUrl || DEFAULT_SINGBOX_CONFIG_URL;
         let content = await convertViaSubapi(rawSubUrl, 'singbox', configTemplate, 3, config.subapiUrl);
-        if (content) {
-          content = injectSingboxChainProxy(content, config);
-        } else {
+        if (!content) {
           // 在线转换失败或超时时，使用本地动态优选节点生成完整配置兜底
           await logSystem(env, { level: 'WARN', module: 'Subapi', message: 'Subapi 在线转换超时或异常，已自动回退至本地模板引擎生成' });
           const nodes = await generateAllVlessNodes(config, url.host, { env });

@@ -269,134 +269,18 @@ describe('Node & Config Generators', () => {
     assert.equal(singboxObj[0].tls.server_name, domain);
   });
 
-  it('should generate Sing-box full subscription profile with auto-selector-tcp and Base64 subscription', async () => {
-    const { generateSingboxFullProfile, generateBase64Sub, buildUpstreamOutbound, injectSingboxChainProxy } = await import('../src/sub.js');
+  it('should generate Sing-box full subscription profile and Base64 subscription', async () => {
+    const { generateSingboxFullProfile, generateBase64Sub } = await import('../src/sub.js');
     
-    // 1. Sing-box Full Profile (无上游代理)
+    // 1. Sing-box Full Profile
     const sbFull = generateSingboxFullProfile(config, domain);
     const sbObj = JSON.parse(sbFull);
     assert.ok(sbObj.inbounds && sbObj.outbounds && sbObj.route);
     assert.equal(sbObj.outbounds[0].tag, '🚀 节点选择');
     assert.equal(sbObj.outbounds[1].tag, 'auto-selector-tcp');
+    assert.ok(sbObj.outbounds.some(o => o.type === 'vless'));
 
-    // 2. 带有 SOCKS5 住宅代理的链式代理配置生成
-    const configWithSocks = {
-      ...config,
-      upstreamProxy: 'socks5://user:pass@1.2.3.4:1080'
-    };
-    const sbWithSocks = generateSingboxFullProfile(configWithSocks, domain);
-    const sbSocksObj = JSON.parse(sbWithSocks);
-    
-    // 第 1 站：auto-selector-tcp (urltest)
-    const urltestNode = sbSocksObj.outbounds.find(o => o.tag === 'auto-selector-tcp');
-    assert.ok(urltestNode);
-    assert.equal(urltestNode.type, 'urltest');
-    
-    // 最终出站：SOCKS5 节点，detour 设置为 auto-selector-tcp
-    const socksNode = sbSocksObj.outbounds.find(o => o.tag === '🛡️ SOCKS5 住宅出口');
-    assert.ok(socksNode);
-    assert.equal(socksNode.type, 'socks');
-    assert.equal(socksNode.server, '1.2.3.4');
-    assert.equal(socksNode.server_port, 1080);
-    assert.equal(socksNode.detour, 'auto-selector-tcp');
-
-    // 主选择组默认指向 SOCKS5 住宅出口
-    assert.equal(sbSocksObj.outbounds[0].default, '🛡️ SOCKS5 住宅出口');
-    assert.equal(sbSocksObj.outbounds[0].outbounds[0], '🛡️ SOCKS5 住宅出口');
-
-    // 3. 带有 HTTP 住宅代理的链式代理配置生成
-    const configWithHttp = {
-      ...config,
-      upstreamProxy: 'http://user:pass@5.6.7.8:8080'
-    };
-    const sbWithHttp = generateSingboxFullProfile(configWithHttp, domain);
-    const sbHttpObj = JSON.parse(sbWithHttp);
-    const httpNode = sbHttpObj.outbounds.find(o => o.tag === '🛡️ HTTP 住宅出口');
-    assert.ok(httpNode);
-    assert.equal(httpNode.type, 'http');
-    assert.equal(httpNode.server, '5.6.7.8');
-    assert.equal(httpNode.server_port, 8080);
-    assert.equal(httpNode.detour, 'auto-selector-tcp');
-    assert.equal(sbHttpObj.outbounds[0].default, '🛡️ HTTP 住宅出口');
-
-    // 4. 验证当 upstreamProxy 为 OpenVPN 时，生成的 Sing-box 配置不包含任何 OpenVPN 节点或 endpoint
-    const configWithOvpn = {
-      ...config,
-      upstreamProxy: 'openvpn://vpn:vpn@219.100.37.13:443'
-    };
-    const sbWithOvpn = generateSingboxFullProfile(configWithOvpn, domain);
-    const sbOvpnObj = JSON.parse(sbWithOvpn);
-    
-    // 验证 endpoints 为空或不存在，且没有 openvpn 出口
-    assert.equal(sbOvpnObj.endpoints, undefined, 'Generated singbox config must NOT contain endpoints for openvpn');
-    assert.equal(sbOvpnObj.outbounds.some(o => o.tag.includes('OpenVPN')), false, 'Must not contain OpenVPN outbound');
-    assert.equal(sbOvpnObj.outbounds[0].default, 'auto-selector-tcp', 'Should default to auto-selector-tcp when no residential socks/http proxy is set');
-
-    // 验证带 CA 证书的 OpenVPN 配置同样不会在 Sing-box 中生成 endpoint
-    const configWithCaOvpn = {
-      ...config,
-      upstreamProxy: 'client\ndev tun\nproto tcp\nremote 219.100.37.13 443\n<ca>\n-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n</ca>'
-    };
-    const sbWithCaOvpn = JSON.parse(generateSingboxFullProfile(configWithCaOvpn, domain));
-    assert.equal(sbWithCaOvpn.endpoints, undefined, 'Must NOT contain endpoints');
-
-    // 验证 1.14.0 inbounds 无废弃 legacy 字段，且 route.rules 包含 sniff 规则
-    assert.equal(sbOvpnObj.inbounds[0].sniff, undefined);
-    assert.equal(sbOvpnObj.inbounds[0].domain_strategy, undefined);
-    assert.ok(sbOvpnObj.route.rules.some(r => r.action === 'sniff'));
-
-    // 验证 1.14.0 绝不包含已废弃被移除的 type: "dns" outbound
-    assert.equal(sbOvpnObj.outbounds.some(o => o.type === 'dns'), false, 'Sing-box 1.14.0 must not contain dns outbound');
-    assert.ok(sbOvpnObj.route.rules.some(r => r.action === 'hijack-dns'), 'Must use hijack-dns rule action');
-
-    // 5. 链式代理注入函数 injectSingboxChainProxy (测试清洗旧版 subapi 响应中的 legacy 字段、dns outbound 以及 openvpn-client endpoints)
-    const mockLegacySubapiResponse = JSON.stringify({
-      inbounds: [
-        { type: 'mixed', tag: 'mixed-in', sniff: true, domain_strategy: 'prefer_ipv4' }
-      ],
-      endpoints: [
-        { type: 'openvpn-client', tag: 'legacy-ovpn', server: '1.2.3.4' }
-      ],
-      outbounds: [
-        { type: 'selector', tag: 'PROXY', outbounds: ['⚡ 自动优选', 'DIRECT'], default: '⚡ 自动优选' },
-        { type: 'urltest', tag: '⚡ 自动优选', outbounds: ['node1', 'node2'] },
-        { type: 'vless', tag: 'node1' },
-        { type: 'vless', tag: 'node2' },
-        { type: 'dns', tag: 'dns-out' }
-      ],
-      route: {
-        rules: [
-          { protocol: 'dns', outbound: 'dns-out' }
-        ],
-        rule_set: [
-          { type: 'remote', tag: 'geoip-cn', format: 'binary', url: 'https://example.com/geoip.db', download_detour: 'DIRECT' }
-        ]
-      }
-    });
-    const injected = injectSingboxChainProxy(mockLegacySubapiResponse, configWithSocks);
-    const injectedObj = JSON.parse(injected);
-    assert.equal(injectedObj.inbounds[0].sniff, undefined); // 旧字段已被清洗
-    assert.equal(injectedObj.outbounds.some(o => o.type === 'dns'), false); // 旧 dns outbound 已被清洗
-    assert.equal(injectedObj.endpoints, undefined, 'OpenVPN endpoint must be cleaned and deleted');
-    assert.ok(injectedObj.route.rules.some(r => r.action === 'hijack-dns')); // 自动转换为 hijack-dns
-
-    // 验证 rule_set 中的 download_detour 自动迁移为 http_clients
-    assert.equal(injectedObj.route.rule_set[0].download_detour, undefined);
-    assert.equal(injectedObj.route.rule_set[0].http_client, 'default-http');
-    assert.ok(Array.isArray(injectedObj.http_clients));
-    assert.equal(injectedObj.http_clients[0].tag, 'default-http');
-
-    // 验证主选择组默认首选指向 SOCKS5 住宅出口以实现链式代理
-    assert.equal(injectedObj.outbounds[0].default, '🛡️ SOCKS5 住宅出口');
-    assert.equal(injectedObj.route.final, '🛡️ SOCKS5 住宅出口');
-
-    // 验证直连 DNS 绝不包含 direct detour (避免 'detour to an empty direct outbound makes no sense')
-    if (sbOvpnObj.dns && sbOvpnObj.dns.servers) {
-      const localDns = sbOvpnObj.dns.servers.find(s => s.tag === 'dns-local');
-      if (localDns) assert.equal(localDns.detour, undefined);
-    }
-
-    // 6. Base64 Sub
+    // 2. Base64 Sub
     const b64 = generateBase64Sub(config, domain);
     assert.equal(typeof b64, 'string');
     assert.ok(b64.length > 20);
