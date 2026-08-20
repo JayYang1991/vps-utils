@@ -486,7 +486,15 @@ export function migrateSingboxToV1_14(profile) {
     profile.outbounds = [];
   }
 
-  // 4. 确保 outbounds 列表中具备基础出站（大小写兼容 direct/DIRECT, block/REJECT）
+  // 4. 清理 endpoints 中的 OpenVPN 相关配置或无效端点
+  if (Array.isArray(profile.endpoints)) {
+    profile.endpoints = profile.endpoints.filter(e => e && e.type !== 'openvpn-client' && e.type !== 'openvpn');
+    if (profile.endpoints.length === 0) {
+      delete profile.endpoints;
+    }
+  }
+
+  // 5. 确保 outbounds 列表中具备基础出站（大小写兼容 direct/DIRECT, block/REJECT）
   const existingTags = new Set(profile.outbounds.map(o => o && o.tag));
   const endpointTags = new Set((profile.endpoints || []).map(e => e && e.tag));
 
@@ -508,7 +516,7 @@ export function migrateSingboxToV1_14(profile) {
     existingTags.add('block');
   }
 
-  // 5. 修复 dns.servers 中可能失效或不合法的 detour 引用
+  // 6. 修复 dns.servers 中可能失效或不合法的 detour 引用
   // 注意：在 Sing-box 1.12+ 中，DNS 服务器设置 detour 为 direct/DIRECT 会导致 "detour to an empty direct outbound makes no sense" 报错
   // 直连 DNS 无需显式设置 detour，必须将其删除
   if (profile.dns && Array.isArray(profile.dns.servers)) {
@@ -528,7 +536,7 @@ export function migrateSingboxToV1_14(profile) {
     }
   }
 
-  // 6. 规范化 route 与 route.rules (将旧版 dns outbound 路由转换为 hijack-dns 动作)
+  // 7. 规范化 route 与 route.rules (将旧版 dns outbound 路由转换为 hijack-dns 动作)
   if (!profile.route || typeof profile.route !== 'object') {
     profile.route = {};
   }
@@ -555,7 +563,7 @@ export function migrateSingboxToV1_14(profile) {
     profile.route.rules.splice(1, 0, { protocol: 'dns', action: 'hijack-dns' });
   }
 
-  // 7. 清理并迁移 rule_set 中的 download_detour 选项至 1.14.0 标准的 http_clients
+  // 8. 清理并迁移 rule_set 中的 download_detour 选项至 1.14.0 标准的 http_clients
   if (profile.route && Array.isArray(profile.route.rule_set) && profile.route.rule_set.length > 0) {
     if (!Array.isArray(profile.http_clients)) {
       profile.http_clients = [];
@@ -579,51 +587,13 @@ export function migrateSingboxToV1_14(profile) {
     }
   }
 
-  // 8. 基础分流规则与终点
+  // 9. 基础分流规则与终点
   profile.route.auto_detect_interface = true;
   if (!profile.route.final && profile.outbounds && profile.outbounds[0]) {
     profile.route.final = profile.outbounds[0].tag || '🚀 节点选择';
   }
 
   return profile;
-}
-
-/**
- * 构造 Sing-box 1.14.0 原生 openvpn-client Endpoint 配置
- * @param {object} proxy 
- * @param {string} detourTag 
- * @returns {object}
- */
-export function buildOpenVpnEndpoint(proxy, detourTag = 'auto-selector-tcp') {
-  if (!proxy || (proxy.protocol !== 'openvpn' && proxy.protocol !== 'ovpn')) return null;
-
-  const endpoint = {
-    type: 'openvpn-client',
-    tag: '🛡️ OpenVPN 住宅出口',
-    server: proxy.host,
-    server_port: proxy.port,
-    network: proxy.proto || 'tcp',
-    mode: 'tls',
-    username: proxy.username || 'vpn',
-    password: proxy.password || 'vpn',
-    detour: detourTag, // 第 1 站 auto-selector-tcp
-    data_ciphers: ['AES-128-CBC', 'AES-256-CBC', 'AES-256-GCM', 'AES-128-GCM', 'CHACHA20-POLY1305'],
-    data_ciphers_fallback: proxy.cipher || 'AES-128-CBC',
-    auth: proxy.auth || 'SHA1',
-    allow_compression: 'asym',
-    compression_lzo: 'adaptive',
-  };
-
-  if (proxy.ca || proxy.cert || proxy.key) {
-    endpoint.tls = {
-      certificate_profile: 'legacy',
-    };
-    if (proxy.ca) endpoint.tls.certificate = proxy.ca;
-    if (proxy.cert) endpoint.tls.client_certificate = proxy.cert;
-    if (proxy.key) endpoint.tls.client_key = proxy.key;
-  }
-
-  return endpoint;
 }
 
 /**
@@ -668,9 +638,9 @@ export function buildUpstreamOutbound(upstreamProxy, detourTag = 'auto-selector-
 }
 
 /**
- * 注入 Sing-box 1.14.0 链式代理配置与 Endpoints：
+ * 注入 Sing-box 1.14.0 链式代理配置：
  * 将 auto-selector-tcp 作为第 1 站 (前置 VLESS 优选通道)，
- * 将 OpenVPN / SOCKS5 / HTTP 住宅节点作为最终出站。
+ * 将 SOCKS5 / HTTP 住宅节点作为最终出站。
  * @param {string|object} singboxContent 
  * @param {object} config 
  * @returns {string}
@@ -725,34 +695,19 @@ export function injectSingboxChainProxy(singboxContent, config = {}) {
     }
   }
 
-  // 2. 解析上游代理并配置 OpenVPN endpoint 或 SOCKS5/HTTP outbound
-  const parsedProxy = parseProxyString(config.upstreamProxy);
+  // 2. 解析上游代理并配置 SOCKS5/HTTP outbound
+  const upstreamOutbound = buildUpstreamOutbound(config.upstreamProxy, 'auto-selector-tcp');
   let finalTargetTag = null;
 
-  if (parsedProxy) {
-    if (parsedProxy.protocol === 'openvpn' || parsedProxy.protocol === 'ovpn') {
-      const openvpnEndpoint = buildOpenVpnEndpoint(parsedProxy, 'auto-selector-tcp');
-      if (openvpnEndpoint) {
-        if (!Array.isArray(profile.endpoints)) {
-          profile.endpoints = [];
-        }
-        profile.endpoints = profile.endpoints.filter(e => e.tag !== openvpnEndpoint.tag);
-        profile.endpoints.push(openvpnEndpoint);
-        finalTargetTag = openvpnEndpoint.tag;
-      }
+  if (upstreamOutbound) {
+    profile.outbounds = profile.outbounds.filter(o => o.tag !== upstreamOutbound.tag);
+    const urltestIdx = profile.outbounds.findIndex(o => o.tag === 'auto-selector-tcp');
+    if (urltestIdx !== -1) {
+      profile.outbounds.splice(urltestIdx + 1, 0, upstreamOutbound);
     } else {
-      const upstreamOutbound = buildUpstreamOutbound(config.upstreamProxy, 'auto-selector-tcp');
-      if (upstreamOutbound) {
-        profile.outbounds = profile.outbounds.filter(o => o.tag !== upstreamOutbound.tag);
-        const urltestIdx = profile.outbounds.findIndex(o => o.tag === 'auto-selector-tcp');
-        if (urltestIdx !== -1) {
-          profile.outbounds.splice(urltestIdx + 1, 0, upstreamOutbound);
-        } else {
-          profile.outbounds.unshift(upstreamOutbound);
-        }
-        finalTargetTag = upstreamOutbound.tag;
-      }
+      profile.outbounds.unshift(upstreamOutbound);
     }
+    finalTargetTag = upstreamOutbound.tag;
   }
 
   // 3. 在所有 selector 节点中，将最终住宅出口置于首位并设为 default（不保留 auto-selector-tcp 作为备选）
@@ -804,7 +759,7 @@ export function injectSingboxChainProxy(singboxContent, config = {}) {
     }
   }
 
-  // 6. 应用 Sing-box 1.14.0 语法清洗，移除旧字段
+  // 6. 应用 Sing-box 1.14.0 语法清洗，移除旧字段与任何可能残留的 openvpn endpoint
   profile = migrateSingboxToV1_14(profile);
 
   return JSON.stringify(profile, null, 2);
@@ -829,20 +784,8 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
   }
 
   const nodeTags = nodes.map(n => n.name);
-  const parsedProxy = parseProxyString(config.upstreamProxy);
-  let openvpnEndpoint = null;
-  let socksOutbound = null;
-  let finalTargetTag = null;
-
-  if (parsedProxy) {
-    if (parsedProxy.protocol === 'openvpn' || parsedProxy.protocol === 'ovpn') {
-      openvpnEndpoint = buildOpenVpnEndpoint(parsedProxy, 'auto-selector-tcp');
-      if (openvpnEndpoint) finalTargetTag = openvpnEndpoint.tag;
-    } else {
-      socksOutbound = buildUpstreamOutbound(config.upstreamProxy, 'auto-selector-tcp');
-      if (socksOutbound) finalTargetTag = socksOutbound.tag;
-    }
-  }
+  const upstreamOutbound = buildUpstreamOutbound(config.upstreamProxy, 'auto-selector-tcp');
+  const finalTargetTag = upstreamOutbound ? upstreamOutbound.tag : null;
 
   // 构造主选择组：若有住宅出口，严格只走住宅出口（不回退到 auto-selector-tcp）
   const selectorOutbounds = [];
@@ -869,8 +812,8 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
     },
   ];
 
-  if (socksOutbound) {
-    outbounds.push(socksOutbound);
+  if (upstreamOutbound) {
+    outbounds.push(upstreamOutbound);
   }
 
   // 加入所有底层 VLESS 优选节点
@@ -970,10 +913,6 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
       final: targetOutboundTag,
     },
   };
-
-  if (openvpnEndpoint) {
-    profile.endpoints = [openvpnEndpoint];
-  }
 
   // 统一通过 1.14.0 自愈迁移器清洗与标准化
   migrateSingboxToV1_14(profile);

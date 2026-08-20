@@ -312,6 +312,7 @@ check_ssh_until_success() {
 }
 
 install_singbox() {
+  local version="${SINGBOX_VERSION:-1.12.19}"
   local port="${SINGBOX_PORT:-443}"
   local domain="${SINGBOX_DOMAIN:-www.cloudflare.com}"
   local uuid="${SINGBOX_UUID:-auto}"
@@ -326,14 +327,14 @@ install_singbox() {
   local force_flag=""
   [[ "$FORCE_INSTALL" == "true" ]] && force_flag="--force"
 
-  log "Starting remote installation of sing-box server on ${VPS_IP}..."
+  log "Starting remote installation of sing-box server on ${VPS_IP} (version: ${version})..."
   
   local output
   output=$(
     ssh -T -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
     sudo dpkg --configure -a || true
     curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/install-singbox-server.sh https://raw.githubusercontent.com/JayYang1991/vps-utils/${REPO_BRANCH}/fhs-install-singbox/install-singbox-server.sh
-    sudo bash /tmp/install-singbox-server.sh --port ${port} --domain ${domain} --uuid ${uuid} --short-id ${short_id} --log-level ${log_level} --hy2-port ${hy2_port} --hy2-domain ${hy2_domain} --hy2-password ${hy2_password} --hy2-up-mbps ${hy2_up_mbps} --hy2-down-mbps ${hy2_down_mbps} --hy2-masquerade '${hy2_masquerade}' ${force_flag}
+    sudo bash /tmp/install-singbox-server.sh --version ${version} --port ${port} --domain ${domain} --uuid ${uuid} --short-id ${short_id} --log-level ${log_level} --hy2-port ${hy2_port} --hy2-domain ${hy2_domain} --hy2-password ${hy2_password} --hy2-up-mbps ${hy2_up_mbps} --hy2-down-mbps ${hy2_down_mbps} --hy2-masquerade '${hy2_masquerade}' ${force_flag}
 eof
   )
   local ret_val=$?

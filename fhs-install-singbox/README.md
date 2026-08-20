@@ -60,6 +60,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/f
 
 | 命令行参数 | 环境变量 | 默认值 | 描述 |
 | --- | --- | --- | --- |
+| `-v`, `--version` | `SINGBOX_VERSION` | `1.12.19` | sing-box 服务端安装版本 |
 | `--port` | `SINGBOX_PORT` | `443` | VLESS Reality 监听端口 (TCP) |
 | `--domain` | `SINGBOX_DOMAIN` | `www.cloudflare.com` | Reality 目标 SNI 伪装域名 |
 | `--uuid` | `SINGBOX_UUID` | `auto` | VLESS 用户 UUID（`auto` 为自动生成） |
@@ -76,8 +77,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/f
 #### 自定义安装示例
 
 ```bash
-# 指定自定义端口与伪装域名
-bash install-singbox-server.sh --port 8443 --domain google.com --hy2-port 8444
+# 指定安装特定版本与自定义端口
+bash install-singbox-server.sh --version 1.12.19 --port 8443 --domain google.com --hy2-port 8444
 ```
 
 ---

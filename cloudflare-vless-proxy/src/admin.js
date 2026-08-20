@@ -651,10 +651,9 @@ function getAdminHTML(host, adminPath) {
           </div>
           <div id="upstream-test-res" class="test-result-box"></div>
           <p class="help-text">
-            支持 <b>OpenVPN</b>、<b>SOCKS5</b> 与 <b>HTTP CONNECT</b> 格式（支持自动链式代理接入 Sing-box）：<br>
-            • 原生 OpenVPN <code>.ovpn</code> 配置文件完整文本或 Base64 字符串（自动生成 Sing-box OpenVPN 出口与 <code>auto-selector-tcp</code> 链式代理）<br>
-            • <code>openvpn://username:password@ip:port</code> 或 <code>ovpn://ip:port</code>（默认凭据 vpn:vpn）<br>
-            • <code>socks5://username:password@ip:port</code> 或 <code>http://username:password@ip:port</code><br>
+            支持 <b>SOCKS5</b>、<b>HTTP CONNECT</b> 与 <b>OpenVPN</b> 格式：<br>
+            • <code>socks5://username:password@ip:port</code> 或 <code>http://username:password@ip:port</code>（自动生成 Sing-box 住宅出口与 <code>auto-selector-tcp</code> 链式代理）<br>
+            • <code>openvpn://username:password@ip:port</code>、<code>ovpn://ip:port</code> 或原生 <code>.ovpn</code> 文本（支持在线连通性与延迟测速）<br>
             • 留空则代表由 Cloudflare 边缘优选节点直连出站。
           </p>
         </div>

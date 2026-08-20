@@ -5,6 +5,7 @@
 # Reference: https://sing-box.sagernet.org/
 #
 # Environment Variables:
+#   SINGBOX_VERSION   - sing-box version to install (default: 1.12.19)
 #   SINGBOX_PORT      - Listening port (default: 443)
 #   SINGBOX_DOMAIN    - Server Name Indication (default: www.cloudflare.com)
 #   SINGBOX_UUID      - Client UUID (default: auto-generated)
@@ -18,6 +19,7 @@
 #   SINGBOX_HY2_MASQUERADE - Hysteria2 masquerade URL (default: https://www.cloudflare.com)
 #
 # ===================== Default Parameters =====================
+SINGBOX_VERSION=${SINGBOX_VERSION:-${VERSION:-1.12.19}}
 SINGBOX_PORT=${SINGBOX_PORT:-${PORT:-443}}
 SINGBOX_DOMAIN=${SINGBOX_DOMAIN:-${DOMAIN:-www.cloudflare.com}}
 SINGBOX_UUID=${SINGBOX_UUID:-${UUID:-auto}}
@@ -106,9 +108,9 @@ cleanup_temp() {
 }
 
 install_singbox() {
-  echo "${aoi}info: 正在安装 sing-box...${reset}"
+  echo "${aoi}info: 正在安装 sing-box (版本: ${VERSION})...${reset}"
 
-  if curl -fsSL https://sing-box.app/install.sh | sh; then
+  if curl -fsSL https://sing-box.app/install.sh | sh -s -- --version "${VERSION}"; then
     local installed_version
     installed_version=$(sing-box version 2> /dev/null | head -n1 || echo "unknown")
     echo "${green}info: sing-box 已安装: $installed_version${reset}"
@@ -359,6 +361,10 @@ print_info() {
 # ===================== Parse Arguments =====================
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -v|--version)
+      SINGBOX_VERSION="$2"
+      shift 2
+      ;;
     --port)
       SINGBOX_PORT="$2"
       shift 2
@@ -416,6 +422,7 @@ done
 
 # ===================== Main Function =====================
 main() {
+  VERSION="$SINGBOX_VERSION"
   PORT="$SINGBOX_PORT"
   DOMAIN="$SINGBOX_DOMAIN"
   UUID="$SINGBOX_UUID"
@@ -431,6 +438,7 @@ main() {
   trap cleanup_temp EXIT
 
   echo "${aoi}▶ sing-box Server 自动安装开始${reset}"
+  echo "版本: $VERSION"
   echo "端口: $PORT"
   echo "SNI: $DOMAIN"
   echo "HY2 端口: $HY2_PORT"
