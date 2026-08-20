@@ -231,11 +231,6 @@ sudo bash install.sh
 
 ---
 
-> [!TIP]
-> 💡 **中转 VPS 结合 WARP 落地配置**：若需要在国内中转 VPS 上搭建配合 WARP 本地 SOCKS5 出站的防封锁 sing-box 服务端（VLESS + Reality ➜ WARP 落地），请参阅 [`fhs-install-singbox/generate-singbox-server-config.sh`](file:///home/jason/user_data/code/vps-utils/fhs-install-singbox/generate-singbox-server-config.sh)。
-
----
-
 ## 📁 附录：文件与脚本功能对照表
 
 | 脚本 / 文件 | 核心功能 | 适用场景 |

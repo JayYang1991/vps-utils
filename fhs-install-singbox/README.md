@@ -26,7 +26,6 @@
 | 文件名 | 用途 |
 | --- | --- |
 | `install-singbox-server.sh` | sing-box 服务端一键安装/更新/重置脚本 |
-| `generate-singbox-server-config.sh` | 国内中转 VPS 多端口 Reality 专用配置生成器 (VLESS+Reality ➜ WARP/SOCKS5 落地出站) |
 | `update-singbox-keys.sh` | sing-box 服务端各项密钥与凭证安全更新/重置脚本 |
 | `update-singbox-sub.sh` | 通过指定订阅链接更新 sing-box 配置并重启服务（支持自动备份与回退） |
 | `setup_vps_server.sh` | 通用 VPS 远程部署脚本（支持 IP 直接部署或 Vultr 自动创建） |
@@ -154,57 +153,7 @@ bash update-singbox-sub.sh -u "http://154.12.34.56:8000/sub?target=singbox&token
 
 ---
 
-### 4. 国内中转 VPS 结合 WARP 落地配置生成 (`generate-singbox-server-config.sh`)
-
-当您在**国内云服务器 / 中转 VPS** 上运行 `cloudflare-zero-trust` (WARP SOCKS5 代理) 时，使用配套脚本 [`generate-singbox-server-config.sh`](file:///home/jason/user_data/code/vps-utils/fhs-install-singbox/generate-singbox-server-config.sh) 可一键生成高防封锁的 sing-box 服务端（VLESS + Reality 伪装入站 ➜ SOCKS5 `127.0.0.1:1080` WARP 落地出站）。
-
-#### 架构与流程
-```text
-[ 用户客户端 (电脑/手机) ] 
-          │ (VLESS + Reality 伪装加密协议，防探测防封锁)
-          ▼
-[ 国内中转 VPS: sing-box (监听 443, 8443, 2053, 2083, 2087, 2096, 8080 等多端口) ]
-          │ (本地转发: socks5://127.0.0.1:1080)
-          ▼
-[ Cloudflare WARP 容器 (Zero Trust / 策略路由隔离) ]
-          │ (跨洋高速加密隧道)
-          ▼
-[ Cloudflare 全球网络 ] ──> [ 目标国际互联网 (Google/GitHub/YouTube等) ]
-```
-
-#### 使用方法
-```bash
-# 1. 零交互一键生成 (自动探测公网 IP、自动生成 UUID 与 Reality 密钥对，开放所有常用端口)
-bash generate-singbox-server-config.sh
-
-# 2. 自定义开放端口与 Reality 伪装域名
-bash generate-singbox-server-config.sh --ports 443,8443,2053,2083 --sni gateway.icloud.com
-
-# 3. 一键生成并自动应用至 /etc/sing-box/config.json 并重启服务
-sudo bash generate-singbox-server-config.sh --apply
-
-# 4. 指定自定义输出路径
-bash generate-singbox-server-config.sh -o /etc/sing-box/config.json
-```
-
-#### 参数说明
-| 参数选项 | 说明 | 默认值 |
-| :--- | :--- | :--- |
-| `-p, --port <PORT>` | 指定单个开放端口 (例如: `-p 443`) | - |
-| `--ports <LIST>` | 指定多个开放端口，逗号分隔 | `443,8443,2053,2083,2087,2096,8080` |
-| `-s, --sni <SNI>` | 指定 Reality 伪装域名 | `itunes.apple.com` |
-| `-u, --uuid <UUID>` | 指定客户端认证 UUID | 自动随机生成 |
-| `--short-id <ID>` | 指定 Reality Short ID | 自动随机生成 |
-| `--private-key <KEY>` | 指定 Reality Private Key | 自动生成密钥对 |
-| `--public-key <KEY>` | 指定 Reality Public Key | 自动计算衍生 |
-| `--socks-port <PORT>` | 指定本地 WARP SOCKS5 代理端口 | `1080` |
-| `--socks-host <HOST>` | 指定本地 WARP SOCKS5 代理地址 | `127.0.0.1` |
-| `-o, --output <PATH>` | 配置文件输出路径 | `./singbox-server-config.json` |
-| `-a, --apply` | 自动写入 `/etc/sing-box/config.json` 并重启服务 | `false` |
-
----
-
-### 5. 远程 VPS 部署与 Vultr 自动化 (`setup_vps_server.sh`)
+### 4. 远程 VPS 部署与 Vultr 自动化 (`setup_vps_server.sh`)
 
 `setup_vps_server.sh` 可以在控制端（本地机器）直接对远程 VPS 进行 SSH 一键部署，也可结合 Vultr API 自动创建 VPS 实例并一键完成部署。
 
@@ -311,7 +260,7 @@ VULTR_REGION="nrt" VULTR_PLAN="vc2-1c-1gb" SINGBOX_PORT=8443 bash setup_vps_serv
 
 ---
 
-### 6. Vultr 实例删除 (`remove_vultr_instance.sh`)
+### 5. Vultr 实例删除 (`remove_vultr_instance.sh`)
 
 用于快速查找并交互式删除指定标签的 Vultr 实例：
 

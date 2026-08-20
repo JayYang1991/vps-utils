@@ -97,10 +97,6 @@ Cloudflare WARP 客户端出海访问完整拆解为以下 **4 个步骤**：
 # 在 VPS 宿主机以 root 权限运行
 sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/fhs-install-singbox/install-singbox-server.sh)
 ```
-* **多端口 Reality / WARP 落地场景**：若需要生成配合 WARP 出站的多端口 Reality 配置，可使用配套脚本：
-  ```bash
-  sudo bash fhs-install-singbox/generate-singbox-server-config.sh --apply
-  ```
 
 ---
 
@@ -182,7 +178,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 | 子项目目录 | 核心功能定位 | 推荐入口 / 关键脚本 | 详细文档链接 |
 | :--- | :--- | :--- | :--- |
-| **[fhs-install-singbox](./fhs-install-singbox)** | sing-box 服务端 FHS 部署、多端口 Reality 配置生成与 VPS 远程/Vultr 运维 | `setup_vps_server.sh`<br>`install-singbox-server.sh`<br>`generate-singbox-server-config.sh` | [fhs-install-singbox 详细指南](./fhs-install-singbox/README.md) |
+| **[fhs-install-singbox](./fhs-install-singbox)** | sing-box 服务端 FHS 部署与 VPS 远程/Vultr 运维 | `setup_vps_server.sh`<br>`install-singbox-server.sh`<br>`update-singbox-keys.sh` | [fhs-install-singbox 详细指南](./fhs-install-singbox/README.md) |
 | **[cloudflared-tunnel](./cloudflared-tunnel)** | Cloudflare Official Agent 部署，实现 Tunnel 内网穿透与公网服务发布 | `install.sh` | [cloudflared-tunnel 详细指南](./cloudflared-tunnel/README.md) |
 | **[cloudflare-zero-trust](./cloudflare-zero-trust)** | Cloudflare Zero Trust (Cloudflare One) 套件：VPS 出口 NAT 转发、SOCKS5 客户端与诊断工具 | `setup-cloudflare-one.sh`<br>`docker-run.sh`<br>`test-masque.py`<br>`install.sh` | [cloudflare-zero-trust 详细指南](./cloudflare-zero-trust/README.md) |
 | **[subconverter](./subconverter)** | 通用代理订阅格式转换后端服务（带 Systemd 一键安装与端口配置） | `install.sh` | [subconverter 详细指南](./subconverter/README.md) |
@@ -194,7 +190,6 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 ### 1. [fhs-install-singbox](./fhs-install-singbox) — 服务端部署与运维
 
 - **`install-singbox-server.sh`**：符合 FHS 标准（`/usr/local/bin/sing-box`, `/etc/sing-box/config.json`）的本地一键安装与升级脚本。
-- **`generate-singbox-server-config.sh`**：国内中转 VPS 专用，生成多端口 Reality 伪装入站 ➜ WARP SOCKS5 落地出站配置，防单端口封锁。
 - **`update-singbox-keys.sh`**：一键安全轮换 UUID、Reality 密钥对、Short ID 及 Hysteria2 证书密码。
 - **`setup_vps_server.sh`**：控制端远程 SSH 一键部署全套服务，支持直接指定 IP 或通过 Vultr API 自动开机。
 - **`remove_vultr_instance.sh`**：Vultr 实例交互式查询与快速销毁工具。
@@ -254,7 +249,6 @@ vps-utils/
 │   ├── README.md                      # fhs-install-singbox 详细指南
 │   ├── setup_vps_server.sh            # 远程 VPS 自动化部署脚本
 │   ├── install-singbox-server.sh      # sing-box 服务端本地安装脚本
-│   ├── generate-singbox-server-config.sh # 多端口 Reality 配合 WARP 出站配置生成器
 │   ├── update-singbox-keys.sh         # 服务端凭证/密钥安全更新工具
 │   ├── update-singbox-sub.sh          # 订阅链接更新与回退脚本
 │   ├── remove_vultr_instance.sh       # Vultr 实例查询与清理工具
