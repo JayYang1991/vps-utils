@@ -270,7 +270,7 @@ describe('Node & Config Generators', () => {
   });
 
   it('should generate Sing-box full subscription profile and Base64 subscription', async () => {
-    const { generateSingboxFullProfile, generateBase64Sub } = await import('../src/sub.js');
+    const { generateSingboxFullProfile, generateBase64Sub, patchSingboxConfig } = await import('../src/sub.js');
     
     // 1. Sing-box Full Profile
     const sbFull = generateSingboxFullProfile(config, domain);
@@ -280,7 +280,79 @@ describe('Node & Config Generators', () => {
     assert.equal(sbObj.outbounds[1].tag, 'auto-selector-tcp');
     assert.ok(sbObj.outbounds.some(o => o.type === 'vless'));
 
-    // 2. Base64 Sub
+    // 2. patchSingboxConfig: 移除 tun 与 fakeip 配置测试
+    const mockSubapiResponse = JSON.stringify({
+      inbounds: [
+        { type: 'mixed', tag: 'mixed-in', listen: '0.0.0.0', listen_port: 4001 },
+        { type: 'tun', tag: 'tun-in', interface_name: 'sing-tun0', address: ['198.18.0.1/15'], auto_route: true }
+      ],
+      dns: {
+        strategy: 'ipv4_only',
+        fakeip: { enabled: true, inet4_range: '198.18.0.0/15' },
+        reverse_mapping: true,
+        servers: [
+          { tag: 'dns-direct', type: 'udp', server: '223.5.5.5' },
+          { tag: 'dns-remote', type: 'https', server: '1.1.1.1', detour: 'auto-selector-tcp' },
+          { tag: 'dns-fakeip', type: 'fakeip', inet4_range: '198.18.0.0/15' }
+        ],
+        rules: [
+          { domain_suffix: ['baidu.com'], server: 'dns-direct' },
+          { query_type: ['A', 'AAAA'], server: 'dns-fakeip' },
+          { inbound: ['tun-in'], server: 'dns-direct' }
+        ],
+        final: 'dns-fakeip'
+      },
+      route: {
+        rules: [
+          { protocol: 'dns', action: 'hijack-dns' },
+          { inbound: 'tun-in', outbound: 'auto-selector-tcp' },
+          { domain_suffix: ['google.com'], outbound: 'auto-selector-tcp' },
+          { ip_is_private: true, outbound: 'DIRECT' }
+        ],
+        final: 'auto-selector-tcp'
+      },
+      outbounds: [
+        { type: 'selector', tag: 'PROXY', outbounds: ['auto-selector-tcp', 'DIRECT'], default: 'DIRECT' },
+        { type: 'direct', tag: 'DIRECT' },
+        { type: 'direct', tag: 'direct' }
+      ],
+      experimental: {
+        cache_file: { enabled: true, path: 'cache.db', store_fakeip: true },
+        clash_api: { external_controller: '127.0.0.1:9090' }
+      }
+    });
+
+    const patchedStr = patchSingboxConfig(mockSubapiResponse);
+    const patchedObj = JSON.parse(patchedStr);
+
+    // 验证 TUN inbound 已被移除，仅保留 mixed-in
+    assert.equal(patchedObj.inbounds.length, 1);
+    assert.equal(patchedObj.inbounds[0].type, 'mixed');
+    assert.equal(patchedObj.inbounds.some(i => i.type === 'tun'), false);
+
+    // 验证 fakeip 与 reverse_mapping 已被删除
+    assert.equal(patchedObj.dns.fakeip, undefined);
+    assert.equal(patchedObj.dns.reverse_mapping, undefined);
+    assert.equal(patchedObj.dns.servers.some(s => s.type === 'fakeip' || s.tag === 'dns-fakeip'), false);
+    assert.equal(patchedObj.dns.rules.some(r => r.server === 'dns-fakeip'), false);
+    assert.equal(patchedObj.dns.final, 'dns-remote');
+
+    // 验证 store_fakeip 已从 experimental.cache_file 删除
+    assert.equal(patchedObj.experimental.cache_file.store_fakeip, undefined);
+    assert.equal(patchedObj.experimental.cache_file.enabled, true);
+
+    // 验证与 tun-in 强关联的路由规则已被清理
+    assert.equal(patchedObj.route.rules.some(r => r.inbound === 'tun-in'), false);
+    assert.equal(patchedObj.route.rules.length, 3);
+
+    // 验证 DIRECT outbound tag 以及引用已被替换为 direct，并去重
+    assert.equal(patchedObj.outbounds.some(o => o.tag === 'DIRECT'), false);
+    assert.equal(patchedObj.outbounds.filter(o => o.tag === 'direct').length, 1);
+    assert.equal(patchedObj.outbounds[0].default, 'direct');
+    assert.deepEqual(patchedObj.outbounds[0].outbounds, ['auto-selector-tcp', 'direct']);
+    assert.equal(patchedObj.route.rules.find(r => r.ip_is_private).outbound, 'direct');
+
+    // 3. Base64 Sub
     const b64 = generateBase64Sub(config, domain);
     assert.equal(typeof b64, 'string');
     assert.ok(b64.length > 20);

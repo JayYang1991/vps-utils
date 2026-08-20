@@ -451,6 +451,198 @@ export function generateSingboxConfig(nodesOrConfig, workerDomainOrConfig, maybe
 }
 
 /**
+ * 补丁函数：移除 Sing-box 配置文件中的 TUN 虚拟网卡与 FakeIP 相关配置及其关联规则
+ * @param {string|object} singboxContent 
+ * @returns {string}
+ */
+export function patchSingboxConfig(singboxContent) {
+  if (!singboxContent) return singboxContent;
+
+  let profile = {};
+  const isStringInput = typeof singboxContent === 'string';
+
+  if (isStringInput) {
+    try {
+      profile = JSON.parse(singboxContent);
+    } catch (_) {
+      return singboxContent;
+    }
+  } else if (typeof singboxContent === 'object' && singboxContent !== null) {
+    profile = singboxContent;
+  } else {
+    return singboxContent;
+  }
+
+  if (typeof profile !== 'object' || profile === null) {
+    return singboxContent;
+  }
+
+  // 收集所有 TUN inbound 的 tag
+  const tunTags = new Set();
+  if (Array.isArray(profile.inbounds)) {
+    for (const inbound of profile.inbounds) {
+      if (inbound && (inbound.type === 'tun' || (inbound.tag && inbound.tag.toLowerCase().includes('tun')))) {
+        if (inbound.tag) tunTags.add(inbound.tag);
+      }
+    }
+    // 1. 移除 TUN 类型的 inbounds
+    profile.inbounds = profile.inbounds.filter(inbound => {
+      if (!inbound || typeof inbound !== 'object') return false;
+      return inbound.type !== 'tun' && (!inbound.tag || !inbound.tag.toLowerCase().includes('tun'));
+    });
+
+    // 如果移除后没有任何 inbound，添加默认 mixed inbound
+    if (profile.inbounds.length === 0) {
+      profile.inbounds.push({
+        type: 'mixed',
+        tag: 'mixed-in',
+        listen: '127.0.0.1',
+        listen_port: 2080,
+      });
+    }
+  }
+
+  // 2. 清理 DNS 中的 FakeIP 相关配置与服务器
+  if (profile.dns && typeof profile.dns === 'object') {
+    delete profile.dns.fakeip;
+    delete profile.dns.reverse_mapping;
+
+    // 收集 fakeip DNS 服务器 tag
+    const fakeIpDnsTags = new Set();
+    if (Array.isArray(profile.dns.servers)) {
+      for (const s of profile.dns.servers) {
+        if (s && (s.type === 'fakeip' || s.address === 'fakeip' || (s.tag && s.tag.toLowerCase().includes('fakeip')))) {
+          if (s.tag) fakeIpDnsTags.add(s.tag);
+        }
+      }
+      // 移除 fakeip 类型的 dns.servers
+      profile.dns.servers = profile.dns.servers.filter(s => {
+        if (!s || typeof s !== 'object') return false;
+        return s.type !== 'fakeip' && s.address !== 'fakeip' && (!s.tag || !s.tag.toLowerCase().includes('fakeip'));
+      });
+
+      // 如果 dns.final 指向了 fakeip server，重置为第一个有效远端 DNS
+      if (profile.dns.final && fakeIpDnsTags.has(profile.dns.final)) {
+        const fallbackDns = profile.dns.servers.find(s => s.tag !== 'dns-direct' && s.tag !== 'local') || profile.dns.servers[0];
+        profile.dns.final = fallbackDns ? fallbackDns.tag : 'dns-remote';
+      }
+    }
+
+    // 移除 dns.rules 中指向 fakeip 或仅匹配 tun 的规则
+    if (Array.isArray(profile.dns.rules)) {
+      profile.dns.rules = profile.dns.rules.filter(rule => {
+        if (!rule || typeof rule !== 'object') return false;
+
+        // 如果规则直接指向 fakeip 服务器
+        if (rule.server && (fakeIpDnsTags.has(rule.server) || rule.server.toLowerCase().includes('fakeip'))) {
+          return false;
+        }
+
+        // 如果规则仅针对 tun inbound
+        if (rule.inbound) {
+          if (typeof rule.inbound === 'string' && tunTags.has(rule.inbound)) {
+            return false;
+          }
+          if (Array.isArray(rule.inbound)) {
+            rule.inbound = rule.inbound.filter(t => !tunTags.has(t));
+            if (rule.inbound.length === 0) {
+              return false;
+            }
+          }
+        }
+
+        return true;
+      });
+    }
+  }
+
+  // 3. 清理 experimental 中的 store_fakeip
+  if (profile.experimental && typeof profile.experimental === 'object') {
+    if (profile.experimental.cache_file && typeof profile.experimental.cache_file === 'object') {
+      delete profile.experimental.cache_file.store_fakeip;
+    }
+  }
+
+  // 4. 清理 route.rules 中与 TUN 关联的规则
+  if (profile.route && Array.isArray(profile.route.rules)) {
+    profile.route.rules = profile.route.rules.filter(rule => {
+      if (!rule || typeof rule !== 'object') return false;
+
+      // 如果规则限定了 inbound 为 tun
+      if (rule.inbound) {
+        if (typeof rule.inbound === 'string' && tunTags.has(rule.inbound)) {
+          return false;
+        }
+        if (Array.isArray(rule.inbound)) {
+          rule.inbound = rule.inbound.filter(t => !tunTags.has(t));
+          if (rule.inbound.length === 0) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    });
+  }
+
+  // 5. 将 outbound 中 tag 为 "DIRECT" 的节点修改为 "direct"，并同步更新所有引用
+  if (Array.isArray(profile.outbounds)) {
+    const seenDirect = new Set();
+    const newOutbounds = [];
+
+    for (const ob of profile.outbounds) {
+      if (!ob || typeof ob !== 'object') continue;
+      if (ob.tag === 'DIRECT') {
+        ob.tag = 'direct';
+      }
+      if (Array.isArray(ob.outbounds)) {
+        ob.outbounds = Array.from(new Set(ob.outbounds.map(t => (t === 'DIRECT' ? 'direct' : t))));
+      }
+      if (ob.default === 'DIRECT') {
+        ob.default = 'direct';
+      }
+      if (ob.detour === 'DIRECT') {
+        ob.detour = 'direct';
+      }
+
+      // 若出现重复的 direct 出站，仅保留单个
+      if (ob.type === 'direct' && ob.tag === 'direct') {
+        if (seenDirect.has('direct')) {
+          continue;
+        }
+        seenDirect.add('direct');
+      }
+
+      newOutbounds.push(ob);
+    }
+    profile.outbounds = newOutbounds;
+  }
+
+  // 同步更新 dns.servers 中的 detour 引用
+  if (profile.dns && Array.isArray(profile.dns.servers)) {
+    for (const server of profile.dns.servers) {
+      if (server && server.detour === 'DIRECT') {
+        server.detour = 'direct';
+      }
+    }
+  }
+
+  // 同步更新 route.rules 与 final 中的 outbound 引用
+  if (profile.route && Array.isArray(profile.route.rules)) {
+    for (const rule of profile.route.rules) {
+      if (rule && rule.outbound === 'DIRECT') {
+        rule.outbound = 'direct';
+      }
+    }
+    if (profile.route.final === 'DIRECT') {
+      profile.route.final = 'direct';
+    }
+  }
+
+  return JSON.stringify(profile, null, 2);
+}
+
+/**
  * 生成 Sing-box 客户端开箱即用完整配置文件 (本地兜底模板 JSON)
  */
 export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, maybeWorkerDomain) {
@@ -474,7 +666,7 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
     {
       type: 'selector',
       tag: '🚀 节点选择',
-      outbounds: ['auto-selector-tcp', ...nodeTags, 'DIRECT'],
+      outbounds: ['auto-selector-tcp', ...nodeTags, 'direct'],
       default: 'auto-selector-tcp',
     },
     {
@@ -514,7 +706,7 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
   outbounds.push(
     {
       type: 'direct',
-      tag: 'DIRECT',
+      tag: 'direct',
     },
     {
       type: 'block',
@@ -566,7 +758,7 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
         },
         {
           ip_is_private: true,
-          outbound: 'DIRECT',
+          outbound: 'direct',
         },
         {
           clash_mode: 'Global',
@@ -574,7 +766,7 @@ export function generateSingboxFullProfile(nodesOrConfig, workerDomainOrConfig, 
         },
         {
           clash_mode: 'Direct',
-          outbound: 'DIRECT',
+          outbound: 'direct',
         },
       ],
       auto_detect_interface: true,
