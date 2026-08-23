@@ -99,6 +99,7 @@ sudo bash install.sh --service-token "your-client-id.access:your-client-secret"
 | `--token-id` | `-i` | **(必选)** Cloudflare Access Service Token ID | `xxxx.access` |
 | `--token-secret` | `-s` | **(必选)** Cloudflare Access Service Token Secret | `xxxxxxxx` |
 | `--service-token` | 无 | 以 `ID:SECRET` 格式组合传入 Token | `xxxx.access:yyyy` |
+| `--preferred-ip`, `--ip` | 无 | 指定 Cloudflare 优选 IP (容器内所有域名共用解析至此 IP 加速) | `104.16.88.99` / `162.159.192.1` |
 | `--domains` | `-d` | 目标域名列表 (多个用英文逗号分隔) | `movies.19910417.xyz,movies1.19910417.xyz` |
 | `--ports` | `-p` | 本地 TCP 监听端口列表 (与域名列表一一对应) | `5000,5001` |
 | `--forward` | `-f` | 快捷规则列表，格式为 `domain:port` (支持多次或逗号分隔) | `movies.19910417.xyz:5000,movies1.19910417.xyz:5001` |
@@ -107,9 +108,9 @@ sudo bash install.sh --service-token "your-client-id.access:your-client-secret"
 | `--name` | `-n` | 自定义 Systemd 服务与容器名称 | `cloudflare-access-tcp` |
 | `--no-cache` | 无 | 构建 Docker 镜像时不使用缓存 (全新编译) | 否 |
 | `--rebuild` | `-b` | 仅重新编译 Docker 镜像，不重新安装服务 | - |
-| `--status` | 无 | 查看 Systemd 服务、Docker 容器与监听端口状态 | - |
+| `--status` | 无 | 查看 Systemd 服务、Docker 容器、优选 IP 与监听端口状态 | - |
 | `--logs` | `-l` | 实时追踪查看运行日志 | - |
-| `--test` | 无 | 测试各个本地 TCP 转发端口的连通性 | - |
+| `--test` | 无 | 测试各个本地 TCP 转发端口与优选 IP 的连通性 | - |
 | `--restart` | 无 | 重启 Systemd 服务 | - |
 | `--stop` | 无 | 停止 Systemd 服务 | - |
 | `--uninstall` | 无 | 卸载 Systemd 服务、删除容器与配置文件 | - |
@@ -119,17 +120,27 @@ sudo bash install.sh --service-token "your-client-id.access:your-client-secret"
 
 ## 💡 高级自定义示例
 
-### 自定义 3 个域名与对应端口转发
+### 1. 配置优选 IP 静态映射加速 (多域名共用)
+
+```bash
+sudo bash install.sh \
+  -i "xxxx.access" \
+  -s "yyyy" \
+  --preferred-ip "104.16.88.99"
+```
+
+### 2. 自定义 3 个域名与对应端口转发并指定优选 IP
 
 ```bash
 sudo bash install.sh \
   -i "xxxx.access" \
   -s "yyyy" \
   -d "emby.example.com,jellyfin.example.com,sub.example.com" \
-  -p "8096,8097,8000"
+  -p "8096,8097,8000" \
+  --ip "162.159.192.1"
 ```
 
-### 允许局域网其他设备访问 (`--listen 0.0.0.0`)
+### 3. 允许局域网其他设备访问 (`--listen 0.0.0.0`)
 
 ```bash
 sudo bash install.sh \

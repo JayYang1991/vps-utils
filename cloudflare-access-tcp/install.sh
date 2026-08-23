@@ -3,6 +3,7 @@
 # install.sh
 # Cloudflare Access TCP 客户端一键安装与 Systemd 服务管理脚本
 # 通过 Docker + Ubuntu 24.04 编译生成容器，并通过 Systemd 实现开机自启与后台守护运行。
+# 支持在宿主机配置优选 IP，容器内自动实现所有域名向该优选 IP 的统一映射。
 #
 # GitHub: https://github.com/JayYang1991/vps-utils
 #
@@ -58,6 +59,7 @@ SERVICE_TOKEN_SECRET="${SERVICE_TOKEN_SECRET:-}"
 DOMAINS="${DOMAINS:-}"
 PORTS="${PORTS:-}"
 LISTEN_HOST="${LISTEN_HOST:-}"
+PREFERRED_IP="${PREFERRED_IP:-}"
 NETWORK_MODE="${NETWORK_MODE:-$DEFAULT_NETWORK_MODE}"
 
 FORWARD_RULES=()
@@ -75,9 +77,9 @@ show_help() {
   echo "  --uninstall                 停止并卸载 Systemd 服务，清理容器、镜像与配置文件"
   echo "  --restart                   重启 Systemd 服务"
   echo "  --stop                      停止 Systemd 服务"
-  echo "  --status                    查看 Systemd 服务状态、容器运行状态与本地监听端口"
+  echo "  --status                    查看 Systemd 服务状态、容器运行状态、优选 IP 与本地监听端口"
   echo "  --logs, -l                  查看服务的实时运行日志 (优先使用 journalctl)"
-  echo "  --test                      测试各个本地转发端口的连通性"
+  echo "  --test                      测试各个本地转发端口与优选 IP 的连通性"
   echo "  --rebuild, -b               仅重新编译 Docker 镜像 (使用宿主机网络)"
   echo ""
   echo "必选参数 (用于安装或更新配置):"
@@ -86,6 +88,7 @@ show_help() {
   echo "      --service-token <ID:KEY>以 'ID:SECRET' 格式一次性传入 Service Token"
   echo ""
   echo "可选配置参数:"
+  echo "  --ip, --preferred-ip <IP>   指定 Cloudflare 优选 IP (多个域名将自动在容器内共用映射至该优选 IP，以提升访问速度)"
   echo "  -d, --domains <D1,D2,...>   目标域名列表，逗号分隔 (默认: movies.19910417.xyz,movies1.19910417.xyz)"
   echo "  -p, --ports <P1,P2,...>     本地监听端口列表，逗号分隔 (默认: 5000,5001)"
   echo "  -f, --forward <D:P,...>     转发规则列表，格式为 'domain1:port1,domain2:port2' (可指定多次)"
@@ -98,26 +101,24 @@ show_help() {
   echo "环境变量支持:"
   echo "  SERVICE_TOKEN_ID            Cloudflare Access Service Token ID"
   echo "  SERVICE_TOKEN_SECRET        Cloudflare Access Service Token Secret"
+  echo "  PREFERRED_IP                Cloudflare 优选 IP (如 104.16.x.x, 162.159.x.x 等)"
   echo "  DOMAINS                     域名列表 (逗号分隔)"
   echo "  PORTS                       端口列表 (逗号分隔)"
   echo "  LISTEN_HOST                 监听地址 (默认: localhost)"
   echo "  NETWORK_MODE                网络模式 (默认: host)"
   echo ""
   echo "使用示例:"
-  echo -e "  ${YELLOW}# 1. 默认参数一键安装 (默认转发 movies.19910417.xyz->5000, movies1.19910417.xyz->5001):${NC}"
-  echo "  sudo bash $0 -i \"xxx.access\" -s \"yyy\""
+  echo -e "  ${YELLOW}# 1. 默认安装并配置优选 IP 加速:${NC}"
+  echo "  sudo bash $0 -i \"xxx.access\" -s \"yyy\" --preferred-ip \"104.16.88.99\""
   echo ""
-  echo -e "  ${YELLOW}# 2. 自定义域名和端口列表安装:${NC}"
-  echo "  sudo bash $0 -i \"xxx.access\" -s \"yyy\" -d \"movies.19910417.xyz,movies1.19910417.xyz\" -p \"5000,5001\""
+  echo -e "  ${YELLOW}# 2. 自定义域名、端口列表与优选 IP:${NC}"
+  echo "  sudo bash $0 -i \"xxx.access\" -s \"yyy\" -d \"movies.19910417.xyz,movies1.19910417.xyz\" -p \"5000,5001\" --ip \"162.159.192.1\""
   echo ""
   echo -e "  ${YELLOW}# 3. 使用 --forward 快捷格式:${NC}"
-  echo "  sudo bash $0 --service-token \"xxx.access:yyy\" --forward \"movies.19910417.xyz:5000,movies1.19910417.xyz:5001\""
+  echo "  sudo bash $0 --service-token \"xxx.access:yyy\" --forward \"movies.19910417.xyz:5000,movies1.19910417.xyz:5001\" --ip \"104.16.88.99\""
   echo ""
-  echo -e "  ${YELLOW}# 4. 查看状态与日志:${NC}"
+  echo -e "  ${YELLOW}# 4. 查看状态与测试连通性:${NC}"
   echo "  sudo bash $0 --status"
-  echo "  sudo bash $0 --logs"
-  echo ""
-  echo -e "  ${YELLOW}# 5. 测试端口连通性:${NC}"
   echo "  sudo bash $0 --test"
 }
 
@@ -164,6 +165,21 @@ validate_port() {
     return 1
   fi
   return 0
+}
+
+# --- 严格校验 IP 地址 ---
+validate_ip() {
+  local ip="$1"
+  [[ -z "$ip" ]] && return 0
+  local ipv4_regex="^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+  if [[ "$ip" =~ $ipv4_regex ]]; then
+    return 0
+  fi
+  if [[ "$ip" == *:* && "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+    return 0
+  fi
+  error "优选 IP 格式无效: $ip"
+  return 1
 }
 
 # --- 检查端口是否已被宿主机其他服务占用 ---
@@ -249,6 +265,10 @@ while [[ $# -gt 0 ]]; do
       IFS=':' read -r raw_id raw_sec <<< "$2"
       SERVICE_TOKEN_ID=$(clean_val "$raw_id")
       SERVICE_TOKEN_SECRET=$(clean_val "$raw_sec")
+      shift 2
+      ;;
+    --ip|--preferred-ip|-ip)
+      PREFERRED_IP=$(clean_val "$2")
       shift 2
       ;;
     -d|--domains)
@@ -418,6 +438,12 @@ do_status() {
     # shellcheck disable=SC1090
     source "$ENV_FILE"
     echo ""
+    if [[ -n "${PREFERRED_IP:-}" ]]; then
+      echo -e "优选 IP 静态映射:  ${GREEN}${BOLD}${PREFERRED_IP}${NC} (所有域名已在容器内共用此 IP 加速)"
+    else
+      echo -e "优选 IP 静态映射:  ${YELLOW}未配置 (使用公共 DNS 解析)${NC}"
+    fi
+    echo ""
     echo -e "${CYAN}当前配置的转发规则:${NC}"
     IFS=',' read -r -a cur_domains <<< "${DOMAINS:-}"
     IFS=',' read -r -a cur_ports <<< "${PORTS:-}"
@@ -431,7 +457,11 @@ do_status() {
       elif nc -z 127.0.0.1 "$p" 2>/dev/null; then
         port_status="${GREEN}连通正常 (TCP)${NC}"
       fi
-      printf "  [%d] %-15s -> %-30s [状态: %b]\n" "$((i+1))" "${host_listen}:${p}" "$d" "$port_status"
+      local dns_dest="${d}"
+      if [[ -n "${PREFERRED_IP:-}" ]]; then
+        dns_dest="${d} (${PREFERRED_IP})"
+      fi
+      printf "  [%d] %-15s -> %-35s [状态: %b]\n" "$((i+1))" "${host_listen}:${p}" "$dns_dest" "$port_status"
     done
   fi
   echo ""
@@ -469,6 +499,23 @@ do_test() {
       echo -e "${RED}✗ 连接失败 (端口未监听或超时)${NC}"
     fi
   done
+
+  if [[ -n "${PREFERRED_IP:-}" ]]; then
+    echo ""
+    echo -n "测试优选 IP 边缘连接 [${PREFERRED_IP}:443] ... "
+    if command -v nc &>/dev/null; then
+      if nc -z -w 3 "$PREFERRED_IP" 443 &>/dev/null; then
+        echo -e "${GREEN}✓ 优选 IP 连通正常${NC}"
+      else
+        echo -e "${YELLOW}⚠️ 优选 IP 443 端口连接超时或无法直连${NC}"
+      fi
+    elif timeout 3 bash -c "cat < /dev/null > /dev/tcp/${PREFERRED_IP}/443" 2>/dev/null; then
+      echo -e "${GREEN}✓ 优选 IP 连通正常${NC}"
+    else
+      echo -e "${YELLOW}⚠️ 优选 IP 443 端口连接超时或无法直连${NC}"
+    fi
+  fi
+  echo ""
   exit 0
 }
 
@@ -501,6 +548,7 @@ if [[ -f "$ENV_FILE" ]]; then
   EXISTING_DOMAINS=$(grep -E "^DOMAINS=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
   EXISTING_PORTS=$(grep -E "^PORTS=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
   EXISTING_LISTEN=$(grep -E "^LISTEN_HOST=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+  EXISTING_PREF_IP=$(grep -E "^PREFERRED_IP=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
   EXISTING_NET_MODE=$(grep -E "^NETWORK_MODE=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
 
   [[ -z "$SERVICE_TOKEN_ID" && -n "$EXISTING_TOKEN_ID" ]] && SERVICE_TOKEN_ID=$(clean_val "$EXISTING_TOKEN_ID")
@@ -508,6 +556,7 @@ if [[ -f "$ENV_FILE" ]]; then
   [[ -z "$DOMAINS" && -n "$EXISTING_DOMAINS" && ${#FORWARD_RULES[@]} -eq 0 ]] && DOMAINS=$(clean_val "$EXISTING_DOMAINS")
   [[ -z "$PORTS" && -n "$EXISTING_PORTS" && ${#FORWARD_RULES[@]} -eq 0 ]] && PORTS=$(clean_val "$EXISTING_PORTS")
   [[ -z "$LISTEN_HOST" && -n "$EXISTING_LISTEN" ]] && LISTEN_HOST=$(clean_val "$EXISTING_LISTEN")
+  [[ -z "$PREFERRED_IP" && -n "$EXISTING_PREF_IP" ]] && PREFERRED_IP=$(clean_val "$EXISTING_PREF_IP")
   [[ -z "$NETWORK_MODE" && -n "$EXISTING_NET_MODE" ]] && NETWORK_MODE=$(clean_val "$EXISTING_NET_MODE")
 fi
 
@@ -561,8 +610,9 @@ fi
 DOMAINS=$(clean_val "${DOMAINS:-$DEFAULT_DOMAINS}")
 PORTS=$(clean_val "${PORTS:-$DEFAULT_PORTS}")
 LISTEN_HOST=$(clean_val "${LISTEN_HOST:-$DEFAULT_LISTEN}")
+PREFERRED_IP=$(clean_val "${PREFERRED_IP:-}")
 
-# 4. 严格解析与校验域名与端口
+# 4. 严格解析与校验域名、端口及优选 IP
 IFS=',' read -r -a DOMAIN_LIST <<< "$DOMAINS"
 IFS=',' read -r -a PORT_LIST <<< "$PORTS"
 
@@ -614,6 +664,13 @@ for i in "${!DOMAIN_LIST[@]}"; do
   CLEAN_PORTS+=("$p")
 done
 
+if [[ -n "$PREFERRED_IP" ]]; then
+  if ! validate_ip "$PREFERRED_IP"; then
+    error "优选 IP 校验失败: '$PREFERRED_IP'"
+    exit 1
+  fi
+fi
+
 DOMAINS=$(IFS=,; echo "${CLEAN_DOMAINS[*]}")
 PORTS=$(IFS=,; echo "${CLEAN_PORTS[*]}")
 
@@ -621,7 +678,6 @@ PORTS=$(IFS=,; echo "${CLEAN_PORTS[*]}")
 build_docker_image
 
 # 6. 安全创建独立加密配置文件 (/etc/cloudflare-access-tcp/access.env, 权限 600)
-# 注意：Docker --env-file 解析规则不会自动剥离外层引号，因此配置行绝对不要加双引号或单引号
 mkdir -p "$CONF_DIR"
 chmod 700 "$CONF_DIR"
 
@@ -633,6 +689,7 @@ SERVICE_TOKEN_SECRET=${SERVICE_TOKEN_SECRET}
 DOMAINS=${DOMAINS}
 PORTS=${PORTS}
 LISTEN_HOST=${LISTEN_HOST}
+PREFERRED_IP=${PREFERRED_IP}
 NETWORK_MODE=${NETWORK_MODE}
 LOG_LEVEL=info
 EOF
@@ -702,12 +759,21 @@ if systemctl is-active --quiet "$SERVICE_NAME"; then
   echo -e "  • 服务名称:         ${BOLD}${SERVICE_NAME}${NC}"
   echo -e "  • 配置文件:         ${BOLD}${ENV_FILE}${NC} (权限 600)"
   echo -e "  • 监听地址:         ${BOLD}${LISTEN_HOST}${NC}"
+  if [[ -n "$PREFERRED_IP" ]]; then
+    echo -e "  • 优选 IP:          ${GREEN}${BOLD}${PREFERRED_IP}${NC} (所有域名在容器内共用此 IP 解析加速)"
+  else
+    echo -e "  • 优选 IP:          ${YELLOW}未配置 (使用公共 DNS 解析)${NC}"
+  fi
   echo -e "  • 网络模式:         ${BOLD}${NETWORK_MODE}${NC}"
   echo -e "  • Service Token ID: $(mask_string "$SERVICE_TOKEN_ID")"
   echo ""
   echo -e "${CYAN}已配置的 TCP 转发列表:${NC}"
   for i in "${!CLEAN_DOMAINS[@]}"; do
-    echo -e "  • 规则 #$((i+1)): ${YELLOW}${LISTEN_HOST}:${CLEAN_PORTS[i]}${NC}  ===>  ${CYAN}${CLEAN_DOMAINS[i]}${NC}"
+    dest_info="${CLEAN_DOMAINS[i]}"
+    if [[ -n "$PREFERRED_IP" ]]; then
+      dest_info="${CLEAN_DOMAINS[i]} (${PREFERRED_IP})"
+    fi
+    echo -e "  • 规则 #$((i+1)): ${YELLOW}${LISTEN_HOST}:${CLEAN_PORTS[i]}${NC}  ===>  ${CYAN}${dest_info}${NC}"
   done
   echo ""
   echo -e "${CYAN}常用运维管理命令:${NC}"

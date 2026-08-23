@@ -2,8 +2,8 @@
 #
 # docker-entrypoint.sh
 # Cloudflare Access TCP Client Forwarder Container Entrypoint Script
-# 负责在容器内解析环境变量、执行严格的域名与端口校验，并发拉起多个 cloudflared access tcp 进程，
-# 并内置进程级热自愈监控与防颠簸重试机制。
+# 负责在容器内解析环境变量、执行严格的域名与端口校验，支持多域名共用优选 IP 静态映射，
+# 并发拉起多个 cloudflared access tcp 进程，内置进程级热自愈监控与防颠簸重试机制。
 #
 
 set -eo pipefail
@@ -22,19 +22,15 @@ error() { echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2; }
 # --- 字符串清洗辅助函数 (纯 Bash 去除首尾空白与包裹的引号，避免 xargs 引号解析错误) ---
 clean_val() {
   local val="$1"
-  # 移除首尾空白
   val="${val#"${val%%[![:space:]]*}"}"
   val="${val%"${val##*[![:space:]]}"}"
-  # 移除成对包裹的外层单/双引号
   while [[ "$val" == \"*\" || "$val" == \'*\' ]]; do
     val="${val:1:-1}"
   done
-  # 移除可能残留的单个前导或尾随引号
   val="${val#\"}"
   val="${val%\"}"
   val="${val#\'}"
   val="${val%\'}"
-  # 再次清理首尾空格
   val="${val#"${val%%[![:space:]]*}"}"
   val="${val%"${val##*[![:space:]]}"}"
   printf '%s' "$val"
@@ -46,6 +42,7 @@ DEFAULT_PORTS="5000,5001"
 DOMAINS=$(clean_val "${DOMAINS:-$DEFAULT_DOMAINS}")
 PORTS=$(clean_val "${PORTS:-$DEFAULT_PORTS}")
 LISTEN_HOST=$(clean_val "${LISTEN_HOST:-localhost}")
+PREFERRED_IP=$(clean_val "${PREFERRED_IP:-}")
 SERVICE_TOKEN_ID=$(clean_val "${SERVICE_TOKEN_ID:-}")
 SERVICE_TOKEN_SECRET=$(clean_val "${SERVICE_TOKEN_SECRET:-}")
 LOG_LEVEL=$(clean_val "${LOG_LEVEL:-info}")
@@ -65,7 +62,6 @@ validate_domain() {
     error "域名必须包含顶级域名 (至少包含一个点): $domain"
     return 1
   fi
-  # RFC 1123 规范域名正则
   local domain_regex="^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?$"
   if [[ ! "$domain" =~ $domain_regex ]]; then
     error "域名格式无效: $domain"
@@ -93,6 +89,20 @@ validate_port() {
     return 1
   fi
   return 0
+}
+
+validate_ip() {
+  local ip="$1"
+  [[ -z "$ip" ]] && return 0
+  local ipv4_regex="^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+  if [[ "$ip" =~ $ipv4_regex ]]; then
+    return 0
+  fi
+  if [[ "$ip" == *:* && "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+    return 0
+  fi
+  error "优选 IP 格式无效: $ip"
+  return 1
 }
 
 # --- 检查必选参数 ---
@@ -147,6 +157,14 @@ for i in "${!DOMAIN_ARRAY[@]}"; do
   SEEN_PORTS[$p]=$((i+1))
 done
 
+# 校验优选 IP (若配置)
+if [[ -n "$PREFERRED_IP" ]]; then
+  if ! validate_ip "$PREFERRED_IP"; then
+    error "优选 IP 校验失败: $PREFERRED_IP"
+    exit 1
+  fi
+fi
+
 # 脱敏打印 Token 信息
 mask_token() {
   local str="$1"
@@ -166,12 +184,27 @@ echo -e "${CYAN}======================================================${NC}"
 log "Service Token ID:     $(mask_token "$SERVICE_TOKEN_ID")"
 log "Service Token Secret: ********************"
 log "Listen Host:          $LISTEN_HOST"
+if [[ -n "$PREFERRED_IP" ]]; then
+  log "Preferred IP (优选):  $PREFERRED_IP (所有域名共用解析)"
+else
+  log "Preferred IP (优选):  未配置 (使用公共 DNS 解析)"
+fi
 log "Forward Rules Count:  ${#DOMAIN_ARRAY[@]}"
 
 for i in "${!DOMAIN_ARRAY[@]}"; do
   log "  -> Rule #$((i+1)): ${LISTEN_HOST}:${PORT_ARRAY[i]}  ===>  ${DOMAIN_ARRAY[i]}"
 done
 echo -e "${CYAN}------------------------------------------------------${NC}"
+
+# --- 注入优选 IP 静态域名映射 (修改容器 /etc/hosts) ---
+if [[ -n "$PREFERRED_IP" ]]; then
+  log "⚡ 正在向容器 /etc/hosts 注入优选 IP 静态映射 (${PREFERRED_IP}) ..."
+  for target_d in "${DOMAIN_ARRAY[@]}"; do
+    sed -i "/[[:space:]]${target_d}\$/d" /etc/hosts 2>/dev/null || true
+    echo "${PREFERRED_IP} ${target_d}" >> /etc/hosts
+    log "  -> [优选 DNS 映射] ${target_d}  ===>  ${PREFERRED_IP}"
+  done
+fi
 
 # --- 进程级自愈管理与信号捕获 ---
 declare -A CHILD_PIDS
