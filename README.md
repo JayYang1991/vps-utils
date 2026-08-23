@@ -78,6 +78,23 @@ Cloudflare WARP 客户端出海访问完整拆解为以下 **4 个步骤**：
 [ 目标国际互联网 (完美解锁流媒体 / ChatGPT / Claude / 区域原生 IP 验证) ]
 ```
 
+#### 模式 C：Cloudflare Access TCP 客户端本地安全转发路径 (Zero Trust TCP + 本地端口映射)
+
+适用于在代理客户端/内网机器上安全直连受 Cloudflare Access 保护的私有 TCP 服务（影视服/Emby/Jellyfin/SSH等）：
+
+```text
+[ 本地播放器 / 客户端应用 (如 Emby / Infuse / 浏览器, 访问 127.0.0.1:5000) ]
+                       │
+                       ▼ 1. 连接本地转发端口 (由 cloudflare-access-tcp 容器监听)
+[ cloudflare-access-tcp 容器 (cloudflared access tcp, Systemd 自启守护) ]
+                       │
+                       ▼ 2. 携带 Service Token 建立加密 WSS 隧道直连 Cloudflare
+[ Cloudflare Zero Trust 边缘网络 (Access TCP 策略自动鉴权) ]
+                       │
+                       ▼ 3. 安全穿透隧道长连接到达目标后端
+[ 远程服务端 (Cloudflare Tunnel 接入的目标 TCP 影视/私有服务) ]
+```
+
 ---
 
 ## 🚀 第一章：VPS 端到端自动化部署全流程
@@ -184,6 +201,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 | **[subconverter](./subconverter)** | 通用代理订阅格式转换后端服务（带 Systemd 一键安装与端口配置） | `install.sh` | [subconverter 详细指南](./subconverter/README.md) |
 | **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理、CDN 测速与 WARP Endpoint 优选同步工具 | `sub-worker.js`<br>`warp_tester.py`<br>`process_ips.py`<br>`telegram_tool.py` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
 | **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
+| **[cloudflare-access-tcp](./cloudflare-access-tcp)** | 代理客户端 Cloudflare Access TCP 转发容器 (Ubuntu 24.04 + Systemd 自启) | `install.sh`<br>`docker-entrypoint.sh`<br>`Dockerfile` | [cloudflare-access-tcp 详细指南](./cloudflare-access-tcp/README.md) |
 
 ---
 
@@ -238,6 +256,13 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 - **本地住宅代理中继网桥 (`vpngate-bridge`)**：默认自动选用全局最优住宅节点，在本地开启 `socks5://127.0.0.1:10808` 与 `http://127.0.0.1:10809`；全面支持手动指定 IP:端口、国家、排名或自定义 OVPN。
 - **全局快捷命令体系**：`vpngate-nodes`、`vpngate-service`、`vpngate-selector`、`vpngate-bridge`、`vpngate-daemon`。
 
+### 9. [cloudflare-access-tcp](./cloudflare-access-tcp) — 代理客户端 Cloudflare Access TCP 转发容器
+
+- **Ubuntu 24.04 编译生成**：基于 `ubuntu:24.04` 与官方 `cloudflared` 二进制，编译全程使用宿主机网络 (`--network host`)。
+- **多端口并发转发**：默认开启 2 个 TCP 转发端口（`5000` 与 `5001`）映射远程私有服务（`movies.19910417.xyz` / `movies1.19910417.xyz`），支持任意自定义域名与端口列表。
+- **严格校验与凭据隔离**：内置 RFC 域名与 1-65535 端口严格校验，Service Token 凭据独立保存在 `chmod 600` 文件中。
+- **Systemd 自启与全生命周期管理**：提供 `install.sh` 脚本，支持 `--install`、`--status`、`--logs`、`--test`、`--restart`、`--stop`、`--rebuild`、`--uninstall`。
+
 ---
 
 ## 📂 第三章：仓库目录结构与文件索引
@@ -282,6 +307,11 @@ vps-utils/
 │   ├── src/                           # Worker 源代码 (VLESS, KV Admin, 优选聚合)
 │   ├── wrangler.toml                  # Cloudflare Worker 配置文件
 │   └── build.js                       # 自动化打包与 AST 代码混淆管线
+├── cloudflare-access-tcp/              # 代理客户端 Cloudflare Access TCP 转发容器
+│   ├── README.md                      # cloudflare-access-tcp 详细指南
+│   ├── install.sh                     # 一键安装、构建与 Systemd 容器管理脚本
+│   ├── Dockerfile                     # Ubuntu 24.04 + cloudflared 容器构建文件
+│   └── docker-entrypoint.sh           # 严格参数校验与多进程守护启动脚本
 └── vpngate-residential-selector/       # VPNGATE 住宅 IP 优选与高并发测速工具
     ├── README.md                      # vpngate-residential-selector 说明指南
     ├── main.py                        # CLI 调度入口
