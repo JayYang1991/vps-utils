@@ -250,7 +250,7 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
     local_socks_node = [
         {
             "type": "socks5",
-            "name": "本地Socks5节点",
+            "name": "本地代理-Socks5",
             "server": "127.0.0.1",
             "port": 1080,
             "category": "local"
@@ -366,7 +366,7 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
     for ib in inbounds:
         if ib.get("type") == "vless" and str(ib.get("listen_port")) == "443":
             local_socks_node.append(
-                _build_vless_node_dict(ib, "本地代理-residential", "127.0.0.1", 5001, "local", server_host)
+                _build_vless_node_dict(ib, "住宅代理-vpngate", "127.0.0.1", 5001, "local", server_host)
             )
             break
 
