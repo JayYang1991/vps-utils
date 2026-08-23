@@ -207,18 +207,58 @@ def fetch_preferred_nodes(vless_grpc_inbound: dict) -> list:
         
     return nodes
 
+def _build_vless_node_dict(ib: dict, node_name: str, server: str, port: int, category: str, default_sni: str = "127.0.0.1") -> dict:
+    user = ib.get("users", [{}])[0] if ib.get("users") else {}
+    uuid = user.get("uuid", "")
+    flow = user.get("flow", "")
+    tls = ib.get("tls", {})
+    reality = tls.get("reality", {})
+    sni = tls.get("server_name", "") or default_sni
+    
+    if reality.get("enabled"):
+        priv_key = reality.get("private_key", "")
+        raw_pub = reality.get("public_key") or derive_public_key(priv_key)
+        pub_key = raw_pub.replace('+', '-').replace('/', '_').rstrip('=') if raw_pub else ""
+        short_id = reality.get("short_id", [""])[0] if reality.get("short_id") else ""
+        return {
+            "type": "vless-reality",
+            "name": node_name,
+            "server": server,
+            "port": int(port),
+            "uuid": uuid,
+            "flow": flow,
+            "sni": sni,
+            "public_key": pub_key,
+            "short_id": short_id,
+            "tls": True,
+            "category": category
+        }
+    else:
+        return {
+            "type": "vless",
+            "name": node_name,
+            "server": server,
+            "port": int(port),
+            "uuid": uuid,
+            "sni": sni,
+            "tls": bool(tls.get("enabled", True)),
+            "category": category
+        }
+
 def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") -> list:
-    """Parse sing-box server config into nodes ordered by: Preferred IP nodes -> VPS nodes -> Local Socks5 node."""
-    local_socks_node = {
-        "type": "socks5",
-        "name": "本地Socks5节点",
-        "server": "127.0.0.1",
-        "port": 1080,
-        "category": "local"
-    }
+    """Parse sing-box server config into nodes ordered by: Preferred IP nodes -> VPS nodes -> Local proxy nodes."""
+    local_socks_node = [
+        {
+            "type": "socks5",
+            "name": "本地Socks5节点",
+            "server": "127.0.0.1",
+            "port": 1080,
+            "category": "local"
+        }
+    ]
     
     if not os.path.exists(sb_config_path):
-        return [local_socks_node]
+        return local_socks_node
         
     with open(sb_config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
@@ -314,7 +354,23 @@ def parse_server_inbounds(sb_config_path: str, default_server_host: str = "") ->
                     "category": "vps"
                 })
             
-    nodes = preferred_nodes + vps_nodes + [local_socks_node]
+    # 1. 识别 8443 端口的 vless 协议端口 -> 127.0.0.1:5000 "本地代理-cloudflared"
+    for ib in inbounds:
+        if ib.get("type") == "vless" and str(ib.get("listen_port")) == "8443":
+            local_socks_node.append(
+                _build_vless_node_dict(ib, "本地代理-cloudflared", "127.0.0.1", 5000, "local", server_host)
+            )
+            break
+
+    # 2. 识别 443 端口的 vless 协议端口 -> 127.0.0.1:5001 "本地代理-residential"
+    for ib in inbounds:
+        if ib.get("type") == "vless" and str(ib.get("listen_port")) == "443":
+            local_socks_node.append(
+                _build_vless_node_dict(ib, "本地代理-residential", "127.0.0.1", 5001, "local", server_host)
+            )
+            break
+
+    nodes = preferred_nodes + vps_nodes + local_socks_node
     return nodes
 
 def get_node_category(node: dict) -> str:
