@@ -19,15 +19,36 @@ log() { echo -e "${GREEN}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2; }
 
+# --- 字符串清洗辅助函数 (纯 Bash 去除首尾空白与包裹的引号，避免 xargs 引号解析错误) ---
+clean_val() {
+  local val="$1"
+  # 移除首尾空白
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  # 移除成对包裹的外层单/双引号
+  while [[ "$val" == \"*\" || "$val" == \'*\' ]]; do
+    val="${val:1:-1}"
+  done
+  # 移除可能残留的单个前导或尾随引号
+  val="${val#\"}"
+  val="${val%\"}"
+  val="${val#\'}"
+  val="${val%\'}"
+  # 再次清理首尾空格
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  printf '%s' "$val"
+}
+
 # --- 默认配置 ---
 DEFAULT_DOMAINS="movies.19910417.xyz,movies1.19910417.xyz"
 DEFAULT_PORTS="5000,5001"
-DOMAINS="${DOMAINS:-$DEFAULT_DOMAINS}"
-PORTS="${PORTS:-$DEFAULT_PORTS}"
-LISTEN_HOST="${LISTEN_HOST:-localhost}"
-SERVICE_TOKEN_ID="${SERVICE_TOKEN_ID:-}"
-SERVICE_TOKEN_SECRET="${SERVICE_TOKEN_SECRET:-}"
-LOG_LEVEL="${LOG_LEVEL:-info}"
+DOMAINS=$(clean_val "${DOMAINS:-$DEFAULT_DOMAINS}")
+PORTS=$(clean_val "${PORTS:-$DEFAULT_PORTS}")
+LISTEN_HOST=$(clean_val "${LISTEN_HOST:-localhost}")
+SERVICE_TOKEN_ID=$(clean_val "${SERVICE_TOKEN_ID:-}")
+SERVICE_TOKEN_SECRET=$(clean_val "${SERVICE_TOKEN_SECRET:-}")
+LOG_LEVEL=$(clean_val "${LOG_LEVEL:-info}")
 
 # --- 校验函数 ---
 validate_domain() {
@@ -104,8 +125,8 @@ fi
 # 严格校验每一个域名与端口
 declare -A SEEN_PORTS
 for i in "${!DOMAIN_ARRAY[@]}"; do
-  d=$(echo "${DOMAIN_ARRAY[i]}" | xargs)
-  p=$(echo "${PORT_ARRAY[i]}" | xargs)
+  d=$(clean_val "${DOMAIN_ARRAY[i]}")
+  p=$(clean_val "${PORT_ARRAY[i]}")
   DOMAIN_ARRAY[i]="$d"
   PORT_ARRAY[i]="$p"
 

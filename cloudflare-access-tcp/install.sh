@@ -22,6 +22,23 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
 success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
+# --- 字符串清洗辅助函数 (纯 Bash 去除首尾空白与包裹的引号) ---
+clean_val() {
+  local val="$1"
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  while [[ "$val" == \"*\" || "$val" == \'*\' ]]; do
+    val="${val:1:-1}"
+  done
+  val="${val#\"}"
+  val="${val%\"}"
+  val="${val#\'}"
+  val="${val%\'}"
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  printf '%s' "$val"
+}
+
 # --- 基础与默认变量 ---
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")
 SERVICE_NAME="cloudflare-access-tcp"
@@ -221,23 +238,25 @@ while [[ $# -gt 0 ]]; do
       shift 1
       ;;
     -i|--token-id|--service-token-id)
-      SERVICE_TOKEN_ID="$2"
+      SERVICE_TOKEN_ID=$(clean_val "$2")
       shift 2
       ;;
     -s|--token-secret|--service-token-secret)
-      SERVICE_TOKEN_SECRET="$2"
+      SERVICE_TOKEN_SECRET=$(clean_val "$2")
       shift 2
       ;;
     --service-token)
-      IFS=':' read -r SERVICE_TOKEN_ID SERVICE_TOKEN_SECRET <<< "$2"
+      IFS=':' read -r raw_id raw_sec <<< "$2"
+      SERVICE_TOKEN_ID=$(clean_val "$raw_id")
+      SERVICE_TOKEN_SECRET=$(clean_val "$raw_sec")
       shift 2
       ;;
     -d|--domains)
-      DOMAINS="$2"
+      DOMAINS=$(clean_val "$2")
       shift 2
       ;;
     -p|--ports)
-      PORTS="$2"
+      PORTS=$(clean_val "$2")
       shift 2
       ;;
     -f|--forward)
@@ -245,16 +264,16 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --listen)
-      LISTEN_HOST="$2"
+      LISTEN_HOST=$(clean_val "$2")
       shift 2
       ;;
     --network-mode)
-      NETWORK_MODE="$2"
+      NETWORK_MODE=$(clean_val "$2")
       shift 2
       ;;
     -n|--name)
-      SERVICE_NAME="$2"
-      CONTAINER_NAME="$2"
+      SERVICE_NAME=$(clean_val "$2")
+      CONTAINER_NAME="$SERVICE_NAME"
       SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
       shift 2
       ;;
@@ -477,19 +496,19 @@ check_docker
 
 # 1. 尝试继承现有配置文件中的 Token 或参数 (若用户未显式传入)
 if [[ -f "$ENV_FILE" ]]; then
-  EXISTING_TOKEN_ID=$(grep -E "^SERVICE_TOKEN_ID=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' || true)
-  EXISTING_TOKEN_SECRET=$(grep -E "^SERVICE_TOKEN_SECRET=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' || true)
-  EXISTING_DOMAINS=$(grep -E "^DOMAINS=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' || true)
-  EXISTING_PORTS=$(grep -E "^PORTS=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' || true)
-  EXISTING_LISTEN=$(grep -E "^LISTEN_HOST=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' || true)
-  EXISTING_NET_MODE=$(grep -E "^NETWORK_MODE=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' || true)
+  EXISTING_TOKEN_ID=$(grep -E "^SERVICE_TOKEN_ID=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+  EXISTING_TOKEN_SECRET=$(grep -E "^SERVICE_TOKEN_SECRET=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+  EXISTING_DOMAINS=$(grep -E "^DOMAINS=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+  EXISTING_PORTS=$(grep -E "^PORTS=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+  EXISTING_LISTEN=$(grep -E "^LISTEN_HOST=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
+  EXISTING_NET_MODE=$(grep -E "^NETWORK_MODE=" "$ENV_FILE" | cut -d'=' -f2- | tr -d '"' | tr -d "'" || true)
 
-  [[ -z "$SERVICE_TOKEN_ID" && -n "$EXISTING_TOKEN_ID" ]] && SERVICE_TOKEN_ID="$EXISTING_TOKEN_ID"
-  [[ -z "$SERVICE_TOKEN_SECRET" && -n "$EXISTING_TOKEN_SECRET" ]] && SERVICE_TOKEN_SECRET="$EXISTING_TOKEN_SECRET"
-  [[ -z "$DOMAINS" && -n "$EXISTING_DOMAINS" && ${#FORWARD_RULES[@]} -eq 0 ]] && DOMAINS="$EXISTING_DOMAINS"
-  [[ -z "$PORTS" && -n "$EXISTING_PORTS" && ${#FORWARD_RULES[@]} -eq 0 ]] && PORTS="$EXISTING_PORTS"
-  [[ -z "$LISTEN_HOST" && -n "$EXISTING_LISTEN" ]] && LISTEN_HOST="$EXISTING_LISTEN"
-  [[ -z "$NETWORK_MODE" && -n "$EXISTING_NET_MODE" ]] && NETWORK_MODE="$EXISTING_NET_MODE"
+  [[ -z "$SERVICE_TOKEN_ID" && -n "$EXISTING_TOKEN_ID" ]] && SERVICE_TOKEN_ID=$(clean_val "$EXISTING_TOKEN_ID")
+  [[ -z "$SERVICE_TOKEN_SECRET" && -n "$EXISTING_TOKEN_SECRET" ]] && SERVICE_TOKEN_SECRET=$(clean_val "$EXISTING_TOKEN_SECRET")
+  [[ -z "$DOMAINS" && -n "$EXISTING_DOMAINS" && ${#FORWARD_RULES[@]} -eq 0 ]] && DOMAINS=$(clean_val "$EXISTING_DOMAINS")
+  [[ -z "$PORTS" && -n "$EXISTING_PORTS" && ${#FORWARD_RULES[@]} -eq 0 ]] && PORTS=$(clean_val "$EXISTING_PORTS")
+  [[ -z "$LISTEN_HOST" && -n "$EXISTING_LISTEN" ]] && LISTEN_HOST=$(clean_val "$EXISTING_LISTEN")
+  [[ -z "$NETWORK_MODE" && -n "$EXISTING_NET_MODE" ]] && NETWORK_MODE=$(clean_val "$EXISTING_NET_MODE")
 fi
 
 # 2. 检查与交互式输入必选参数: SERVICE_TOKEN_ID 与 SERVICE_TOKEN_SECRET
@@ -497,6 +516,7 @@ if [[ -z "$SERVICE_TOKEN_ID" ]]; then
   if [[ -t 0 ]]; then
     echo -e "${YELLOW}请输入 Cloudflare Access Service Token Client ID:${NC}"
     read -r -p "Service Token ID: " SERVICE_TOKEN_ID
+    SERVICE_TOKEN_ID=$(clean_val "$SERVICE_TOKEN_ID")
   fi
 fi
 
@@ -505,6 +525,7 @@ if [[ -z "$SERVICE_TOKEN_SECRET" ]]; then
     echo -e "${YELLOW}请输入 Cloudflare Access Service Token Client Secret:${NC}"
     read -r -s -p "Service Token Secret: " SERVICE_TOKEN_SECRET
     echo ""
+    SERVICE_TOKEN_SECRET=$(clean_val "$SERVICE_TOKEN_SECRET")
   fi
 fi
 
@@ -521,14 +542,14 @@ if [[ ${#FORWARD_RULES[@]} -gt 0 ]]; then
   for rule_str in "${FORWARD_RULES[@]}"; do
     IFS=',' read -r -a subrules <<< "$rule_str"
     for r in "${subrules[@]}"; do
-      r=$(echo "$r" | xargs)
+      r=$(clean_val "$r")
       [[ -z "$r" ]] && continue
       if [[ "$r" != *:* ]]; then
         error "无效的转发规则格式: '$r'，必须为 'domain:port' 格式"
         exit 1
       fi
-      d="${r%%:*}"
-      p="${r##*:}"
+      d=$(clean_val "${r%%:*}")
+      p=$(clean_val "${r##*:}")
       PARSED_DOMAINS+=("$d")
       PARSED_PORTS+=("$p")
     done
@@ -537,9 +558,9 @@ if [[ ${#FORWARD_RULES[@]} -gt 0 ]]; then
   PORTS=$(IFS=,; echo "${PARSED_PORTS[*]}")
 fi
 
-DOMAINS="${DOMAINS:-$DEFAULT_DOMAINS}"
-PORTS="${PORTS:-$DEFAULT_PORTS}"
-LISTEN_HOST="${LISTEN_HOST:-$DEFAULT_LISTEN}"
+DOMAINS=$(clean_val "${DOMAINS:-$DEFAULT_DOMAINS}")
+PORTS=$(clean_val "${PORTS:-$DEFAULT_PORTS}")
+LISTEN_HOST=$(clean_val "${LISTEN_HOST:-$DEFAULT_LISTEN}")
 
 # 4. 严格解析与校验域名与端口
 IFS=',' read -r -a DOMAIN_LIST <<< "$DOMAINS"
@@ -562,8 +583,8 @@ CLEAN_PORTS=()
 declare -A SEEN_PORTS
 
 for i in "${!DOMAIN_LIST[@]}"; do
-  d=$(echo "${DOMAIN_LIST[i]}" | xargs)
-  p=$(echo "${PORT_LIST[i]}" | xargs)
+  d=$(clean_val "${DOMAIN_LIST[i]}")
+  p=$(clean_val "${PORT_LIST[i]}")
 
   if ! validate_domain "$d"; then
     error "规则 #$((i+1)) 域名校验失败: '$d'"
@@ -600,19 +621,20 @@ PORTS=$(IFS=,; echo "${CLEAN_PORTS[*]}")
 build_docker_image
 
 # 6. 安全创建独立加密配置文件 (/etc/cloudflare-access-tcp/access.env, 权限 600)
+# 注意：Docker --env-file 解析规则不会自动剥离外层引号，因此配置行绝对不要加双引号或单引号
 mkdir -p "$CONF_DIR"
 chmod 700 "$CONF_DIR"
 
 cat > "$ENV_FILE" <<EOF
 # Cloudflare Access TCP Client Configuration
 # Created at: $(date '+%Y-%m-%d %H:%M:%S')
-SERVICE_TOKEN_ID="${SERVICE_TOKEN_ID}"
-SERVICE_TOKEN_SECRET="${SERVICE_TOKEN_SECRET}"
-DOMAINS="${DOMAINS}"
-PORTS="${PORTS}"
-LISTEN_HOST="${LISTEN_HOST}"
-NETWORK_MODE="${NETWORK_MODE}"
-LOG_LEVEL="info"
+SERVICE_TOKEN_ID=${SERVICE_TOKEN_ID}
+SERVICE_TOKEN_SECRET=${SERVICE_TOKEN_SECRET}
+DOMAINS=${DOMAINS}
+PORTS=${PORTS}
+LISTEN_HOST=${LISTEN_HOST}
+NETWORK_MODE=${NETWORK_MODE}
+LOG_LEVEL=info
 EOF
 
 chmod 600 "$ENV_FILE"
