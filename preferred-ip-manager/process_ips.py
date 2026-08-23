@@ -82,6 +82,105 @@ def get_val_from_row(row, mode):
                 continue
     return default
 
+def check_file_exists_sudo(filepath: str) -> bool:
+    """使用 sudo 提权检查文件是否存在（避免因父目录 700 权限导致普通用户 stat 失败）"""
+    try:
+        if os.path.exists(filepath):
+            return True
+    except (PermissionError, OSError):
+        pass
+    res = subprocess.run(["sudo", "test", "-f", filepath], capture_output=True)
+    return res.returncode == 0
+
+def read_file_sudo(filepath: str) -> str:
+    """使用 sudo 提权读取文件内容"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return f.read()
+    except (PermissionError, FileNotFoundError, OSError):
+        proc = subprocess.run(["sudo", "cat", filepath], capture_output=True, text=True, check=True)
+        return proc.stdout
+
+def write_file_sudo(filepath: str, content: str):
+    """使用 sudo 提权写入文件内容并保持原有 600 权限"""
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(content)
+            return
+    except (PermissionError, FileNotFoundError, OSError):
+        pass
+    subprocess.run(["sudo", "tee", filepath], input=content, text=True, capture_output=True, check=True)
+    subprocess.run(["sudo", "chmod", "600", filepath], capture_output=True)
+
+def update_cloudflare_access_preferred_ip(best_ip: str, auto_yes: bool = False):
+    """
+    若宿主机上存在 cloudflare-access-tcp 配置 (/etc/cloudflare-access-tcp/access.env)，
+    则提示用户确认后通过 sudo 提权将端口为 443 的最优 IP 填入 PREFERRED_IP 配置并重启服务；若不存在则静默跳过。
+    """
+    env_path = "/etc/cloudflare-access-tcp/access.env"
+    if not check_file_exists_sudo(env_path):
+        print("ℹ️ 未检测到 cloudflare-access-tcp 项目配置 (/etc/cloudflare-access-tcp/access.env)，跳过更新。")
+        return
+
+    if not is_valid_ip(best_ip):
+        print(f"⚠️ 最优 443 端口 IP 格式无效 ({best_ip})，跳过 cloudflare-access-tcp 更新。")
+        return
+
+    try:
+        # 1. sudo 提权读取现有配置文件内容
+        content = read_file_sudo(env_path)
+
+        # 2. 检查当前 PREFERRED_IP 是否已经是目标最优 IP
+        curr_match = re.search(r'^PREFERRED_IP=(.*)$', content, re.MULTILINE)
+        old_ip = curr_match.group(1).strip().strip('"').strip("'") if curr_match else ""
+        if old_ip == best_ip:
+            print(f"ℹ️ cloudflare-access-tcp 的 PREFERRED_IP 当前已是最优值 ({best_ip})，无需重复更新。")
+            return
+
+        # 3. 提示用户确认 (默认回车即确认更新)
+        if not auto_yes:
+            print("\n" + "=" * 65)
+            print(f"📢 检测到 cloudflare-access-tcp 配置，准备将 443 端口最优 IP 同步写入：")
+            print(f"   • 新优选 IP:   {best_ip}")
+            print(f"   • 原配置 IP:   {old_ip or '未配置'}")
+            print(f"   • 目标文件:    {env_path}")
+            print("=" * 65)
+            try:
+                user_input = input("👉 是否确认更新 cloudflare-access-tcp 优选 IP 并重启服务？ [Y/n] (默认回车更新): ").strip().lower()
+                if user_input not in ('', 'y', 'yes'):
+                    print(f"⏸️ 已跳过 cloudflare-access-tcp 优选 IP 更新 (保留原值: {old_ip or '未配置'})。")
+                    return
+            except (KeyboardInterrupt, EOFError):
+                print("\n⏸️ 用户取消操作，跳过 cloudflare-access-tcp 优选 IP 更新。")
+                return
+
+        print(f"\n==> 正在通过 sudo 提权将 443 端口最优 IP ({best_ip}) 写入 cloudflare-access-tcp 项目配置...")
+
+        # 4. 替换或追加 PREFERRED_IP 行
+        if re.search(r'^PREFERRED_IP=', content, re.MULTILINE):
+            new_content = re.sub(r'^PREFERRED_IP=.*$', f'PREFERRED_IP={best_ip}', content, flags=re.MULTILINE)
+        else:
+            new_content = content.rstrip() + f"\nPREFERRED_IP={best_ip}\n"
+
+        # 5. sudo 提权写入新配置
+        write_file_sudo(env_path, new_content)
+        print(f"✅ 已成功将 cloudflare-access-tcp 的 PREFERRED_IP 更新为: {best_ip} (原值: {old_ip or '未配置'})")
+
+        # 6. 若 Systemd 服务处于运行中，自动重启服务使容器内静态映射立即生效
+        check_sudo = subprocess.run(["sudo", "systemctl", "is-active", "--quiet", "cloudflare-access-tcp"], capture_output=True)
+        if check_sudo.returncode == 0:
+            print("🔄 检测到 cloudflare-access-tcp 服务正在运行，正在重启服务以使新优选 IP 立即生效...")
+            subprocess.run(["sudo", "systemctl", "restart", "cloudflare-access-tcp"], check=False)
+            print("✅ cloudflare-access-tcp 服务已成功重启并完成热重载！")
+        else:
+            check_svc = subprocess.run(["systemctl", "is-active", "--quiet", "cloudflare-access-tcp"], capture_output=True)
+            if check_svc.returncode == 0:
+                print("🔄 检测到 cloudflare-access-tcp 服务正在运行，正在重启服务以使新优选 IP 立即生效...")
+                subprocess.run(["systemctl", "restart", "cloudflare-access-tcp"], check=False)
+                print("✅ cloudflare-access-tcp 服务已成功重启并完成热重载！")
+    except Exception as e:
+        print(f"⚠️ 更新 cloudflare-access-tcp PREFERRED_IP 异常: {e}")
+
 def upload_results(file_path):
     token = os.environ.get("CF_SUB_TOKEN")
     if not token:
@@ -262,6 +361,19 @@ def main():
             print(warp_tester.format_export_configs(top_results, args.format))
             print("-" * 65)
 
+        # 挑选 WARP 测速中端口为 443 的最优 IP 并同步更新至 cloudflare-access-tcp (若存在)
+        best_warp_443_ip = None
+        best_warp_443_item = None
+        for r in top_results:
+            if str(r.get('port')) == '443' and is_valid_ip(r.get('ip')):
+                best_warp_443_ip = r['ip']
+                best_warp_443_item = r
+                break
+
+        if best_warp_443_ip:
+            print(f"\n🎯 挑选出 WARP 端口 443 的最优 IP: {best_warp_443_ip} (平均延迟: {best_warp_443_item['avg_rtt']:.2f} ms)")
+            update_cloudflare_access_preferred_ip(best_warp_443_ip, auto_yes=args.yes)
+
         # 确认并上传
         token = os.environ.get("CF_SUB_TOKEN")
         if not token:
@@ -413,7 +525,9 @@ def main():
                                     new_suffix = f"{suffix}自用" if '#' in suffix else f"{suffix}#自用"
                                     all_results.append({
                                         'full_line': f"{ip_addr}:{new_suffix}",
-                                        'val': val
+                                        'val': val,
+                                        'ip': ip_addr,
+                                        'port': str(port)
                                     })
                     except Exception as e:
                         print(f"读取端口 {port} 结果失败: {e}")
@@ -430,6 +544,15 @@ def main():
         top_count = min(len(all_results), args.top)
         top_results = all_results[:top_count]
 
+        # 挑选端口为 443 的最优 IP
+        best_443_ip = None
+        best_443_item = None
+        for item in all_results:
+            if item.get('port') == '443' and is_valid_ip(item.get('ip')):
+                best_443_ip = item['ip']
+                best_443_item = item
+                break
+
         # 5. 保存并打印结果
         if top_results:
             with open(FINAL_TXT, 'w') as f:
@@ -442,6 +565,13 @@ def main():
             for i, item in enumerate(top_results):
                 print(f"  [{i+1:>2}] {item['full_line']:<35} - {item['val']:.2f} {unit}")
             print("=" * 65)
+
+            # 同步更新 cloudflare-access-tcp 的 PREFERRED_IP (若存在配置)
+            if best_443_ip:
+                print(f"\n🎯 挑选出端口 443 的最优 IP: {best_443_ip} ({best_443_item['val']:.2f} {unit})")
+                update_cloudflare_access_preferred_ip(best_443_ip, auto_yes=args.yes)
+            else:
+                print("\nℹ️ 本次测速未包含或未测出有效的 443 端口 IP，跳过 cloudflare-access-tcp 优选 IP 同步。")
     finally:
         #run_command("sudo systemctl start sing-box.service", "正在恢复 sing-box 代理")
         # 全局兜底清理残留的测速相关文件
