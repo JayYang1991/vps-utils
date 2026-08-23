@@ -108,9 +108,9 @@ cleanup_temp() {
 }
 
 install_singbox() {
-  echo "${aoi}info: 正在安装 sing-box (版本: ${VERSION})...${reset}"
+  echo "${aoi}info: 正在安装 sing-box (版本: ${SINGBOX_VERSION})...${reset}"
 
-  if curl -fsSL https://sing-box.app/install.sh | sh -s -- --version "${VERSION}"; then
+  if curl -fsSL https://sing-box.app/install.sh | sh -s -- --version "${SINGBOX_VERSION}"; then
     local installed_version
     installed_version=$(sing-box version 2> /dev/null | head -n1 || echo "unknown")
     echo "${green}info: sing-box 已安装: $installed_version${reset}"
