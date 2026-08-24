@@ -1,0 +1,3 @@
+# Cloudflare Pages Redirects
+/url   /20mb.bin   302
+/ping  /test       302

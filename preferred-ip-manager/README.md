@@ -23,6 +23,14 @@
   - `/api/history?type=ips|warp`：获取历史优选记录列表的 HTTP GET 接口。
   - 支持 Header `Authorization` 或 URL Token 鉴权。
 
+### 🌐 Cloudflare Pages 专属测速节点 (`deploy_pages.sh` & `speedtest-pages/`)
+- 🚀 **专为 CloudflareSpeedTest (`cfst`) 优化**：提供全球 Anycast 边缘测速能力，支持静态文件与动态流式双模测速。
+- 🍃 **极致节约资源 (100% 满足免费版约束)**：
+  - **静态资源零配额消耗**：预生成 `5mb.bin`、`10mb.bin`、`20mb.bin` 静态二进制大文件（< 25MB 限制），由 Cloudflare CDN 边缘强缓存分发，**无请求次数上限、零 CPU 额外开销**；
+  - **动态流式极致低内存**：基于 `ReadableStream` 流式生成数据，复用 64KB 单一缓冲区，**内存恒定 < 1MB，CPU 微秒级**；
+  - **极速 HTTPing 延迟接口 (`/test`)**：毫秒级响应，携带 `CF-Ray` 与机房数据中心代码（Colo），完美兼容 `cfst -httping -cfcolo` 地区筛选。
+- 📦 **开箱即用多模部署**：支持 Wrangler CLI 一键上线，也支持一键生成 ZIP 上传包在 Cloudflare 网页控制台直接拖拽部署。
+
 ### 🐍 Python 自动化测速与优选工具链
 - ⚡ **WARP Endpoint 优选引擎 (`warp_tester.py`)**：
   - **RFC 9000 MASQUE/QUIC 深度探测**：向目标发送 1200 字节标准 QUIC Initial 握手报文，测量端点真实 RTT 延迟、丢包率与 1200B MTU 大包可达性。
@@ -105,19 +113,22 @@ python3 warp_tester.py --yes
 
 ### 2. 集成自动化测速与同步工具 (`process_ips.py`)
 
-`process_ips.py` 支持调度 **CDN 优选** 与 **WARP 优选**：
+`process_ips.py` 支持调度 **CDN 优选** 与 **WARP 优选**，并支持指定自建 Cloudflare Pages 测速 URL：
 
 ```bash
-# 1. CDN 带宽模式测速 (测试下载速度，保留速度 >= 10 MB/s 的前 20 个 IP)
+# 1. CDN 带宽模式测速 (使用默认或官方源，测试下载速度，保留速度 >= 10 MB/s 的前 20 个 IP)
 python3 process_ips.py --target cdn --mode speed --top 20 --min-speed 10.0
 
-# 2. CDN 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
-python3 process_ips.py --target cdn --mode latency --top 15
+# 2. 指定自建 Cloudflare Pages 测速地址 (20MB 静态测速包)
+python3 process_ips.py --target cdn --mode speed --url "https://<your-pages-project>.pages.dev/20mb.bin" --top 20
 
-# 3. WARP Endpoint 优选测速与同步
+# 3. CDN 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
+python3 process_ips.py --target cdn --mode latency --url "https://<your-pages-project>.pages.dev/test" --top 15
+
+# 4. WARP Endpoint 优选测速与同步
 python3 process_ips.py --target warp --warp-mode fast --top 10
 
-# 4. 自动推送模式 (适用于 Cron 定时任务)
+# 5. 自动推送模式 (适用于 Cron 定时任务)
 python3 process_ips.py --target cdn --yes
 python3 process_ips.py --target warp --yes
 ```
@@ -133,6 +144,112 @@ python telegram_tool.py list
 # 按频道名称搜索并下载包含 "CF中转" 关键字的最新 1 个文件
 python telegram_tool.py download -n 'CF中转' --limit 1 -o ./origin-iplist
 ```
+
+---
+
+## 🌐 Cloudflare Pages 专属测速网站部署指南
+
+本项目内置了专为 `CloudflareSpeedTest` (`cfst`) 设计的 Cloudflare Pages 测速站点，**100% 契合 Cloudflare 免费版限制**。
+
+### 1. 为什么选择 Cloudflare Pages 作为测速节点？
+- **零配额消耗（静态文件）**：`5mb.bin`、`10mb.bin`、`20mb.bin` 等静态文件直接由全球 CDN 边缘节点分发，**不消耗任何 Worker / Function 请求次数（Pages 静态请求无上限）**，零额外 CPU 开销。
+- **流式低内存（动态流）**：`/download?size=50` 接口采用 `ReadableStream` 流式生成，内存恒定 `< 1MB`，单次 CPU 消耗微秒级。
+- **精准机房匹配**：`/test` 接口毫秒级返回，自动包含 `CF-Ray`，完美支持 `cfst -httping -cfcolo` 地区筛选。
+
+---
+
+### 2. 一键构建与部署 (`deploy_pages.sh`)
+
+#### 方式 A: 自动通过 Wrangler 部署上线 (推荐)
+```bash
+# 1. 赋予执行权限并执行一键部署 (默认项目名: cf-speedtest)
+bash deploy_pages.sh --deploy
+
+# 2. 或指定自定义项目名称
+bash deploy_pages.sh -n my-cf-speedtest --deploy
+```
+
+#### 方式 B: 本地生成构建包并网页拖拽部署 (无需安装任何 CLI)
+```bash
+# 1. 仅在本地生成静态测速文件与 ZIP 包
+bash deploy_pages.sh --build-only
+```
+执行后将生成 `speedtest-pages.zip` 与 `dist/` 目录：
+1. 登录 [Cloudflare Dashboard](https://dash.cloudflare.com/)。
+2. 进入 **Workers & Pages** -> 点击 **Create application** -> 选择 **Pages** 页签。
+3. 点击 **Upload assets**（直接上传资产），输入项目名称（如 `cf-speedtest`）。
+4. 上传生成的 `speedtest-pages.zip` 文件并点击 **Deploy site**，5 秒内全球上线！
+
+---
+
+## 🧪 手动测试功能与常用命令说明
+
+部署完成后，你将获得一个形如 `https://<your-project>.pages.dev` 的专属测速站点。以下是完整的手动测试命令参考：
+
+### 1. 使用 `curl` 验证测速端点与响应头
+```bash
+# 1. 测试静态 20MB 测速文件响应头与缓存策略 (确认 Cache-Control: public 与 Content-Length: 20971520)
+curl -I https://<your-project>.pages.dev/20mb.bin
+
+# 2. 测试 HTTPing 延迟接口与识别当前接入的数据中心 (查看 cf-ray 与 x-cf-colo)
+curl -s https://<your-project>.pages.dev/test | jq .
+
+# 3. 测试 50MB 动态流式下载响应头
+curl -I "https://<your-project>.pages.dev/download?size=50"
+```
+
+---
+
+### 2. 使用 CloudflareSpeedTest (`cfst`) 进行测速
+
+#### ⚡ 场景 1: 静态大文件下载测速 (零配额消耗·最推荐)
+```bash
+# 测试各个 IP 的下载速度 (测试延迟最低的前 10 个 IP，每个 IP 测速 10 秒)
+./cfst -url "https://<your-project>.pages.dev/20mb.bin" -dn 10 -dt 10
+
+# 仅保留下载速度 >= 10 MB/s 的最优 IP
+./cfst -url "https://<your-project>.pages.dev/20mb.bin" -sl 10 -dn 10
+```
+
+#### 🌊 场景 2: 动态流式超大文件下载测速
+```bash
+# 请求 50MB 动态数据流进行极限带宽压测
+./cfst -url "https://<your-project>.pages.dev/download?size=50" -dn 10 -dt 15
+```
+
+#### ⏱️ 场景 3: HTTPing 延迟测速与指定机房地区筛选 (`-cfcolo`)
+```bash
+# 1. 纯延迟测速 (禁用下载测速，按 HTTP 延迟排序)
+./cfst -url "https://<your-project>.pages.dev/test" -httping -dd
+
+# 2. 筛选亚洲与美西优质数据中心 (香港 HKG、东京 NRT、圣何塞 SJC、洛杉矶 LAX、新加坡 SIN)
+./cfst -url "https://<your-project>.pages.dev/test" -httping -cfcolo HKG,NRT,SJC,LAX,SIN -dd
+```
+
+#### 🎯 场景 4: 综合过滤测速 (丢包率 <= 10%、延迟 <= 180ms、速度 >= 15 MB/s)
+```bash
+./cfst -url "https://<your-project>.pages.dev/20mb.bin" -tl 180 -tlr 0.1 -sl 15 -dn 5
+```
+
+---
+
+### 3. 在 Python 自动化脚本中全局使用自建测速节点
+```bash
+# 方式 A: 命令行参数显式指定
+python3 process_ips.py --target cdn --mode speed --url "https://<your-project>.pages.dev/20mb.bin" --min-speed 12.0
+
+# 方式 B: 设置全局环境变量 (适合持久化或定时任务)
+export CFST_URL="https://<your-project>.pages.dev/20mb.bin"
+python3 process_ips.py --target cdn --mode speed
+```
+
+---
+
+### 4. 浏览器可视化在线测速
+直接在浏览器中打开 `https://<your-project>.pages.dev`：
+- **实时探测**：自动识别并显示当前客户端接入的 Cloudflare Anycast 数据中心代码（如 `HKG` / `NRT` / `SJC`）；
+- **一键测速**：点击页面“浏览器快速测速”按钮，实时测量 RTT 往返延迟与下行带宽；
+- **命令生成**：页面自动生成适配当前域名的所有 `cfst` 复制指令。
 
 ---
 
@@ -174,3 +291,4 @@ curl -X PUT "https://<your-worker-domain>/api/update?token=YOUR_TOKEN&type=warp&
 ## 📄 开源许可
 
 本项目遵循 MIT 许可证。
+

@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cloudflare 边缘测速节点与 API 服务</title>
+  <meta name="description" content="专为 CloudflareSpeedTest 打造的高可用、超低资源消耗 Cloudflare Pages 测速站点" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Plus Jakarta Sans', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#f0f7ff',
+              100: '#e0effe',
+              500: '#0284c7',
+              600: '#0369a1',
+              700: '#075985',
+            },
+            cf: {
+              orange: '#f6821f',
+              dark: '#faad3f',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #0b0f17;
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(246, 130, 31, 0.08) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(2, 132, 199, 0.08) 0px, transparent 50%);
+      background-attachment: fixed;
+    }
+    .glass {
+      background: rgba(17, 24, 39, 0.7);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .glass-card {
+      background: rgba(23, 32, 51, 0.6);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+  </style>
+</head>
+<body class="text-slate-200 font-sans min-h-screen flex flex-col antialiased selection:bg-orange-500/30 selection:text-orange-200">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800/80 sticky top-0 z-50 glass">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-cf-orange to-amber-400 flex items-center justify-center shadow-lg shadow-orange-500/20 font-bold text-slate-950 text-lg">
+          ⚡
+        </div>
+        <div>
+          <h1 class="font-bold text-lg text-slate-100 flex items-center gap-2">
+            CF SpeedTest Edge Node
+            <span class="text-xs px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400 border border-orange-500/20 font-mono">Pages Edition</span>
+          </h1>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 text-xs font-mono">
+        <div id="colo-badge" class="px-3 py-1.5 rounded-lg glass-card text-slate-300 border border-slate-700 flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>检测中...</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 space-y-8">
+    
+    <!-- Hero Banner -->
+    <div class="glass rounded-2xl p-6 sm:p-8 relative overflow-hidden">
+      <div class="absolute -right-10 -bottom-10 w-64 h-64 bg-orange-500/10 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="relative z-10 max-w-3xl">
+        <h2 class="text-2xl sm:text-3xl font-extrabold text-white tracking-tight mb-3">
+          专为 <span class="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-amber-300">CloudflareSpeedTest</span> 打造的高性能测速端点
+        </h2>
+        <p class="text-slate-400 text-sm sm:text-base leading-relaxed mb-6">
+          基于 Cloudflare Pages 架构部署，静态文件完全由全球 CDN Anycast 边缘缓存分发，具备<strong class="text-slate-200">无限请求配额</strong>与<strong class="text-slate-200">零 CPU 额外消耗</strong>；同时支持流式无内存动态测速，完美契合 Cloudflare 免费版限制。
+        </p>
+
+        <!-- Web 快速在线测速卡片 -->
+        <div class="glass-card rounded-xl p-4 sm:p-5 border border-slate-700/60 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div class="flex items-center gap-4 w-full sm:w-auto">
+            <div class="text-left">
+              <div class="text-xs text-slate-400 font-mono">当前延迟 (RTT)</div>
+              <div id="web-ping" class="text-xl font-mono font-bold text-emerald-400">-- ms</div>
+            </div>
+            <div class="h-8 w-px bg-slate-700 mx-2 hidden sm:block"></div>
+            <div class="text-left">
+              <div class="text-xs text-slate-400 font-mono">实时下行带宽</div>
+              <div id="web-speed" class="text-xl font-mono font-bold text-sky-400">-- MB/s</div>
+            </div>
+          </div>
+          <button id="start-test-btn" onclick="startWebSpeedTest()" class="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-slate-950 font-bold text-sm transition-all shadow-lg shadow-orange-500/20 active:scale-95 flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            <span>浏览器快速测速</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 测速端点与指令说明 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+      <!-- 卡片 1: 静态文件测速 (极致省资源 / 推荐) -->
+      <div class="glass rounded-2xl p-6 flex flex-col justify-between space-y-4">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <span class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-sm">1</span>
+              <h3 class="font-bold text-lg text-white">静态资源测速 (零配额消耗·推荐)</h3>
+            </div>
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">100% 静态缓存</span>
+          </div>
+          <p class="text-slate-400 text-xs sm:text-sm leading-relaxed mb-4">
+            静态文件部署在 Cloudflare 全球边缘节点上。请求走标准 CDN 静态缓存，<strong>不消耗任何 Functions / Workers 请求配额</strong>，支持 HTTP/2、HTTP/3 及 Range 断点传输。
+          </p>
+
+          <div class="space-y-3 font-mono text-xs">
+            <div class="bg-slate-900/80 rounded-xl p-3 border border-slate-800 flex items-center justify-between">
+              <div class="flex items-center gap-2 truncate">
+                <span class="text-slate-400">20MB 测速包:</span>
+                <span id="url-20mb" class="text-orange-300 truncate"></span>
+              </div>
+              <button onclick="copyText(document.getElementById('url-20mb').innerText)" class="text-slate-400 hover:text-white px-2 py-1 bg-slate-800 rounded">复制</button>
+            </div>
+            <div class="bg-slate-900/80 rounded-xl p-3 border border-slate-800 flex items-center justify-between">
+              <div class="flex items-center gap-2 truncate">
+                <span class="text-slate-400">10MB 测速包:</span>
+                <span id="url-10mb" class="text-orange-300 truncate"></span>
+              </div>
+              <button onclick="copyText(document.getElementById('url-10mb').innerText)" class="text-slate-400 hover:text-white px-2 py-1 bg-slate-800 rounded">复制</button>
+            </div>
+            <div class="bg-slate-900/80 rounded-xl p-3 border border-slate-800 flex items-center justify-between">
+              <div class="flex items-center gap-2 truncate">
+                <span class="text-slate-400">5MB 测速包:</span>
+                <span id="url-5mb" class="text-orange-300 truncate"></span>
+              </div>
+              <button onclick="copyText(document.getElementById('url-5mb').innerText)" class="text-slate-400 hover:text-white px-2 py-1 bg-slate-800 rounded">复制</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2">
+          <div class="text-xs text-slate-400 font-mono mb-2">CloudflareSpeedTest (cfst) 测速命令:</div>
+          <div class="bg-slate-950 rounded-xl p-3 font-mono text-xs text-emerald-400 border border-slate-800 flex items-center justify-between group">
+            <span id="cmd-static" class="truncate"></span>
+            <button onclick="copyText(document.getElementById('cmd-static').innerText)" class="opacity-80 group-hover:opacity-100 text-xs px-2 py-1 bg-slate-800 text-slate-200 rounded shrink-0 ml-2">一键复制</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 卡片 2: 动态流式 / 延迟接口 -->
+      <div class="glass rounded-2xl p-6 flex flex-col justify-between space-y-4">
+        <div>
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-2">
+              <span class="w-8 h-8 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-sm">2</span>
+              <h3 class="font-bold text-lg text-white">动态流式 / HTTPing 接口</h3>
+            </div>
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20">Pages Functions</span>
+          </div>
+          <p class="text-slate-400 text-xs sm:text-sm leading-relaxed mb-4">
+            基于轻量级 <code class="text-sky-300 font-mono">ReadableStream</code> 流式按需生成数据包（内存恒定 &lt; 1MB），支持自定义数据大小（如 <code class="text-sky-300 font-mono">?size=50</code> 表示 50MB）。
+          </p>
+
+          <div class="space-y-3 font-mono text-xs">
+            <div class="bg-slate-900/80 rounded-xl p-3 border border-slate-800 flex items-center justify-between">
+              <div class="flex items-center gap-2 truncate">
+                <span class="text-slate-400">动态流 (50MB):</span>
+                <span id="url-stream" class="text-sky-300 truncate"></span>
+              </div>
+              <button onclick="copyText(document.getElementById('url-stream').innerText)" class="text-slate-400 hover:text-white px-2 py-1 bg-slate-800 rounded">复制</button>
+            </div>
+            <div class="bg-slate-900/80 rounded-xl p-3 border border-slate-800 flex items-center justify-between">
+              <div class="flex items-center gap-2 truncate">
+                <span class="text-slate-400">HTTPing 延迟端点:</span>
+                <span id="url-ping" class="text-sky-300 truncate"></span>
+              </div>
+              <button onclick="copyText(document.getElementById('url-ping').innerText)" class="text-slate-400 hover:text-white px-2 py-1 bg-slate-800 rounded">复制</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="pt-2">
+          <div class="text-xs text-slate-400 font-mono mb-2">HTTPing 延迟与机房识别命令 (-cfcolo):</div>
+          <div class="bg-slate-950 rounded-xl p-3 font-mono text-xs text-sky-400 border border-slate-800 flex items-center justify-between group">
+            <span id="cmd-httping" class="truncate"></span>
+            <button onclick="copyText(document.getElementById('cmd-httping').innerText)" class="opacity-80 group-hover:opacity-100 text-xs px-2 py-1 bg-slate-800 text-slate-200 rounded shrink-0 ml-2">一键复制</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 卡片 3: 在 preferred-ip-manager 中集成使用 -->
+    <div class="glass rounded-2xl p-6 space-y-4">
+      <h3 class="font-bold text-lg text-white flex items-center gap-2">
+        <span>🚀</span> 在 <code class="font-mono text-orange-400">process_ips.py</code> 中一键使用本节点测速
+      </h3>
+      <p class="text-slate-400 text-xs sm:text-sm">
+        直接将本站测速 URL 传入 Python 测速管理工具，自动拉起并发测速并同步最优 IP：
+      </p>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs">
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+          <div class="text-slate-400 font-bold">方案 A: 命令行参数显式传入</div>
+          <div id="cmd-py-arg" class="text-amber-300 break-all select-all"></div>
+        </div>
+        <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+          <div class="text-slate-400 font-bold">方案 B: 注入环境变量持久生效</div>
+          <div id="cmd-py-env" class="text-emerald-300 break-all select-all"></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500 font-mono">
+    <div class="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+      <div>Cloudflare Pages SpeedTest Edge Forwarder</div>
+      <div>Powered by <a href="https://github.com/JayYang1991/vps-utils" class="text-orange-400 hover:underline" target="_blank">JayYang1991/vps-utils</a></div>
+    </div>
+  </footer>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="fixed bottom-6 right-6 px-4 py-2.5 rounded-xl bg-slate-800 text-white font-mono text-xs border border-slate-700 shadow-2xl transition-all duration-300 opacity-0 pointer-events-none transform translate-y-2 z-50">
+    已成功复制到剪贴板
+  </div>
+
+  <script>
+    const origin = window.location.origin;
+
+    // 初始化动态展示链接
+    document.getElementById('url-20mb').innerText = origin + '/20mb.bin';
+    document.getElementById('url-10mb').innerText = origin + '/10mb.bin';
+    document.getElementById('url-5mb').innerText = origin + '/5mb.bin';
+    document.getElementById('url-stream').innerText = origin + '/download?size=50';
+    document.getElementById('url-ping').innerText = origin + '/test';
+
+    document.getElementById('cmd-static').innerText = `./cfst -url "${origin}/20mb.bin" -dn 10 -dt 10`;
+    document.getElementById('cmd-httping').innerText = `./cfst -url "${origin}/test" -httping -cfcolo HKG,NRT,SJC,LAX`;
+
+    document.getElementById('cmd-py-arg').innerText = `python3 process_ips.py --target cdn --mode speed --url "${origin}/20mb.bin"`;
+    document.getElementById('cmd-py-env').innerText = `export CFST_URL="${origin}/20mb.bin"\npython3 process_ips.py --target cdn`;
+
+    // 获取当前接入的 Cloudflare 数据中心信息
+    fetch('/test', { cache: 'no-store' })
+      .then(res => {
+        const ray = res.headers.get('cf-ray');
+        const colo = ray ? ray.split('-').pop() : 'Cloudflare Edge';
+        document.getElementById('colo-badge').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span>Colo: <strong class="text-white">${colo}</strong></span>
+        `;
+      })
+      .catch(() => {
+        document.getElementById('colo-badge').innerHTML = `
+          <span class="w-2 h-2 rounded-full bg-slate-500"></span>
+          <span>Cloudflare Edge</span>
+        `;
+      });
+
+    // 复制提示
+    function copyText(text) {
+      if (!navigator.clipboard) {
+        const el = document.createElement('textarea');
+        el.value = text;
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      } else {
+        navigator.clipboard.writeText(text);
+      }
+      showToast('已复制: ' + text);
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      toast.innerText = msg;
+      toast.classList.remove('opacity-0', 'translate-y-2', 'pointer-events-none');
+      toast.classList.add('opacity-100', 'translate-y-0');
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-y-2', 'pointer-events-none');
+        toast.classList.remove('opacity-100', 'translate-y-0');
+      }, 2000);
+    }
+
+    // 浏览器在线测速
+    let isTesting = false;
+    async function startWebSpeedTest() {
+      if (isTesting) return;
+      isTesting = true;
+      const btn = document.getElementById('start-test-btn');
+      const pingEl = document.getElementById('web-ping');
+      const speedEl = document.getElementById('web-speed');
+
+      btn.disabled = true;
+      btn.classList.add('opacity-50', 'cursor-not-allowed');
+      pingEl.innerText = '测试中...';
+      speedEl.innerText = '测试中...';
+
+      try {
+        // 1. 测试延迟 (3次平均)
+        const pings = [];
+        for (let i = 0; i < 3; i++) {
+          const t0 = performance.now();
+          await fetch('/test?t=' + Math.random(), { cache: 'no-store' });
+          const t1 = performance.now();
+          pings.push(t1 - t0);
+        }
+        const avgPing = Math.round(pings.reduce((a, b) => a + b, 0) / pings.length);
+        pingEl.innerText = avgPing + ' ms';
+
+        // 2. 测试下载速度 (下载 10mb.bin 并统计耗时)
+        const tStart = performance.now();
+        const res = await fetch('/10mb.bin?t=' + Math.random(), { cache: 'no-store' });
+        const reader = res.body.getReader();
+        let loadedBytes = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          loadedBytes += value.length;
+          const currSec = (performance.now() - tStart) / 1000;
+          if (currSec > 0.1) {
+            const currentSpeedMB = (loadedBytes / (1024 * 1024)) / currSec;
+            speedEl.innerText = currentSpeedMB.toFixed(2) + ' MB/s';
+          }
+        }
+
+        const totalSec = (performance.now() - tStart) / 1000;
+        const finalSpeedMB = (loadedBytes / (1024 * 1024)) / totalSec;
+        speedEl.innerText = finalSpeedMB.toFixed(2) + ' MB/s';
+      } catch (err) {
+        console.error('测速异常:', err);
+        speedEl.innerText = '测速失败';
+      } finally {
+        isTesting = false;
+        btn.disabled = false;
+        btn.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
+    }
+  </script>
+</body>
+</html>

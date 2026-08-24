@@ -1,21 +1,26 @@
-# Byte-compiled / optimized / DLL files
+# Build outputs & temporary archives
+dist/
+*.zip
+*.bin
+*.tar.gz
 __pycache__/
-*.py[cod]
-
-# Environments
+*.pyc
 .venv/
-venv/
+node_modules/
 
-# Output & Log files
-ip_result.txt
-warp_result.txt
-*.log
+# Cloudflare & Wrangler temporary artifacts
+.wrangler/
+preferred-ip-manager/functions/
+
+# Speed test temporary files & local test results
+result.csv
 result_*.csv
 temp_ips_*.txt
-config.json
-fhs-install-singbox/config.json
+ip_result.txt
+warp_result.txt
+origin-iplist/*
+!origin-iplist/.gitkeep
 
-# Node & Wrangler
-node_modules/
-.wrangler/
-.dev.vars
+# Logs & OS artifacts
+*.log
+.DS_Store

@@ -289,6 +289,8 @@ def main():
     cdn_group.add_argument("--mode", "-m", choices=['speed', 'latency'], default='speed', 
                            help="测速模式: speed (带宽模式, 默认), latency (延迟/httping模式)")
     cdn_group.add_argument("--min-speed", "-s", type=float, default=10.0, help="[带宽模式] 最小下载速度过滤 (MB/s, 默认: 10.0)")
+    cdn_group.add_argument("--url", "--speedtest-url", dest="speedtest_url", default=os.getenv("CFST_URL", ""),
+                           help="自定义测速地址 (如自建 Cloudflare Pages 测速 URL，如 https://xxx.pages.dev/20mb.bin, 默认读取环境变量 CFST_URL)")
     
     # WARP 模式参数
     warp_group = parser.add_argument_group("WARP 优选参数 (--target warp)")
@@ -501,12 +503,13 @@ def main():
                     f.write("\n".join(e[0] for e in entries))
                 
                 # 构建测速命令
+                url_flag = f' -url "{args.speedtest_url}"' if args.speedtest_url else ""
                 if args.mode == 'speed':
                     # 带宽模式：测试下载速度 (测试前 20 名)，应用最小带宽过滤
-                    cfst_cmd = f"{CFST_BIN} -f {temp_ip_file} -tp {port} -dn 20 -sl {args.min_speed} -o {temp_csv}"
+                    cfst_cmd = f"{CFST_BIN} -f {temp_ip_file} -tp {port} -dn 20 -sl {args.min_speed}{url_flag} -o {temp_csv}"
                 else:
                     # 延迟模式：仅 HTTPing 测速，增加 -dd 确保不进行下载测试
-                    cfst_cmd = f"{CFST_BIN} -f {temp_ip_file} -tp {port} -httping -dd -o {temp_csv}"
+                    cfst_cmd = f"{CFST_BIN} -f {temp_ip_file} -tp {port} -httping -dd{url_flag} -o {temp_csv}"
                 
                 run_command(cfst_cmd, f"端口 {port} {args.mode} 测试中")
         
