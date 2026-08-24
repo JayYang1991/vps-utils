@@ -21,6 +21,7 @@ import tempfile
 import collections
 import urllib.parse
 from typing import List, Dict, Tuple, Optional, Any
+import datetime
 import requests
 
 # --- ANSI 终端颜色常量 ---
@@ -31,17 +32,21 @@ CYAN = "\033[0;36m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
+def get_time_prefix() -> str:
+    """获取当前格式化时间戳 [YYYY-MM-DD HH:MM:SS]"""
+    return f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]"
+
 def log_info(msg: str):
-    print(f"{GREEN}[INFO]{RESET} {msg}")
+    print(f"{get_time_prefix()} {GREEN}[INFO]{RESET} {msg}")
 
 def log_warn(msg: str):
-    print(f"{YELLOW}[WARN]{RESET} {msg}")
+    print(f"{get_time_prefix()} {YELLOW}[WARN]{RESET} {msg}")
 
 def log_error(msg: str):
-    print(f"{RED}[ERROR]{RESET} {msg}", file=sys.stderr)
+    print(f"{get_time_prefix()} {RED}[ERROR]{RESET} {msg}", file=sys.stderr)
 
 def log_step(msg: str):
-    print(f"==> {msg}...")
+    print(f"{get_time_prefix()} ==> {msg}...")
 
 # --- 默认全局配置 ---
 TG_TOOL = f'"{sys.executable}" ./telegram_tool.py'
@@ -418,36 +423,67 @@ class CFSTRunner:
     """调度 cfst 执行深层大带宽探测与两阶段自适应保底降级"""
 
     @staticmethod
-    def parse_csv_value(row: Dict[str, str], mode: str) -> float:
-        """从 CSV 结果行中稳健提取下载速度或延迟数值"""
-        if mode == 'speed':
-            keywords = ['速度', 'Speed', 'MB/s', 'Download']
-            default = 0.0
-        else:
-            keywords = ['延迟', 'Delay', 'ms', 'Latency']
-            default = 9999.0
+    def parse_csv_row(row: Dict[str, str]) -> Dict[str, Any]:
+        """从 CSV 结果行中稳健提取所有关键指标 (IP, 速度, 延迟, 丢包率, 地区码)"""
+        ip_addr = (row.get('IP 地址') or row.get('IP Address') or list(row.values())[0] or "").strip()
+
+        speed = 0.0
+        latency = 9999.0
+        loss_rate = 0.0
+        colo = "N/A"
 
         for key, value in row.items():
-            if any(kw.lower() in key.lower() for kw in keywords):
+            if not key or value is None:
+                continue
+            k_lower = key.strip().lower()
+            v_str = str(value).strip()
+            if any(kw in k_lower for kw in ['速度', 'speed', 'mb/s', 'download']):
                 try:
-                    return float(value)
+                    speed = float(v_str)
                 except (ValueError, TypeError):
-                    continue
-        return default
+                    pass
+            elif any(kw in k_lower for kw in ['延迟', 'delay', 'latency', 'ms']):
+                try:
+                    latency = float(v_str)
+                except (ValueError, TypeError):
+                    pass
+            elif any(kw in k_lower for kw in ['丢包', 'loss']):
+                try:
+                    loss_rate = float(v_str)
+                except (ValueError, TypeError):
+                    pass
+            elif any(kw in k_lower for kw in ['地区', 'colo', 'center', 'datacenter']):
+                colo = v_str or "N/A"
+
+        return {
+            'ip': ip_addr,
+            'speed': speed,
+            'latency': latency,
+            'loss_rate': loss_rate,
+            'colo': colo
+        }
 
     @classmethod
-    def execute_cfst(cls, temp_ip_path: str, temp_csv_path: str, port: str, min_speed: float, args: argparse.Namespace) -> List[Tuple[str, float]]:
-        """构建命令并执行一次 cfst 测速，返回原始 (IP, 数值) 列表"""
+    def execute_cfst(cls, temp_ip_path: str, temp_csv_path: str, port: str, min_speed: float, args: argparse.Namespace) -> List[Dict[str, Any]]:
+        """构建命令并执行一次 cfst 测速，返回解析后的各 IP 详细指标字典列表"""
         url_flag = f' -url "{args.speedtest_url}"' if args.speedtest_url else ""
         max_delay_flag = f' -tl {args.max_delay}' if args.max_delay else ""
         max_loss_flag = f' -tlr {args.max_loss}' if (hasattr(args, 'max_loss') and args.max_loss < 1.0) else ""
         download_time_flag = f' -dt {args.download_time}' if args.download_time else ""
         test_count_flag = f' -dn {args.test_count}' if args.test_count else " -dn 20"
+        threads_flag = f' -n {args.concurrency}' if (hasattr(args, 'concurrency') and args.concurrency) else " -n 200"
+
+        httping_flag = " -httping" if getattr(args, 'httping', False) else ""
 
         if args.mode == 'speed':
-            cfst_cmd = f"{CFST_BIN} -f \"{temp_ip_path}\" -tp {port}{test_count_flag}{download_time_flag}{max_delay_flag}{max_loss_flag} -sl {min_speed}{url_flag} -o \"{temp_csv_path}\""
+            cfst_cmd = f"{CFST_BIN} -f \"{temp_ip_path}\" -tp {port}{threads_flag}{test_count_flag}{download_time_flag}{max_delay_flag}{max_loss_flag} -sl {min_speed}{url_flag} -o \"{temp_csv_path}\""
         else:
-            cfst_cmd = f"{CFST_BIN} -f \"{temp_ip_path}\" -tp {port} -httping -dd{max_delay_flag}{max_loss_flag}{url_flag} -o \"{temp_csv_path}\""
+            # latency 模式: 延迟优先排序，同时对前 -dn 个低延迟候选节点执行下载测速获取真实带宽
+            cfst_cmd = f"{CFST_BIN} -f \"{temp_ip_path}\" -tp {port}{threads_flag}{test_count_flag}{download_time_flag}{max_delay_flag}{max_loss_flag}{httping_flag} -sl 0{url_flag} -o \"{temp_csv_path}\""
+
+        # 详细打印调用 cfst 的完整命令行与参数解析明细
+        log_info(f"即将调用测速核心 (cfst)，完整命令: {CYAN}{BOLD}{cfst_cmd}{RESET}")
+        log_info(f"参数解析明细: [目标端口: {port}] [测速模式: {args.mode}] [并发线程数: {args.concurrency}] [达标队列数: {args.test_count}] [单点时长: {args.download_time}s] [速度下限: {min_speed} MB/s] [延迟上限: {args.max_delay if args.max_delay else '不限制'} ms] [丢包上限: {f'{args.max_loss*100:.0f}%' if args.max_loss < 1.0 else '不限制'}] [测速URL: {args.speedtest_url or '官方默认'}]")
 
         desc = f"端口 {port} {args.mode} 测试中 (下限: {min_speed:.2f} MB/s)" if (args.mode == 'speed' and min_speed > 0) else f"端口 {port} {args.mode} 测试中"
         run_command(cfst_cmd, desc)
@@ -458,9 +494,9 @@ class CFSTRunner:
                 with open(temp_csv_path, mode='r', encoding='utf-8-sig') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
-                        ip_addr = row.get('IP 地址') or row.get('IP Address') or list(row.values())[0]
-                        val = cls.parse_csv_value(row, args.mode)
-                        results.append((ip_addr, val))
+                        parsed = cls.parse_csv_row(row)
+                        if parsed['ip'] and is_valid_ip(parsed['ip']):
+                            results.append(parsed)
             except Exception as e:
                 log_warn(f"解析端口 {port} CSV 结果失败: {e}")
         return results
@@ -498,7 +534,8 @@ class CFSTRunner:
                 raw_results = cls.execute_cfst(temp_ip_path, temp_csv_path, port, 0.0, args)
 
             port_results = []
-            for ip_addr, val in raw_results:
+            for item in raw_results:
+                ip_addr = item['ip']
                 if ip_addr in ip_to_original:
                     suffix = ip_to_original[ip_addr]
                     if suffix.endswith('自用'):
@@ -507,11 +544,15 @@ class CFSTRunner:
                         new_suffix = f"{suffix}自用"
                     else:
                         new_suffix = f"{suffix}#自用"
+
                     port_results.append({
                         'full_line': f"{ip_addr}:{new_suffix}",
-                        'val': val,
                         'ip': ip_addr,
-                        'port': str(port)
+                        'port': str(port),
+                        'speed': item['speed'],
+                        'latency': item['latency'],
+                        'loss_rate': item['loss_rate'],
+                        'colo': item['colo']
                     })
 
             return port_results
@@ -529,8 +570,12 @@ class CFSTRunner:
         if not all_results:
             return []
 
-        # 排序：带宽模式降序，延迟模式升序
-        all_results.sort(key=lambda x: x['val'], reverse=(args.mode == 'speed'))
+        # 排序：speed 模式主按下载带宽降序、副按延迟升序；latency 模式主按延迟升序、副按下载带宽降序
+        if args.mode == 'speed':
+            all_results.sort(key=lambda x: (-x['speed'], x['latency']))
+        else:
+            all_results.sort(key=lambda x: (x['latency'], -x['speed']))
+
         return all_results[:args.top]
 
 
@@ -552,6 +597,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                            help="测速模式: speed (带宽模式), latency (延迟/httping模式)")
     cdn_group.add_argument("--ports", "-p", default="443",
                            help="待测端口列表，逗号分隔 (例如 443 或 443,8443，设为 all 则测试所有端口)")
+    cdn_group.add_argument("--concurrency", "-c", "--threads", "-n", dest="concurrency", type=int, default=200,
+                           help="[延迟测速并发] 并发测速/探测线程数 (CDN 模式透传给 cfst -n, 默认 200, 范围 1~1000; WARP 模式控制探测并发数)")
     cdn_group.add_argument("--min-speed", "-s", type=float, default=5.0,
                            help="[带宽模式] 下载速度下限 (MB/s)。驱动 cfst 跨越延迟排序深入挖掘大带宽节点 (未达标将自动触发保底)")
     cdn_group.add_argument("--max-delay", "-tl", type=int, default=300,
@@ -569,6 +616,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     cdn_group.add_argument("--skip-tg", "--skip-telegram", "--sub-only", dest="skip_tg", action="store_true",
                            default=os.getenv("SKIP_TG", "").lower() in ("true", "1", "yes"),
                            help="跳过从 Telegram 下载文件，仅从订阅服务器获取现有及历史 IP 列表进行测速")
+    cdn_group.add_argument("--httping", action="store_true",
+                           help="[延迟模式可选] 使用 HTTPing 代替 TCPing 测量延迟 (默认使用 TCPing)")
     cdn_group.add_argument("--no-fallback", dest="fallback", action="store_false", default=True,
                            help="禁用未凑齐达标节点时的自动保底测速")
 
@@ -578,7 +627,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
                             help="WARP 扫描模式: fast (快速抽样), standard (标准采样), full (全网段扫描)")
     warp_group.add_argument("--warp-ports", default="443,8443,4443,8095,4500,500,1701,2408",
                             help="WARP 待测端口列表")
-    warp_group.add_argument("--concurrency", "-c", type=int, default=100, help="WARP 并发探测线程数")
     warp_group.add_argument("--rounds", "-r", type=int, default=3, help="WARP 单点探测轮数")
     warp_group.add_argument("--format", choices=['txt', 'wireguard', 'singbox', 'clash', 'warp-cli'], default='txt',
                             help="WARP 结果导出格式")
@@ -705,15 +753,20 @@ def run_cdn_workflow(args: argparse.Namespace):
 
         unit = "MB/s" if args.mode == 'speed' else "ms"
         print(f"\n✨ {args.mode} 模式测速完成！最优前 {len(top_results)} 个 IP 已保存至 {FINAL_TXT}：")
-        print("=" * 65)
+        print("=" * 96)
+        print(f" {'排名':<4} {'优选节点 (IP:Port#备注)':<38} {'平均延迟':<14} {'下载速度':<14} {'丢包率':<10} {'地区码'}")
+        print("-" * 96)
         for i, item in enumerate(top_results):
-            print(f"  [{i+1:>2}] {item['full_line']:<35} - {item['val']:.2f} {unit}")
-        print("=" * 65)
+            loss_str = f"{item['loss_rate']*100:.1f}%" if item['loss_rate'] <= 1.0 else f"{item['loss_rate']:.1f}%"
+            latency_str = f"{item['latency']:.2f} ms"
+            speed_str = f"{item['speed']:.2f} MB/s"
+            print(f" [{i+1:>2}] {item['full_line']:<38} {latency_str:<14} {speed_str:<14} {loss_str:<10} {item['colo']}")
+        print("=" * 96)
 
         # 挑出端口 443 最优 IP 同步到 cloudflare-access-tcp
         best_443_item = next((item for item in top_results if item.get('port') == '443' and is_valid_ip(item.get('ip'))), None)
         if best_443_item:
-            log_info(f"挑选出端口 443 最优 IP: {best_443_item['ip']} ({best_443_item['val']:.2f} {unit})")
+            log_info(f"挑选出端口 443 最优 IP: {best_443_item['ip']} (平均延迟: {best_443_item['latency']:.2f} ms, 下载速度: {best_443_item['speed']:.2f} MB/s, 地区: {best_443_item['colo']})")
             LocalAccessTCPManager.sync_preferred_ip(best_443_item['ip'], auto_yes=args.yes)
         else:
             log_info("本次优选未包含有效的 443 端口 IP，跳过 cloudflare-access-tcp 同步。")

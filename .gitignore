@@ -18,6 +18,7 @@ result_*.csv
 temp_ips_*.txt
 ip_result.txt
 warp_result.txt
+ALL-*.txt
 **/origin-iplist/*
 !**/origin-iplist/.gitkeep
 
