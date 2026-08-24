@@ -119,30 +119,35 @@ python3 warp_tester.py --yes
 # 1. CDN 带宽模式测速 (标准模式: TG 下载 + 订阅源现有与历史 IP 合并测速, 默认仅测 443 端口)
 python3 process_ips.py --target cdn --mode speed --top 20 --min-speed 5.0
 
-# 2. 【仅从订阅服务器获取】跳过 TG 下载 (适合定期对已有优选池与历史池进行健康复测与提速)
+# 2. 【指定本地文件跳过 TG 下载】直接传入已下载的 IP 列表文件继续测速与同步
+python3 process_ips.py --target cdn -f ./ALL-2026-08-24.txt --mode speed --top 20
+
+# 3. 【仅从订阅服务器获取】跳过 TG 下载 (适合定期对已有优选池与历史池进行健康复测与提速)
 python3 process_ips.py --target cdn --skip-tg --mode speed --top 20
 
-# 3. 指定自建 Cloudflare Pages 测速地址 + 仅从订阅服务器获取
-python3 process_ips.py --target cdn --skip-tg --mode speed --url "https://<your-pages-project>.pages.dev/20mb.bin" --top 20
+# 4. 指定自建 Cloudflare Pages 测速地址 + 本地文件测速
+python3 process_ips.py --target cdn -f ./my_ips.txt --mode speed --url "https://<your-pages-project>.pages.dev/20mb.bin" --top 20
 
-# 4. 指定多个端口测速 (如 443 和 8443，避免轮询全部无用端口)
+# 5. 指定多个端口测速 (如 443 和 8443，避免轮询全部无用端口)
 python3 process_ips.py --target cdn -p 443,8443 --mode speed --top 20
 
-# 5. 结合最大延迟过滤与单点下载时长 (-tl 300ms 延迟上限, -dt 5s 下载测速)
+# 6. 结合最大延迟过滤与单点下载时长 (-tl 300ms 延迟上限, -dt 5s 下载测速)
 python3 process_ips.py --target cdn --skip-tg -tl 300 -dt 5 --top 10
 
-# 6. CDN 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
+# 7. CDN 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
 python3 process_ips.py --target cdn --mode latency --url "https://<your-pages-project>.pages.dev/test" --top 15
 
-# 7. WARP Endpoint 优选测速与同步
+# 8. WARP Endpoint 优选测速与同步
 python3 process_ips.py --target warp --warp-mode fast --top 10
 
-# 8. 自动推送模式 (适用于 Cron 定时任务，跳过所有交互确认)
+# 9. 自动推送模式 (适用于 Cron 定时任务，跳过所有交互确认)
 python3 process_ips.py --target cdn --skip-tg --yes
 python3 process_ips.py --target warp --yes
 ```
 
 #### CDN 测速参数一览
+- `--file`, `-f`, `--tg-file`：指定本地已有的 IP 列表文件路径（将自动跳过 Telegram 下载流程，直接解析该文件并合并订阅库继续测速与同步）。
+- `--skip-tg`, `--skip-telegram`：跳过从 Telegram 下载，直接从订阅服务器拉取候选 IP。
 - `--mode`, `-m`：测速模式。`speed`（带宽模式，默认）、`latency`（延迟/HTTPing 模式）。
 - `--ports`, `-p`：待测试端口列表，逗号分隔（默认：`443`，设为 `all` 测试所有端口）。
 - `--min-speed`, `-s`：期望最小下载速度下限（MB/s，默认：`5.0`）。**驱动 cfst 跨越延迟排序深入挖掘大带宽低丢包节点**。内置**自适应保底机制**，若全量测速后未凑够达标节点，自动触发 Pass 2 快速保底测速，绝不产生空结果。
@@ -151,7 +156,6 @@ python3 process_ips.py --target warp --yes
 - `--download-time`, `-dt`：单 IP 下载测速最长时间（秒，默认：`10`）。
 - `--test-count`, `-dn`：下载测速达标数量（默认：`20`）。
 - `--url`, `--speedtest-url`：指定测速文件地址（支持自建 Cloudflare Pages 静态文件如 `/20mb.bin`）。
-- `--skip-tg`, `--skip-telegram`：跳过从 Telegram 下载，直接从订阅服务器拉取候选 IP。
 - `--no-fallback`：禁用未凑齐达标节点时的自动保底测速（默认启用保底）。
 - `--top`, `-t`：最终保留的最优 IP 数量（默认：`20`）。
 - `--yes`, `-y`：跳过确认提示，自动推送到 Cloudflare Workers 订阅服务器。

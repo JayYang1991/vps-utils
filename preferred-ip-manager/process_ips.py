@@ -308,11 +308,20 @@ class IPSourceManager:
         return port_groups
 
     @classmethod
-    def collect_ips(cls, skip_tg: bool, allowed_ports: Optional[List[str]] = None, auto_yes: bool = False) -> Dict[str, List[Tuple[str, str]]]:
+    def collect_ips(cls, skip_tg: bool, input_file: Optional[str] = None, allowed_ports: Optional[List[str]] = None, auto_yes: bool = False) -> Dict[str, List[Tuple[str, str]]]:
         """汇总候选 IP 池并根据端口白名单进行筛选"""
         groups = collections.defaultdict(list)
+        file_ip_count = 0
 
-        if not skip_tg:
+        if input_file:
+            if not os.path.exists(input_file):
+                log_error(f"指定的本地 IP 列表文件不存在: {input_file}")
+                return {}
+            log_info(f"已指定本地 IP 列表文件: {input_file} (自动跳过 Telegram 下载流程)")
+            groups = cls.parse_source_file(input_file)
+            file_ip_count = sum(len(v) for v in groups.values())
+            log_info(f"从指定本地文件中成功解析到 {file_ip_count} 个有效 IP 候选")
+        elif not skip_tg:
             download_cmd = f"{TG_TOOL} download -n 'CF中转' --limit 1 -o {DOWNLOAD_DIR}"
             run_command(download_cmd, "从 Telegram 下载最新的 IP 列表")
 
@@ -336,6 +345,7 @@ class IPSourceManager:
                     return {}
 
             groups = cls.parse_source_file(latest_file)
+            file_ip_count = sum(len(v) for v in groups.values())
 
             # 清理下载的临时文件
             for txt_file in glob.glob(os.path.join(DOWNLOAD_DIR, "*.txt")):
@@ -390,10 +400,12 @@ class IPSourceManager:
                 filtered_groups[port] = valid_entries
 
         total_ips = sum(len(v) for v in filtered_groups.values())
-        if skip_tg:
+        if input_file:
+            log_info(f"汇总 IP 数据池完成: 指定本地文件 ({file_ip_count} 个) + 现有订阅 IP (新增 {sub_added} 个) + 历史 IP (新增 {history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
+        elif skip_tg:
             log_info(f"汇总 IP 数据池完成: [仅订阅源模式] 现有订阅 IP ({sub_added} 个) + 历史 IP ({history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
         else:
-            log_info(f"汇总 IP 数据池完成: TG 下载源 + 现有订阅 IP (新增 {sub_added} 个) + 历史 IP (新增 {history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
+            log_info(f"汇总 IP 数据池完成: TG 下载源 ({file_ip_count} 个) + 现有订阅 IP (新增 {sub_added} 个) + 历史 IP (新增 {history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
 
         return filtered_groups
 
@@ -552,6 +564,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                            help="[带宽模式] 下载测速达标数量")
     cdn_group.add_argument("--url", "--speedtest-url", dest="speedtest_url", default=os.getenv("CFST_URL", ""),
                            help="自定义测速地址 (如自建 Cloudflare Pages 测速 URL，如 https://xxx.pages.dev/20mb.bin)")
+    cdn_group.add_argument("--file", "-f", "--tg-file", dest="input_file", default="",
+                           help="指定本地已有的 IP 列表文件路径 (将自动跳过 Telegram 下载流程，直接解析该文件并继续后续测速与同步)")
     cdn_group.add_argument("--skip-tg", "--skip-telegram", "--sub-only", dest="skip_tg", action="store_true",
                            default=os.getenv("SKIP_TG", "").lower() in ("true", "1", "yes"),
                            help="跳过从 Telegram 下载文件，仅从订阅服务器获取现有及历史 IP 列表进行测速")
@@ -658,9 +672,10 @@ def run_cdn_workflow(args: argparse.Namespace):
     """CDN IP 测速与优选流程 (深层大带宽探测 + 智能保底)"""
     allowed_ports = [p.strip() for p in args.ports.split(",") if p.strip()] if args.ports else ["443"]
 
-    # 1. 收集与汇总候选 IP 池
+    # 1. 收集与汇总候选 IP 池 (支持 --file 直接指定本地文件)
     groups = IPSourceManager.collect_ips(
-        skip_tg=args.skip_tg,
+        skip_tg=args.skip_tg or bool(args.input_file),
+        input_file=args.input_file,
         allowed_ports=allowed_ports,
         auto_yes=args.yes
     )
