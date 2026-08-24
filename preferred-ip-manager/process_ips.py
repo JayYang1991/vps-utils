@@ -181,13 +181,15 @@ def update_cloudflare_access_preferred_ip(best_ip: str, auto_yes: bool = False):
     except Exception as e:
         print(f"⚠️ 更新 cloudflare-access-tcp PREFERRED_IP 异常: {e}")
 
+SUB_URL = os.getenv("CF_SUB_URL", "https://sub.19910417.xyz").rstrip('/')
+
 def upload_results(file_path):
     token = os.environ.get("CF_SUB_TOKEN")
     if not token:
         print("警告: 未找到环境变量 CF_SUB_TOKEN，跳过上传。")
         return
 
-    url = "https://sub.19910417.xyz/api/update"
+    url = f"{SUB_URL}/api/update"
     print(f"==> 正在同步结果至订阅服务器 {url}...")
     
     try:
@@ -209,8 +211,8 @@ def upload_results(file_path):
         print(f"❌ 同步过程中出现异常: {e}")
 
 def fetch_sub_ips():
-    url = "https://sub.19910417.xyz/sub?host=1&uuid=1"
-    print(f"==> 正在从订阅服务器获取现有 IP 列表...")
+    url = f"{SUB_URL}/sub?host=1&uuid=1"
+    print(f"==> 正在从订阅服务器获取现有 IP 列表 ({url})...")
     try:
         resp = requests.get(url, timeout=15)
         if resp.status_code == 200:
@@ -247,10 +249,10 @@ def fetch_sub_ips():
 
 def fetch_history_ips():
     token = os.environ.get("CF_SUB_TOKEN")
-    url = "https://sub.19910417.xyz/api/history"
+    url = f"{SUB_URL}/api/history"
     if token:
         url = f"{url}?token={token}"
-    print(f"==> 正在从订阅服务器获取历史 IP 记录...")
+    print(f"==> 正在从订阅服务器获取历史 IP 记录 ({url})...")
     try:
         headers = {
             "User-Agent": "Mozilla/5.0"
@@ -291,6 +293,9 @@ def main():
     cdn_group.add_argument("--min-speed", "-s", type=float, default=10.0, help="[带宽模式] 最小下载速度过滤 (MB/s, 默认: 10.0)")
     cdn_group.add_argument("--url", "--speedtest-url", dest="speedtest_url", default=os.getenv("CFST_URL", ""),
                            help="自定义测速地址 (如自建 Cloudflare Pages 测速 URL，如 https://xxx.pages.dev/20mb.bin, 默认读取环境变量 CFST_URL)")
+    cdn_group.add_argument("--skip-tg", "--skip-telegram", "--sub-only", dest="skip_tg", action="store_true",
+                           default=os.getenv("SKIP_TG", "").lower() in ("true", "1", "yes"),
+                           help="跳过从 Telegram 下载文件，仅从订阅服务器获取现有及历史 IP 列表进行测速")
     
     # WARP 模式参数
     warp_group = parser.add_argument_group("WARP 优选参数 (--target warp)")
@@ -395,39 +400,44 @@ def main():
         return
 
     # --- 以下为目标为 CDN 优选流程 ---
-    # 1. 下载最新文件 (直接调用二进制)
-    download_cmd = f"{TG_TOOL} download -n 'CF中转' --limit 1 -o {DOWNLOAD_DIR}"
-    run_command(download_cmd, "从 Telegram 下载最新的 IP 列表")
+    groups = collections.defaultdict(list)
 
-    latest_file = get_latest_file(os.path.join(DOWNLOAD_DIR, "*.txt"))
-    if not latest_file:
-        print("错误: 未找到下载的文件")
-        return
-    print(f"识别到原始文件: {latest_file}")
+    if not args.skip_tg:
+        # 1. 从 Telegram 下载最新 IP 列表文件
+        download_cmd = f"{TG_TOOL} download -n 'CF中转' --limit 1 -o {DOWNLOAD_DIR}"
+        run_command(download_cmd, "从 Telegram 下载最新的 IP 列表")
 
-    # 从 Telegram 下载完 IP 列表后提示用户断掉代理
-    if not args.yes:
-        print("\n" + "=" * 65)
-        print("📢 提示: 从 Telegram 下载 IP 列表已完成！")
-        print("⚡ 请【断开/关闭】您的代理服务（如 v2ray / sing-box / Clash 等），以确保后续测速准确。")
-        print("=" * 65)
-        try:
-            input("👉 断开代理后，请按回车键 (Enter) 继续后续流程: ")
-        except (KeyboardInterrupt, EOFError):
-            print("\n⏸️ 用户取消操作，流程终止。")
+        latest_file = get_latest_file(os.path.join(DOWNLOAD_DIR, "*.txt"))
+        if not latest_file:
+            print("错误: 未找到下载的文件")
             return
+        print(f"识别到原始文件: {latest_file}")
 
-    # 2. 解析文件并合并订阅列表与历史 IP
-    groups = parse_source_file(latest_file)
-    
-    # 解析完成后清理下载目录
-    for txt_file in glob.glob(os.path.join(DOWNLOAD_DIR, "*.txt")):
-        try:
-            os.remove(txt_file)
-        except Exception as e:
-            print(f"清理下载文件失败: {txt_file}, {e}")
+        # 从 Telegram 下载完 IP 列表后提示用户断掉代理
+        if not args.yes:
+            print("\n" + "=" * 65)
+            print("📢 提示: 从 Telegram 下载 IP 列表已完成！")
+            print("⚡ 请【断开/关闭】您的代理服务（如 v2ray / sing-box / Clash 等），以确保后续测速准确。")
+            print("=" * 65)
+            try:
+                input("👉 断开代理后，请按回车键 (Enter) 继续后续流程: ")
+            except (KeyboardInterrupt, EOFError):
+                print("\n⏸️ 用户取消操作，流程终止。")
+                return
 
-    # 合并订阅服务器现有 IP 列表
+        # 解析文件
+        groups = parse_source_file(latest_file)
+        
+        # 解析完成后清理下载目录
+        for txt_file in glob.glob(os.path.join(DOWNLOAD_DIR, "*.txt")):
+            try:
+                os.remove(txt_file)
+            except Exception as e:
+                print(f"清理下载文件失败: {txt_file}, {e}")
+    else:
+        print("\n⚡ 已启用 --skip-tg: 跳过 Telegram 文件下载，直接从订阅服务器拉取候选 IP 列表...")
+
+    # 2. 合并订阅服务器现有 IP 列表与历史 IP
     sub_ips = fetch_sub_ips()
     sub_added = 0
     for entry in sub_ips:
@@ -476,7 +486,14 @@ def main():
     groups = filtered_groups
 
     total_ips = sum(len(v) for v in groups.values())
-    print(f"==> 汇总 IP 数据池完成: TG 下载源 + 现有订阅 IP (新增 {sub_added} 个) + 历史 IP (新增 {history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
+    if args.skip_tg:
+        print(f"==> 汇总 IP 数据池完成: [仅订阅源模式] 现有订阅 IP ({sub_added} 个) + 历史 IP ({history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
+    else:
+        print(f"==> 汇总 IP 数据池完成: TG 下载源 + 现有订阅 IP (新增 {sub_added} 个) + 历史 IP (新增 {history_added} 个)，共计 {total_ips} 个候选 IP 准备测速")
+
+    if total_ips == 0:
+        print("\n❌ 错误: 未能获取到任何有效的候选 IP，测速终止。请检查网络连接或订阅服务器配置。")
+        return
 
     if not any(groups.values()):
         print("错误: 没有有效的 IP:Port 数据进行测试")

@@ -113,23 +113,26 @@ python3 warp_tester.py --yes
 
 ### 2. 集成自动化测速与同步工具 (`process_ips.py`)
 
-`process_ips.py` 支持调度 **CDN 优选** 与 **WARP 优选**，并支持指定自建 Cloudflare Pages 测速 URL：
+`process_ips.py` 支持调度 **CDN 优选** 与 **WARP 优选**，支持跳过 Telegram 仅基于订阅服务器复测，并支持指定自建 Cloudflare Pages 测速 URL：
 
 ```bash
-# 1. CDN 带宽模式测速 (使用默认或官方源，测试下载速度，保留速度 >= 10 MB/s 的前 20 个 IP)
+# 1. CDN 带宽模式测速 (标准模式: TG 下载 + 订阅源现有与历史 IP 合并测速)
 python3 process_ips.py --target cdn --mode speed --top 20 --min-speed 10.0
 
-# 2. 指定自建 Cloudflare Pages 测速地址 (20MB 静态测速包)
-python3 process_ips.py --target cdn --mode speed --url "https://<your-pages-project>.pages.dev/20mb.bin" --top 20
+# 2. 【仅从订阅服务器获取】跳过 TG 文件下载 (适合定期对已有优选池与历史池进行健康复测与提速)
+python3 process_ips.py --target cdn --skip-tg --mode speed --top 20
 
-# 3. CDN 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
+# 3. 指定自建 Cloudflare Pages 测速地址 + 仅从订阅服务器获取
+python3 process_ips.py --target cdn --skip-tg --mode speed --url "https://<your-pages-project>.pages.dev/20mb.bin" --top 20
+
+# 4. CDN 延迟模式测速 (HTTPing 测试延迟，保留延迟最低的前 15 个 IP)
 python3 process_ips.py --target cdn --mode latency --url "https://<your-pages-project>.pages.dev/test" --top 15
 
-# 4. WARP Endpoint 优选测速与同步
+# 5. WARP Endpoint 优选测速与同步
 python3 process_ips.py --target warp --warp-mode fast --top 10
 
-# 5. 自动推送模式 (适用于 Cron 定时任务)
-python3 process_ips.py --target cdn --yes
+# 6. 自动推送模式 (适用于 Cron 定时任务)
+python3 process_ips.py --target cdn --skip-tg --yes
 python3 process_ips.py --target warp --yes
 ```
 
