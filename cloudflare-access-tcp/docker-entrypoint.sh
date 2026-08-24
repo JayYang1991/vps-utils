@@ -183,7 +183,8 @@ echo -e "${CYAN}  Cloudflare Access TCP Client Forwarder Starting...  ${NC}"
 echo -e "${CYAN}======================================================${NC}"
 log "Service Token ID:     $(mask_token "$SERVICE_TOKEN_ID")"
 log "Service Token Secret: ********************"
-log "Listen Host:          $LISTEN_HOST"
+log "Container Listen:     0.0.0.0 (Bridge Isolation Mode)"
+log "Host Listen Binding:  $LISTEN_HOST"
 if [[ -n "$PREFERRED_IP" ]]; then
   log "Preferred IP (优选):  $PREFERRED_IP (所有域名共用解析)"
 else
@@ -192,7 +193,7 @@ fi
 log "Forward Rules Count:  ${#DOMAIN_ARRAY[@]}"
 
 for i in "${!DOMAIN_ARRAY[@]}"; do
-  log "  -> Rule #$((i+1)): ${LISTEN_HOST}:${PORT_ARRAY[i]}  ===>  ${DOMAIN_ARRAY[i]}"
+  log "  -> Rule #$((i+1)): 0.0.0.0:${PORT_ARRAY[i]} (Host: ${LISTEN_HOST}:${PORT_ARRAY[i]})  ===>  ${DOMAIN_ARRAY[i]}"
 done
 echo -e "${CYAN}------------------------------------------------------${NC}"
 
@@ -215,7 +216,7 @@ start_forward_process() {
   local idx="$1"
   local target_domain="${DOMAIN_ARRAY[idx]}"
   local listen_port="${PORT_ARRAY[idx]}"
-  local listen_url="${LISTEN_HOST}:${listen_port}"
+  local listen_url="0.0.0.0:${listen_port}"
 
   cloudflared access tcp \
     --hostname "${target_domain}" \
@@ -226,7 +227,7 @@ start_forward_process() {
   
   local pid=$!
   CHILD_PIDS[$idx]=$pid
-  log "规则 #$((idx+1)) [${listen_url} -> ${target_domain}] 转发进程已成功拉起 (PID: $pid)"
+  log "规则 #$((idx+1)) [0.0.0.0:${listen_port} -> ${target_domain}] 转发进程已成功拉起 (PID: $pid)"
 }
 
 cleanup() {

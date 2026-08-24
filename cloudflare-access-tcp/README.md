@@ -8,7 +8,9 @@
 
 ## 🌟 核心特性
 
-- 🐳 **Ubuntu 24.04 编译生成**：采用官方 `ubuntu:24.04` 基础镜像，构建时自动使用宿主机网络 (`--network host`)，自动匹配 CPU 架构（amd64 / arm64 / arm）下载官方最新版 `cloudflared`。
+- 🐳 **编译走宿主机网络，运行走隔离网络**：
+  - **编译阶段**：自动使用宿主机网络 (`--network host`) 构建镜像，自动匹配 CPU 架构（amd64 / arm64 / arm）极速下载最新版 `cloudflared` 二进制与基础依赖；
+  - **运行阶段**：采用独立的 Docker Bridge 网桥隔离网络（**不使用宿主机网络**），通过精准端口映射 (`-p [LISTEN_IP:]PORT:PORT`) 暴露服务，具备更高的安全隔离性与网络可控性。
 - ⚡ **多端口并发转发**：容器内采用独立并发进程与优雅信号捕获管理，支持同时映射任意数量的域名与本地 TCP 端口（默认开启 2 个端口：`5000` 与 `5001`）。
 - 🔒 **严格参数与格式校验**：内置严格的 RFC 规范域名与端口合法性校验，杜绝无效域名、超出范围端口（1-65535）或端口冲突。
 - 🛡️ **敏感凭据安全隔离**：Service Token Client ID 与 Secret 独立存储于权限为 `600` 的配置文件 (`/etc/cloudflare-access-tcp/access.env`) 中，绝不在 Systemd 单元文件或进程列表中泄露明文。
@@ -27,12 +29,14 @@
 │                                                                                   │
 │  [ 客户端应用 (Emby / Clash / sing-box / 浏览器) ]                                 │
 │        │                                                                          │
-│        ▼ (连接本地端口，如 127.0.0.1:5000 / 127.0.0.1:5001)                         │
+│        ▼ (连接宿主机端口: 127.0.0.1:5000 / 127.0.0.1:5001)                         │
 │  ┌─────────────────────────────────────────────────────────────────────────────┐  │
-│  │               cloudflare-access-tcp 容器 (Systemd 守护运行)                  │  │
+│  │   Docker 端口映射 (-p 127.0.0.1:5000:5000, -p 127.0.0.1:5001:5001)          │  │
+│  │   ▼                                                                         │  │
+│  │   cloudflare-access-tcp 容器 (Bridge 隔离网络, Systemd 守护运行)             │  │
 │  │                                                                             │  │
-│  │   cloudflared #1: --hostname movies.19910417.xyz  --url localhost:5000      │  │
-│  │   cloudflared #2: --hostname movies1.19910417.xyz --url localhost:5001      │  │
+│  │   cloudflared #1: --hostname movies.19910417.xyz  --url 0.0.0.0:5000        │  │
+│  │   cloudflared #2: --hostname movies1.19910417.xyz --url 0.0.0.0:5001        │  │
 │  │   (附带 Cloudflare Access Service Token 进行安全身份鉴权)                       │  │
 │  └──────────────────────────────────────┬──────────────────────────────────────┘  │
 └─────────────────────────────────────────┼─────────────────────────────────────────┘
@@ -103,11 +107,11 @@ sudo bash install.sh --service-token "your-client-id.access:your-client-secret"
 | `--domains` | `-d` | 目标域名列表 (多个用英文逗号分隔) | `movies.19910417.xyz,movies1.19910417.xyz` |
 | `--ports` | `-p` | 本地 TCP 监听端口列表 (与域名列表一一对应) | `5000,5001` |
 | `--forward` | `-f` | 快捷规则列表，格式为 `domain:port` (支持多次或逗号分隔) | `movies.19910417.xyz:5000,movies1.19910417.xyz:5001` |
-| `--listen` | 无 | 本地绑定地址 | `localhost` (可选 `0.0.0.0`) |
-| `--network-mode` | 无 | 容器网络模式 (`host` 或 `bridge`) | `host` |
+| `--listen` | 无 | 宿主机监听绑定地址 (默认仅限本机访问) | `127.0.0.1` (设为 `0.0.0.0` 开放给局域网) |
+| `--network-mode` | 无 | 容器网络模式 (`bridge` 容器隔离网络) | `bridge` |
 | `--name` | `-n` | 自定义 Systemd 服务与容器名称 | `cloudflare-access-tcp` |
 | `--no-cache` | 无 | 构建 Docker 镜像时不使用缓存 (全新编译) | 否 |
-| `--rebuild` | `-b` | 仅重新编译 Docker 镜像，不重新安装服务 | - |
+| `--rebuild` | `-b` | 仅重新编译 Docker 镜像 (使用宿主机网络构建)，不重新安装服务 | - |
 | `--status` | 无 | 查看 Systemd 服务、Docker 容器、优选 IP 与监听端口状态 | - |
 | `--logs` | `-l` | 实时追踪查看运行日志 | - |
 | `--test` | 无 | 测试各个本地 TCP 转发端口与优选 IP 的连通性 | - |

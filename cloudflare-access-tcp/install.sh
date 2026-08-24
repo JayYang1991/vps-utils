@@ -3,6 +3,8 @@
 # install.sh
 # Cloudflare Access TCP 客户端一键安装与 Systemd 服务管理脚本
 # 通过 Docker + Ubuntu 24.04 编译生成容器，并通过 Systemd 实现开机自启与后台守护运行。
+# 编译阶段采用宿主机网络 (--network host) 确保快速下载依赖与最新版 cloudflared 二进制；
+# 运行阶段采用容器 Bridge 网桥隔离网络（不使用宿主机网络），通过 Docker 精准端口映射对外提供安全服务。
 # 支持在宿主机配置优选 IP，容器内自动实现所有域名向该优选 IP 的统一映射。
 #
 # GitHub: https://github.com/JayYang1991/vps-utils
@@ -51,8 +53,8 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
 DEFAULT_DOMAINS="movies.19910417.xyz,movies1.19910417.xyz"
 DEFAULT_PORTS="5000,5001"
-DEFAULT_LISTEN="localhost"
-DEFAULT_NETWORK_MODE="host"
+DEFAULT_LISTEN="127.0.0.1"
+DEFAULT_NETWORK_MODE="bridge"
 
 SERVICE_TOKEN_ID="${SERVICE_TOKEN_ID:-}"
 SERVICE_TOKEN_SECRET="${SERVICE_TOKEN_SECRET:-}"
@@ -80,7 +82,7 @@ show_help() {
   echo "  --status                    查看 Systemd 服务状态、容器运行状态、优选 IP 与本地监听端口"
   echo "  --logs, -l                  查看服务的实时运行日志 (优先使用 journalctl)"
   echo "  --test                      测试各个本地转发端口与优选 IP 的连通性"
-  echo "  --rebuild, -b               仅重新编译 Docker 镜像 (使用宿主机网络)"
+  echo "  --rebuild, -b               仅重新编译 Docker 镜像 (编译使用宿主机网络 --network host)"
   echo ""
   echo "必选参数 (用于安装或更新配置):"
   echo "  -i, --token-id <ID>         Cloudflare Access Service Token Client ID"
@@ -92,8 +94,8 @@ show_help() {
   echo "  -d, --domains <D1,D2,...>   目标域名列表，逗号分隔 (默认: movies.19910417.xyz,movies1.19910417.xyz)"
   echo "  -p, --ports <P1,P2,...>     本地监听端口列表，逗号分隔 (默认: 5000,5001)"
   echo "  -f, --forward <D:P,...>     转发规则列表，格式为 'domain1:port1,domain2:port2' (可指定多次)"
-  echo "      --listen <HOST>         本地监听主机绑定地址 (默认: localhost, 也可设为 0.0.0.0)"
-  echo "      --network-mode <MODE>   容器网络模式: host(默认) 或 bridge"
+  echo "      --listen <HOST>         宿主机监听绑定地址 (默认: 127.0.0.1, 也可设为 0.0.0.0)"
+  echo "      --network-mode <MODE>   容器网络模式: bridge(默认, 运行时非宿主机网络，安全隔离)"
   echo "  -n, --name <NAME>           自定义服务与容器名称 (默认: cloudflare-access-tcp)"
   echo "      --no-cache              构建 Docker 镜像时不使用缓存 (全新拉取与编译)"
   echo "  -h, --help                  显示此帮助信息"
@@ -104,8 +106,8 @@ show_help() {
   echo "  PREFERRED_IP                Cloudflare 优选 IP (如 104.16.x.x, 162.159.x.x 等)"
   echo "  DOMAINS                     域名列表 (逗号分隔)"
   echo "  PORTS                       端口列表 (逗号分隔)"
-  echo "  LISTEN_HOST                 监听地址 (默认: localhost)"
-  echo "  NETWORK_MODE                网络模式 (默认: host)"
+  echo "  LISTEN_HOST                 宿主机监听地址 (默认: 127.0.0.1)"
+  echo "  NETWORK_MODE                网络模式 (默认: bridge)"
   echo ""
   echo "使用示例:"
   echo -e "  ${YELLOW}# 1. 默认安装并配置优选 IP 加速:${NC}"
@@ -337,7 +339,7 @@ check_docker() {
 
 # --- 编译 Docker 镜像 (使用宿主机网络) ---
 build_docker_image() {
-  log "开始编译 Cloudflare Access TCP Docker 镜像 (基础镜像: ubuntu:24.04, 模式: 宿主机网络)..."
+  log "开始编译 Cloudflare Access TCP Docker 镜像 (基础镜像: ubuntu:24.04, 构建网络: 宿主机网络 --network host)..."
   local build_cmd=("docker" "build" "--network" "host" "-t" "$IMAGE_NAME" "$SCRIPT_DIR")
   if [[ "$NO_CACHE" == "true" ]]; then
     build_cmd+=("--no-cache")
@@ -438,6 +440,7 @@ do_status() {
     # shellcheck disable=SC1090
     source "$ENV_FILE"
     echo ""
+    echo -e "网络隔离模式:      ${GREEN}${BOLD}Bridge 容器隔离模式${NC} (运行时非宿主机网络，仅通过端口映射暴露)"
     if [[ -n "${PREFERRED_IP:-}" ]]; then
       echo -e "优选 IP 静态映射:  ${GREEN}${BOLD}${PREFERRED_IP}${NC} (所有域名已在容器内共用此 IP 加速)"
     else
@@ -447,21 +450,27 @@ do_status() {
     echo -e "${CYAN}当前配置的转发规则:${NC}"
     IFS=',' read -r -a cur_domains <<< "${DOMAINS:-}"
     IFS=',' read -r -a cur_ports <<< "${PORTS:-}"
-    local host_listen="${LISTEN_HOST:-localhost}"
+    local host_listen="${LISTEN_HOST:-127.0.0.1}"
+    [[ "$host_listen" == "localhost" ]] && host_listen="127.0.0.1"
     for i in "${!cur_domains[@]}"; do
       local p="${cur_ports[i]}"
       local d="${cur_domains[i]}"
       local port_status="${RED}未监听${NC}"
+      local test_ip="$host_listen"
+      [[ "$test_ip" == "0.0.0.0" ]] && test_ip="127.0.0.1"
+
       if ss -tlpn "sport = :$p" 2>/dev/null | grep -q ":$p"; then
         port_status="${GREEN}监听中 (TCP)${NC}"
-      elif nc -z 127.0.0.1 "$p" 2>/dev/null; then
+      elif nc -z "$test_ip" "$p" 2>/dev/null; then
+        port_status="${GREEN}连通正常 (TCP)${NC}"
+      elif timeout 2 bash -c "cat < /dev/null > /dev/tcp/${test_ip}/${p}" 2>/dev/null; then
         port_status="${GREEN}连通正常 (TCP)${NC}"
       fi
       local dns_dest="${d}"
       if [[ -n "${PREFERRED_IP:-}" ]]; then
         dns_dest="${d} (${PREFERRED_IP})"
       fi
-      printf "  [%d] %-15s -> %-35s [状态: %b]\n" "$((i+1))" "${host_listen}:${p}" "$dns_dest" "$port_status"
+      printf "  [%d] %-18s -> %-35s [状态: %b]\n" "$((i+1))" "${host_listen}:${p}" "$dns_dest" "$port_status"
     done
   fi
   echo ""
@@ -697,17 +706,29 @@ EOF
 chmod 600 "$ENV_FILE"
 log "已安全写入凭据与环境配置文件: $ENV_FILE (权限: 600)"
 
-# 7. 配置并生成 Systemd 服务文件
+# 7. 配置并生成 Systemd 服务文件 (运行时采用 Bridge 容器网络隔离 + 精准端口映射)
 log "正在配置 Systemd 服务文件: $SERVICE_FILE ..."
 
-DOCKER_PORT_FLAGS=()
-if [[ "$NETWORK_MODE" == "bridge" ]]; then
-  for p in "${CLEAN_PORTS[@]}"; do
-    DOCKER_PORT_FLAGS+=("-p" "${p}:${p}")
-  done
-  DOCKER_NET_FLAG="--network bridge ${DOCKER_PORT_FLAGS[*]}"
+# 规范化宿主机监听绑定 IP
+BIND_IP="127.0.0.1"
+if [[ "$LISTEN_HOST" == "0.0.0.0" || "$LISTEN_HOST" == "all" ]]; then
+  BIND_IP="0.0.0.0"
+elif [[ "$LISTEN_HOST" == "localhost" || "$LISTEN_HOST" == "127.0.0.1" || -z "$LISTEN_HOST" ]]; then
+  BIND_IP="127.0.0.1"
 else
-  DOCKER_NET_FLAG="--network host"
+  BIND_IP="$LISTEN_HOST"
+fi
+
+DOCKER_PORT_FLAGS=()
+for p in "${CLEAN_PORTS[@]}"; do
+  DOCKER_PORT_FLAGS+=("-p" "${BIND_IP}:${p}:${p}")
+done
+
+DOCKER_HOST_FLAGS=()
+if [[ -n "$PREFERRED_IP" ]]; then
+  for d in "${CLEAN_DOMAINS[@]}"; do
+    DOCKER_HOST_FLAGS+=("--add-host" "${d}:${PREFERRED_IP}")
+  done
 fi
 
 cat > "$SERVICE_FILE" <<EOF
@@ -727,9 +748,11 @@ KillMode=control-group
 EnvironmentFile=${ENV_FILE}
 
 ExecStartPre=-/usr/bin/docker rm -f ${CONTAINER_NAME}
-ExecStart=/usr/bin/docker run --rm --name ${CONTAINER_NAME} \
-    ${DOCKER_NET_FLAG} \
-    --env-file ${ENV_FILE} \
+ExecStart=/usr/bin/docker run --rm --name ${CONTAINER_NAME} \\
+    --network bridge \\
+    ${DOCKER_PORT_FLAGS[*]} \\
+    ${DOCKER_HOST_FLAGS[*]} \\
+    --env-file ${ENV_FILE} \\
     ${IMAGE_NAME}
 ExecStop=/usr/bin/docker stop -t 5 ${CONTAINER_NAME}
 
@@ -759,12 +782,12 @@ if systemctl is-active --quiet "$SERVICE_NAME"; then
   echo -e "  • 服务名称:         ${BOLD}${SERVICE_NAME}${NC}"
   echo -e "  • 配置文件:         ${BOLD}${ENV_FILE}${NC} (权限 600)"
   echo -e "  • 监听地址:         ${BOLD}${LISTEN_HOST}${NC}"
+  echo -e "  • 网络隔离模式:     ${GREEN}${BOLD}Bridge 网桥隔离模式${NC} (编译走宿主机网络，运行时容器网络隔离 + 端口映射)"
   if [[ -n "$PREFERRED_IP" ]]; then
     echo -e "  • 优选 IP:          ${GREEN}${BOLD}${PREFERRED_IP}${NC} (所有域名在容器内共用此 IP 解析加速)"
   else
     echo -e "  • 优选 IP:          ${YELLOW}未配置 (使用公共 DNS 解析)${NC}"
   fi
-  echo -e "  • 网络模式:         ${BOLD}${NETWORK_MODE}${NC}"
   echo -e "  • Service Token ID: $(mask_string "$SERVICE_TOKEN_ID")"
   echo ""
   echo -e "${CYAN}已配置的 TCP 转发列表:${NC}"
