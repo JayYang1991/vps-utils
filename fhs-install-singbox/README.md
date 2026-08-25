@@ -27,7 +27,8 @@
 | --- | --- |
 | `install-singbox-server.sh` | sing-box 服务端一键安装/更新/重置脚本 |
 | `update-singbox-keys.sh` | sing-box 服务端各项密钥与凭证安全更新/重置脚本 |
-| `update-singbox-sub.sh` | 通过指定订阅链接更新 sing-box 配置并重启服务（支持自动备份与回退） |
+| `update-singbox-sub.sh` | 通过指定订阅链接更新 sing-box 配置（支持 Client 模式与 Server 转发模式，带自动备份与回退） |
+| `convert_sub_to_server.py` | sing-box 订阅转 Server 模式转换核心引擎（清除路由、过滤 Reality 节点并重写本地映射端口、生成 Reality 入站） |
 | `setup_vps_server.sh` | 通用 VPS 远程部署脚本（支持 IP 直接部署或 Vultr 自动创建） |
 | `remove_vultr_instance.sh` | Vultr 实例快速查询与交互式清理工具 |
 | `singbox_server_config.json` | sing-box 服务端配置模板（VLESS Reality + Hysteria2） |
@@ -122,34 +123,65 @@ bash update-singbox-keys.sh -a --domain www.apple.com -y
 
 ---
 
-### 3. 订阅链接配置更新 (`update-singbox-sub.sh`)
+### 3. 订阅链接配置更新 (`update-singbox-sub.sh` 与 `convert_sub_to_server.py`)
 
 专门用于通过订阅链接下载更新 sing-box 服务端/客户端配置文件，并重启服务。内置全流程安全保障：自动备份旧配置至 `/tmp` 目录、语法校验（`sing-box check`）、服务运行状态监控，以及失败自动回退机制。
+
+#### 支持的两种更新模式
+
+1. **Client 客户端模式（默认）**：
+   - 直接下载订阅节点与客户端分流路由规则，适用于将 VPS 作为中转或出海客户端。
+2. **Server 服务端转发模式（`--mode server` 或 `--server`）**：
+   - **自动清除客户端路由与 DNS 规则**：移除 `route` 与 `dns` 规则，由服务端内核直连出站；
+   - **精确过滤出站节点**：`outbounds` 中仅保留 **443** 与 **8443** 端口的 `vless+reality` 协议节点；
+   - **自动重写目标与本地端口映射**：
+     - 原 **8443** 端口节点默认重写为 `127.0.0.1:5000`；
+     - 原 **443** 端口节点默认重写为 `127.0.0.1:5001`；
+     - 支持通过参数灵活自定义目标 IP 与端口；
+   - **自动创建 Reality 入站监听**：默认生成 1 个 `vless+reality` 入站监听端口（默认端口 `12345`），自动继承或生成安全密钥对与 Short ID；
+   - **核心转换引擎**：由配套 Python 脚本 [`convert_sub_to_server.py`](./convert_sub_to_server.py) 实现，既可由 Shell 脚本自动调度，也可独立运行。
 
 在目标 Linux 服务器上以 `root` 权限运行：
 
 ```bash
-# 1. 兼容 singbox-sub-converter 自适应订阅链接 (/sub)
+# 1. 默认 Client 客户端模式更新:
 bash update-singbox-sub.sh http://154.12.34.56:8000/sub?token=your_sub_token
 
-# 2. 兼容 singbox-sub-converter 专用 singbox 订阅链接 (/singbox)
-bash update-singbox-sub.sh http://154.12.34.56:8000/singbox?token=your_sub_token
+# 2. Server 服务端转发模式更新 (清除路由，保留 443/8443 Reality 节点并映射至 5001/5000，开启 12345 入站):
+bash update-singbox-sub.sh http://154.12.34.56:8000/sub?token=your_sub_token --server
 
-# 3. 非交互模式下更新指定订阅链接
-bash update-singbox-sub.sh -u "http://154.12.34.56:8000/sub?target=singbox&token=your_sub_token" -y
+# 3. 自定义 Server 模式入站端口与映射目标 (非交互执行):
+bash update-singbox-sub.sh -u "http://154.12.34.56:8000/sub?token=your_sub_token" \
+  --server \
+  --inbound-port 12345 \
+  --port-8443 5000 \
+  --port-443 5001 \
+  -y
 ```
 
 #### 参数说明
 
-| 参数选项 | 说明 |
-| --- | --- |
-| `-u, --url URL` | 指定订阅链接 URL（必须） |
-| `-c, --config PATH` | 指定配置文件路径（默认: `/etc/sing-box/config.json`） |
-| `-b, --backup-dir DIR` | 指定备份目录（默认: `/tmp`） |
-| `-A, --user-agent AGENT` | 指定 HTTP 请求 User-Agent（默认: `sing-box`） |
-| `-t, --timeout SECONDS` | 指定下载超时秒数（默认: `30`） |
-| `-y, --yes` | 跳过确认提示直接执行 |
-| `-h, --help` | 显示帮助信息 |
+| 参数选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `-m, --mode <client\|server>` | `client` | 更新模式选择：`client` (客户端模式) 或 `server` (服务端转发网关模式) |
+| `--server` / `--client` | - | 快捷切换 `server` 或 `client` 模式 |
+| `-u, --url URL` | - | 指定订阅链接 URL（必须） |
+| `-c, --config PATH` | `/etc/sing-box/config.json` | 指定 sing-box 配置文件路径 |
+| `-b, --backup-dir DIR` | `/tmp` | 指定备份目录 |
+| `-A, --user-agent AGENT` | `sing-box` | 指定 HTTP 请求 User-Agent |
+| `-t, --timeout SECONDS` | `30` | 指定下载超时秒数 |
+| `--inbound-port PORT` | `12345` | **(Server模式)** VLESS Reality 入站监听端口 |
+| `--inbound-listen ADDR` | `::` | **(Server模式)** 入站监听绑定地址 |
+| `--inbound-domain DOMAIN` | 自动提取 | **(Server模式)** 入站 Reality 伪装域名/SNI |
+| `--inbound-uuid UUID` | 自动继承/提取 | **(Server模式)** 入站 VLESS 用户 UUID |
+| `--inbound-privkey KEY` | 自动继承/生成 | **(Server模式)** 入站 Reality PrivateKey |
+| `--inbound-shortid ID` | 自动继承/提取 | **(Server模式)** 入站 Reality Short ID |
+| `--port-8443 PORT` | `5000` | **(Server模式)** 原 8443 节点映射的目标本地端口 |
+| `--port-443 PORT` | `5001` | **(Server模式)** 原 443 节点映射的目标本地端口 |
+| `--target-ip IP` | `127.0.0.1` | **(Server模式)** 节点重写的目标 IP 地址 |
+| `--port-map RULES` | - | **(Server模式)** 自定义端口映射规则 (格式: `'8443:5000,443:5001'`) |
+| `-y, --yes` | - | 跳过确认提示直接执行 |
+| `-h, --help` | - | 显示帮助信息 |
 
 ---
 

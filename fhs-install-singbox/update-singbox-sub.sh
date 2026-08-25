@@ -6,14 +6,18 @@
 #
 # Description:
 #   通过指定的订阅链接更新 sing-box 配置文件，并在更新失败或服务启动异常时自动回退。
-#   支持参考 singbox-sub-converter / subconverter 格式的订阅链接：
-#     - http://<IP>:8000/sub?token=<TOKEN>
-#     - http://<IP>:8000/singbox?token=<TOKEN>
-#     - http://<IP>:8000/sub?target=singbox&token=<TOKEN>
+#   支持两种模式：
+#     1. Client 模式（默认）：直接作为代理客户端使用（兼容 singbox-sub-converter / subconverter 格式）
+#     2. Server 模式（--mode server / --server）：转换为服务端网关转发模式：
+#        - 自动清除所有客户端路由与 DNS 规则
+#        - outbounds 节点仅保留 443 和 8443 端口的 VLESS+Reality 节点
+#        - 8443 端口节点重写为 127.0.0.1:5000，443 端口节点重写为 127.0.0.1:5001
+#        - 自动新增 1 个 VLESS+Reality 入站端口（默认 12345）
+#        - 支持各项端口映射与入站参数自定义
 #
 #   1. 备份原配置文件至 /tmp 目录
-#   2. 从订阅链接下载新配置文件并校验语法
-#   3. 更新配置并重启 sing-box 服务
+#   2. 从订阅链接下载新配置文件（Server 模式下通过 convert_sub_to_server.py 进行转换）
+#   3. 校验语法无误后更新配置并重启 sing-box 服务
 #   4. 若服务启动异常则自动回退至备份配置
 #
 
@@ -35,12 +39,39 @@ fi
 set -e
 
 # ===================== Default Settings =====================
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")
 CONFIG_PATH="/etc/sing-box/config.json"
 BACKUP_DIR="/tmp"
 SUB_URL=""
 USER_AGENT="sing-box"
 TIMEOUT=30
 ASSUME_YES=false
+
+# 模式设置: client (默认) / server
+MODE="client"
+
+# Server 模式参数
+INBOUND_PORT="12345"
+INBOUND_LISTEN="::"
+INBOUND_DOMAIN=""
+INBOUND_UUID=""
+INBOUND_PRIVKEY=""
+INBOUND_SHORTID=""
+PORT_8443="5000"
+PORT_443="5001"
+TARGET_IP="127.0.0.1"
+PORT_MAP=""
+
+PYTHON_CONVERTER="${SCRIPT_DIR}/convert_sub_to_server.py"
+GITHUB_RAW_BASE="https://raw.githubusercontent.com/JayYang1991/vps-utils/main/fhs-install-singbox"
+DOWNLOADED_CONVERTER=""
+
+cleanup() {
+  if [[ -n "$DOWNLOADED_CONVERTER" && -f "$DOWNLOADED_CONVERTER" ]]; then
+    rm -f "$DOWNLOADED_CONVERTER" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 show_help() {
   echo "用法: $0 [选项] [订阅URL]"
@@ -50,7 +81,10 @@ show_help() {
   echo "  支持参考 singbox-sub-converter / subconverter 项目的订阅链接格式。"
   echo "  若下载失败、语法错误或服务启动异常，将自动回退至原配置文件。"
   echo ""
-  echo "选项:"
+  echo "通用选项:"
+  echo "  -m, --mode MODE                指定更新模式: client(客户端模式, 默认) 或 server(服务端转发网关模式)"
+  echo "      --server                   快捷开启 server 服务端转发模式"
+  echo "      --client                   快捷开启 client 客户端模式 (默认)"
   echo "  -u, --url URL                  指定订阅链接 URL"
   echo "  -c, --config PATH              指定 sing-box 配置文件路径 (默认: /etc/sing-box/config.json)"
   echo "  -b, --backup-dir DIR           指定备份目录 (默认: /tmp)"
@@ -59,11 +93,27 @@ show_help() {
   echo "  -y, --yes                      非交互模式，不提示直接执行"
   echo "  -h, --help                     显示本帮助信息"
   echo ""
-  echo "示例 (兼容 singbox-sub-converter 订阅链接):"
-  echo "  $0 http://154.12.34.56:8000/sub?token=my_secret_token"
-  echo "  $0 http://154.12.34.56:8000/singbox?token=my_secret_token"
-  echo "  $0 -u \"http://154.12.34.56:8000/sub?target=singbox&token=my_secret_token\" -y"
-  echo "  $0 -u https://example.com/singbox-config.json -c /etc/sing-box/config.json"
+  echo "Server 模式专属参数 (搭配 --mode server 或 --server 使用):"
+  echo "  --inbound-port PORT            VLESS Reality 入站监听端口 (默认: 12345)"
+  echo "  --inbound-listen ADDR          入站监听绑定地址 (默认: ::)"
+  echo "  --inbound-domain DOMAIN        入站 Reality 伪装域名/SNI (默认自动继承或从节点提取)"
+  echo "  --inbound-uuid UUID            入站 VLESS 用户 UUID (默认自动继承或从节点提取)"
+  echo "  --inbound-privkey KEY          入站 Reality PrivateKey (默认自动继承或自动生成)"
+  echo "  --inbound-shortid ID           入站 Reality Short ID (默认自动继承或从节点提取)"
+  echo "  --port-8443 PORT               原 8443 节点映射的目标本地端口 (默认: 5000)"
+  echo "  --port-443 PORT                原 443 节点映射的目标本地端口 (默认: 5001)"
+  echo "  --target-ip IP                 节点重写的目标 IP 地址 (默认: 127.0.0.1)"
+  echo "  --port-map RULES               自定义端口映射规则 (格式: '8443:5000,443:5001' 或 '8443:127.0.0.1:5000')"
+  echo ""
+  echo "使用示例:"
+  echo "  1. 默认客户端订阅更新:"
+  echo "     $0 http://154.12.34.56:8000/sub?token=my_secret_token"
+  echo ""
+  echo "  2. 服务端模式订阅更新 (清除路由，保留 443/8443 Reality 节点并映射至 5001/5000，开启 12345 入站):"
+  echo "     $0 http://154.12.34.56:8000/sub?token=my_secret_token --server"
+  echo ""
+  echo "  3. 自定义 Server 模式入站端口与映射目标:"
+  echo "     $0 -u \"http://154.12.34.56:8000/sub?token=my_secret_token\" --server --inbound-port 12345 --port-8443 5000 --port-443 5001 -y"
 }
 
 check_if_running_as_root() {
@@ -144,9 +194,54 @@ rollback_config() {
   echo "${yellow}================================================================${reset}"
 }
 
+ensure_python_converter() {
+  if ! command -v python3 > /dev/null 2>&1; then
+    echo "${red}error: Server 模式转换需要 python3 环境，请先安装 python3${reset}"
+    exit 1
+  fi
+
+  if [[ -f "$PYTHON_CONVERTER" ]]; then
+    return 0
+  fi
+
+  # 检查常见系统目录
+  if [[ -f "/usr/local/sing-box/convert_sub_to_server.py" ]]; then
+    PYTHON_CONVERTER="/usr/local/sing-box/convert_sub_to_server.py"
+    return 0
+  elif [[ -f "/etc/sing-box/convert_sub_to_server.py" ]]; then
+    PYTHON_CONVERTER="/etc/sing-box/convert_sub_to_server.py"
+    return 0
+  fi
+
+  # 尝试从 GitHub Release/Raw 自动拉取
+  echo "${aoi}info: 本地未找到 convert_sub_to_server.py，正在从 GitHub 自动下载...${reset}"
+  DOWNLOADED_CONVERTER=$(mktemp /tmp/convert_sub_to_server_XXXXXX.py)
+  if curl -fsSL "${GITHUB_RAW_BASE}/convert_sub_to_server.py" -o "$DOWNLOADED_CONVERTER"; then
+    chmod +x "$DOWNLOADED_CONVERTER"
+    PYTHON_CONVERTER="$DOWNLOADED_CONVERTER"
+    echo "${green}info: convert_sub_to_server.py 下载成功${reset}"
+  else
+    rm -f "$DOWNLOADED_CONVERTER" 2>/dev/null || true
+    echo "${red}error: 无法下载 convert_sub_to_server.py，请确认网络连接或手动放置该脚本。${reset}"
+    exit 1
+  fi
+}
+
 parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      -m|--mode)
+        MODE="$2"
+        shift 2
+        ;;
+      --server)
+        MODE="server"
+        shift 1
+        ;;
+      --client)
+        MODE="client"
+        shift 1
+        ;;
       -u|--url)
         SUB_URL="$2"
         shift 2
@@ -165,6 +260,46 @@ parse_arguments() {
         ;;
       -t|--timeout)
         TIMEOUT="$2"
+        shift 2
+        ;;
+      --inbound-port)
+        INBOUND_PORT="$2"
+        shift 2
+        ;;
+      --inbound-listen)
+        INBOUND_LISTEN="$2"
+        shift 2
+        ;;
+      --inbound-domain|--inbound-sni)
+        INBOUND_DOMAIN="$2"
+        shift 2
+        ;;
+      --inbound-uuid)
+        INBOUND_UUID="$2"
+        shift 2
+        ;;
+      --inbound-privkey|--inbound-private-key)
+        INBOUND_PRIVKEY="$2"
+        shift 2
+        ;;
+      --inbound-shortid|--inbound-short-id)
+        INBOUND_SHORTID="$2"
+        shift 2
+        ;;
+      --port-8443)
+        PORT_8443="$2"
+        shift 2
+        ;;
+      --port-443)
+        PORT_443="$2"
+        shift 2
+        ;;
+      --target-ip)
+        TARGET_IP="$2"
+        shift 2
+        ;;
+      --port-map)
+        PORT_MAP="$2"
         shift 2
         ;;
       -y|--yes)
@@ -227,6 +362,11 @@ main() {
   echo " 订阅链接 : ${SUB_URL}"
   echo " 配置路径 : ${CONFIG_PATH}"
   echo " 备份目录 : ${BACKUP_DIR}"
+  if [[ "$MODE" == "server" ]]; then
+    echo " 更新模式 : ${green}Server 转发模式${reset} (入站: ${INBOUND_LISTEN}:${INBOUND_PORT}, 节点映射: 8443->${PORT_8443}, 443->${PORT_443})"
+  else
+    echo " 更新模式 : ${aoi}Client 客户端模式${reset}"
+  fi
   echo ""
 
   # 1. 备份原有配置文件
@@ -275,10 +415,33 @@ main() {
     fi
   fi
 
-  # 自动修正 sing-box 1.8+ 兼容性问题 (如 Reality 客户端缺少 utls 配置)
-  if command -v python3 > /dev/null 2>&1; then
-    local fix_msg
-    fix_msg=$(python3 -c '
+  # Server 模式转换流程
+  if [[ "$MODE" == "server" ]]; then
+    echo "${aoi}info: 正在执行 Server 模式转换 (清除路由规则，过滤 443/8443 Reality 节点并映射本地端口，生成 ${INBOUND_PORT} 入站)...${reset}"
+    ensure_python_converter
+
+    local py_cmd=("python3" "$PYTHON_CONVERTER" "-i" "$TEMP_CONFIG" "-o" "$TEMP_CONFIG" "-e" "$CONFIG_PATH")
+    [[ -n "$INBOUND_PORT" ]] && py_cmd+=("--inbound-port" "$INBOUND_PORT")
+    [[ -n "$INBOUND_LISTEN" ]] && py_cmd+=("--inbound-listen" "$INBOUND_LISTEN")
+    [[ -n "$INBOUND_DOMAIN" ]] && py_cmd+=("--inbound-domain" "$INBOUND_DOMAIN")
+    [[ -n "$INBOUND_UUID" ]] && py_cmd+=("--inbound-uuid" "$INBOUND_UUID")
+    [[ -n "$INBOUND_PRIVKEY" ]] && py_cmd+=("--inbound-privkey" "$INBOUND_PRIVKEY")
+    [[ -n "$INBOUND_SHORTID" ]] && py_cmd+=("--inbound-shortid" "$INBOUND_SHORTID")
+    [[ -n "$PORT_8443" ]] && py_cmd+=("--port-8443" "$PORT_8443")
+    [[ -n "$PORT_443" ]] && py_cmd+=("--port-443" "$PORT_443")
+    [[ -n "$TARGET_IP" ]] && py_cmd+=("--target-ip" "$TARGET_IP")
+    [[ -n "$PORT_MAP" ]] && py_cmd+=("--port-map" "$PORT_MAP")
+
+    if ! "${py_cmd[@]}"; then
+      echo "${red}error: Server 模式配置转换失败！${reset}"
+      rm -f "$TEMP_CONFIG"
+      exit 1
+    fi
+  else
+    # Client 模式: 自动修正 sing-box 1.8+ 兼容性问题 (如 Reality 客户端缺少 utls 配置)
+    if command -v python3 > /dev/null 2>&1; then
+      local fix_msg
+      fix_msg=$(python3 -c '
 import sys, json
 
 config_file = sys.argv[1]
@@ -306,8 +469,9 @@ try:
 except Exception:
     pass
 ' "$TEMP_CONFIG" 2>&1 || true)
-    if [[ "$fix_msg" == *"fixed"* ]]; then
-      echo "${aoi}info: 已自动修正 Reality 出站节点缺失的 utls (fingerprint: chrome) 配置${reset}"
+      if [[ "$fix_msg" == *"fixed"* ]]; then
+        echo "${aoi}info: 已自动修正 Reality 出站节点缺失的 utls (fingerprint: chrome) 配置${reset}"
+      fi
     fi
   fi
 
@@ -356,6 +520,11 @@ except Exception:
     echo "${green}           sing-box 配置文件更新成功，服务运行正常！${reset}"
     echo "${green}================================================================${reset}"
     echo " 配置文件路径 : ${CONFIG_PATH}"
+    if [[ "$MODE" == "server" ]]; then
+      echo " 运行模式     : ${green}Server 转发网关模式 (入站端口: ${INBOUND_PORT})${reset}"
+    else
+      echo " 运行模式     : ${aoi}Client 客户端模式${reset}"
+    fi
     if [[ -n "$BACKUP_FILE" ]]; then
       echo " 备份文件路径 : ${BACKUP_FILE}"
     fi
@@ -364,6 +533,11 @@ except Exception:
   else
     echo "${yellow}warning: 未检测到 systemctl 命令，无法自动重启服务。请手动重启 sing-box 服务。${reset}"
     echo " 配置文件路径 : ${CONFIG_PATH}"
+    if [[ "$MODE" == "server" ]]; then
+      echo " 运行模式     : ${green}Server 转发网关模式 (入站端口: ${INBOUND_PORT})${reset}"
+    else
+      echo " 运行模式     : ${aoi}Client 客户端模式${reset}"
+    fi
     if [[ -n "$BACKUP_FILE" ]]; then
       echo " 备份文件路径 : ${BACKUP_FILE}"
     fi
