@@ -33,10 +33,10 @@ else
   NC='\033[0m'
 fi
 
-log() { echo -e "${GREEN}[INFO]${NC} $1"; }
-warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log() { echo -e "${GREEN}[INFO]${NC} $1" >&2; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
 error() { echo -e "${RED}[ERROR]${NC} $1" >&2; }
-success() { echo -e "${GREEN}${BOLD}[SUCCESS]${NC} $1"; }
+success() { echo -e "${GREEN}${BOLD}[SUCCESS]${NC} $1" >&2; }
 
 # ===================== Paths & Constants =====================
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")
@@ -257,7 +257,19 @@ install_scripts() {
 #!/usr/bin/env bash
 # preferred-ip-tester CLI 快捷包装命令
 export CFST_BIN="${BIN_DIR}/cfst"
-exec "${py_exec}" "${INSTALL_SHARE_DIR}/process_ips.py" "\$@"
+
+VENV_PYTHON="${INSTALL_SHARE_DIR}/.venv/bin/python3"
+if [[ -x "\$VENV_PYTHON" ]]; then
+  PYTHON_BIN="\$VENV_PYTHON"
+elif [[ -x "${INSTALL_SHARE_DIR}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${INSTALL_SHARE_DIR}/.venv/bin/python"
+elif command -v python3 > /dev/null 2>&1; then
+  PYTHON_BIN="\$(command -v python3)"
+else
+  PYTHON_BIN="python3"
+fi
+
+exec "\$PYTHON_BIN" "${INSTALL_SHARE_DIR}/process_ips.py" "\$@"
 EOF
   chmod +x "${BIN_DIR}/preferred-ip-tester"
 
