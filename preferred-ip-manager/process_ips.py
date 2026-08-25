@@ -48,10 +48,42 @@ def log_error(msg: str):
 def log_step(msg: str):
     print(f"{get_time_prefix()} ==> {msg}...")
 
-# --- 默认全局配置 ---
-TG_TOOL = f'"{sys.executable}" ./telegram_tool.py'
+import shutil
+
+# --- 默认全局配置与路径查找 ---
+def find_cfst_binary() -> str:
+    """动态查找 cfst 二进制可执行文件"""
+    if os.getenv("CFST_BIN") and os.path.exists(os.getenv("CFST_BIN")):
+        return os.getenv("CFST_BIN")
+    which_cfst = shutil.which("cfst")
+    if which_cfst:
+        return which_cfst
+    if os.path.exists("/usr/local/bin/cfst"):
+        return "/usr/local/bin/cfst"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    local_cfst = os.path.join(script_dir, "cfst")
+    if os.path.exists(local_cfst):
+        return local_cfst
+    if os.path.exists("./cfst"):
+        return "./cfst"
+    return "cfst"
+
+def find_telegram_tool() -> str:
+    """动态查找 telegram_tool.py"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    local_tg = os.path.join(script_dir, "telegram_tool.py")
+    if os.path.exists(local_tg):
+        return f'"{sys.executable}" "{local_tg}"'
+    which_tg = shutil.which("telegram_tool.py")
+    if which_tg:
+        return f'"{sys.executable}" "{which_tg}"'
+    if os.path.exists("/usr/local/bin/telegram_tool.py"):
+        return f'"{sys.executable}" "/usr/local/bin/telegram_tool.py"'
+    return f'"{sys.executable}" ./telegram_tool.py'
+
+TG_TOOL = find_telegram_tool()
 DOWNLOAD_DIR = "./origin-iplist"
-CFST_BIN = "./cfst"
+CFST_BIN = find_cfst_binary()
 FINAL_TXT = "ip_result.txt"
 SUB_URL = os.getenv("CF_SUB_URL", "https://sub.19910417.xyz").rstrip('/')
 
@@ -636,6 +668,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # 通用参数
     parser.add_argument("--top", "-t", type=int, default=20, help="最终保留的最优 IP/端点数量")
     parser.add_argument("--yes", "-y", action="store_true", help="跳过所有确认提示，自动推送至订阅服务器")
+    parser.add_argument("--no-upload", "--no-push", "--local-only", dest="no_upload", action="store_true",
+                        help="仅在本地执行测速与同步 (如更新 cloudflare-access-tcp)，不调用远端 API 更新优选 IP 列表")
 
     return parser
 
@@ -700,6 +734,10 @@ def run_warp_workflow(args: argparse.Namespace):
         LocalAccessTCPManager.sync_preferred_ip(best_warp_443_ip, auto_yes=args.yes)
 
     # 确认并上传
+    if getattr(args, 'no_upload', False):
+        log_info(f"已指定 --no-upload 参数，跳过推送至远程订阅服务器。优选结果已保存至 {warp_output}")
+        return
+
     token = os.environ.get("CF_SUB_TOKEN")
     if not token:
         log_warn(f"未配置环境变量 CF_SUB_TOKEN，跳过推送操作。优选结果已保存至 {warp_output}")
@@ -772,6 +810,10 @@ def run_cdn_workflow(args: argparse.Namespace):
             log_info("本次优选未包含有效的 443 端口 IP，跳过 cloudflare-access-tcp 同步。")
 
         # 5. 确认并上传至订阅服务器
+        if getattr(args, 'no_upload', False):
+            log_info(f"已指定 --no-upload 参数，跳过推送至远程订阅服务器。优选结果已保存至 {FINAL_TXT}")
+            return
+
         token = os.environ.get("CF_SUB_TOKEN")
         if not token:
             log_warn(f"未配置环境变量 CF_SUB_TOKEN，跳过推送操作。优选结果已保存至 {FINAL_TXT}")

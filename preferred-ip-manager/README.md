@@ -176,6 +176,54 @@ python telegram_tool.py download -n 'CF中转' --limit 1 -o ./origin-iplist
 
 ---
 
+### 4. 自动化 Systemd 服务与定时优选同步 (`install.sh`)
+
+`install.sh` 提供了一键将测速脚本与依赖安装至 `/usr/local/bin` 并注册 Systemd 定时器的能力：
+
+#### 核心自动化机制
+1. **安装至系统全局路径**：
+   - 自动安装 Python 依赖（`requests`, `telethon`），并部署 `cfst`、`process_ips.py`、`warp_tester.py`、`telegram_tool.py` 至 `/usr/local/bin/`；
+   - 创建全局命令行快捷入口：`preferred-ip-tester` 与 `preferred-ip-sync`。
+2. **每日定时随机测速**：
+   - 配置 Systemd Timer，**每天北京时间凌晨 02:00 ~ 06:00 随机时刻**自动执行（`RandomizedDelaySec=4h`，分散请求避免网络风暴）。
+3. **本地联动同步**：
+   - 测速完成后自动筛选 443 端口最优 IP 写入 `/etc/cloudflare-access-tcp/access.env` 并热重载 `cloudflare-access-tcp` 服务。
+4. **安全隔离（禁用远端 API 覆盖）**：
+   - 定时任务默认附带 `--no-upload` 参数，**严格禁止向远端 Cloudflare Worker 推送更新**，仅在本地服务生效。
+
+#### 一键安装与服务管理
+
+```bash
+# 1. 一键安装组件并启动每日定时服务 (需 root 权限)
+sudo bash install.sh --install
+
+# 2. 查看定时器计划、下次执行时间与服务状态
+sudo bash install.sh --status
+
+# 3. 立即手动触发一次测速与本地同步 (支持实时查看日志)
+sudo bash install.sh --run-now
+
+# 4. 查看最近测速服务日志
+sudo bash install.sh --logs
+
+# 5. 卸载定时器与服务
+sudo bash install.sh --uninstall -y
+```
+
+#### 定时任务配置文件 (`/etc/preferred-ip-manager/config.env`)
+可通过修改该配置文件调整定时任务参数：
+```bash
+TARGET="cdn"               # 优选目标: cdn 或 warp
+MODE="speed"               # 测速模式: speed 或 latency
+PORTS="443"                # 待测端口
+CONCURRENCY="200"          # 并发数
+MIN_SPEED="5.0"            # 最低达标速度 (MB/s)
+MAX_DELAY="300"            # 最大允许延迟 (ms)
+EXTRA_ARGS="--skip-tg --no-upload -y"  # 严格本地运行参数
+```
+
+---
+
 ## 🌐 Cloudflare Pages 专属测速网站部署指南
 
 本项目内置了专为 `CloudflareSpeedTest` (`cfst`) 设计的 Cloudflare Pages 测速站点，**100% 契合 Cloudflare 免费版限制**。

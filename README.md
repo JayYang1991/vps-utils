@@ -199,7 +199,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 | **[cloudflared-tunnel](./cloudflared-tunnel)** | Cloudflare Official Agent 部署，实现 Tunnel 内网穿透与公网服务发布 | `install.sh` | [cloudflared-tunnel 详细指南](./cloudflared-tunnel/README.md) |
 | **[cloudflare-zero-trust](./cloudflare-zero-trust)** | Cloudflare Zero Trust (Cloudflare One) 套件：VPS 出口 NAT 转发、SOCKS5 客户端与诊断工具 | `setup-cloudflare-one.sh`<br>`docker-run.sh`<br>`test-masque.py`<br>`install.sh` | [cloudflare-zero-trust 详细指南](./cloudflare-zero-trust/README.md) |
 | **[subconverter](./subconverter)** | 通用代理订阅格式转换后端服务（带 Systemd 一键安装与端口配置） | `install.sh` | [subconverter 详细指南](./subconverter/README.md) |
-| **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理、CDN 测速与 WARP Endpoint 优选同步工具 | `sub-worker.js`<br>`warp_tester.py`<br>`process_ips.py`<br>`telegram_tool.py` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
+| **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理、CDN 测速与 WARP Endpoint 优选同步工具 | `install.sh`<br>`process_ips.py`<br>`warp_tester.py`<br>`sub-worker.js` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
 | **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`uninstall.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
 | **[cloudflare-access-tcp](./cloudflare-access-tcp)** | 代理客户端 Cloudflare Access TCP 转发容器 (Ubuntu 24.04 + Systemd 自启) | `install.sh`<br>`docker-entrypoint.sh`<br>`Dockerfile` | [cloudflare-access-tcp 详细指南](./cloudflare-access-tcp/README.md) |
 
@@ -230,6 +230,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 ### 5. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 与 WARP Endpoint 管理
 
+- **`install.sh`**：一键部署测速组件与 Python 依赖至 `/usr/local/bin`，注册每日北京时间 02:00~06:00 随机测速与本地 `cloudflare-access-tcp` 同步的 Systemd 定时服务。
 - **`sub-worker.js`**：Cloudflare Worker 订阅分发与 WARP 端点管理服务端，提供现代化暗黑拟物后台、历史备份及客户端配置生成。
 - **`warp_tester.py`**：基于 RFC 9000 MASQUE/QUIC 的 Cloudflare WARP Anycast Endpoint 深度优选与测速引擎。
 - **`process_ips.py`**：全流程集成工具，支持一键调度 CDN IP 测速同步或 WARP Endpoint 优选同步。
@@ -296,8 +297,10 @@ vps-utils/
 │   └── install.sh                     # 自动化安装与端口配置脚本
 ├── preferred-ip-manager/               # 优选 IP 管理与测速工具
 │   ├── README.md                      # preferred-ip-manager 详细指南
+│   ├── install.sh                     # 自动安装与 Systemd 每日定时测速服务脚本
 │   ├── sub-worker.js                  # Cloudflare Worker 订阅服务
 │   ├── process_ips.py                 # 自动化测速与推送脚本
+│   ├── warp_tester.py                 # WARP MASQUE/QUIC 端点优选引擎
 │   └── telegram_tool.py               # Telegram 资源抓取脚本
 ├── singbox-sub-converter/              # sing-box 自适应订阅转换服务
 │   ├── README.md                      # singbox-sub-converter 详细指南
