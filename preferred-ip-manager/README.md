@@ -203,26 +203,41 @@ python3 process_ips.py --target cdn --tg-proxy socks5://127.0.0.1:1080 --mode sp
 4. **安全隔离（禁用远端 API 覆盖）**：
    - 定时任务默认附带 `--no-upload` 参数，**严格禁止向远端 Cloudflare Worker 推送更新**，仅在本地服务生效。
 
-#### 一键安装与服务管理
+#### 1. 一键安装与配置
 
 ```bash
-# 1. 默认一键安装组件并启动每日定时服务 (需 root 权限)
+# 默认一键安装组件并启动每日定时服务 (需 root 权限)
 sudo bash install.sh --install
 
-# 2. 安装定时服务并指定 Telegram 下载代理 (SOCKS5 / HTTP)
-sudo bash install.sh --install --proxy socks5://127.0.0.1:1080
+# 或安装时指定 Telegram 下载代理 (SOCKS5 / SOCKS5h / HTTP)
+sudo bash install.sh --install --proxy socks5h://127.0.0.1:1080
+```
 
-# 3. 查看定时器计划、下次执行时间与服务状态
-sudo bash install.sh --status
+#### 2. 全局日常运维命令 (`preferred-ip-manager` / `preferred-ip`)
 
-# 4. 立即手动触发一次测速与本地同步 (支持实时查看日志)
-sudo bash install.sh --run-now
+安装后系统内自动注册全局运维命令，**不再依赖 `install.sh` 脚本**，可在任意终端路径直接调用：
 
-# 5. 查看最近测速服务日志
-sudo bash install.sh --logs
+```bash
+# 1. 查看定时器计划、下次触发时间与服务状态
+preferred-ip-manager status
 
-# 6. 卸载定时器与服务
-sudo bash install.sh --uninstall -y
+# 2. 立即手动触发一次测速与本地同步 (并实时跟踪日志)
+sudo preferred-ip-manager run
+
+# 3. 查看最近测速服务日志 (-f 实时跟踪)
+preferred-ip-manager logs -f
+
+# 4. 查看或编辑配置文件
+preferred-ip-manager config
+sudo preferred-ip-manager config --edit
+
+# 5. 重启 / 启动 / 暂停定时任务
+sudo preferred-ip-manager restart
+sudo preferred-ip-manager stop
+sudo preferred-ip-manager start
+
+# 6. 一键卸载定时服务与所有组件
+sudo preferred-ip-manager uninstall -y
 ```
 
 #### 定时任务配置文件 (`/etc/preferred-ip-manager/config.env`)

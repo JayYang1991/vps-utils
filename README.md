@@ -231,6 +231,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 ### 5. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 与 WARP Endpoint 管理
 
 - **`install.sh`**：一键部署测速组件与 Python 依赖至 `/usr/local/bin`，注册每日北京时间 02:00~06:00 随机测速与本地 `cloudflare-access-tcp` 同步的 Systemd 定时服务。
+- **`preferred-ip-manager.sh`**：日常运维全局 CLI 命令（`preferred-ip-manager status/run/logs/restart/config/uninstall`），彻底解耦日常运维与安装脚本。
 - **`sub-worker.js`**：Cloudflare Worker 订阅分发与 WARP 端点管理服务端，提供现代化暗黑拟物后台、历史备份及客户端配置生成。
 - **`warp_tester.py`**：基于 RFC 9000 MASQUE/QUIC 的 Cloudflare WARP Anycast Endpoint 深度优选与测速引擎。
 - **`process_ips.py`**：全流程集成工具，支持一键调度 CDN IP 测速同步或 WARP Endpoint 优选同步。
@@ -298,6 +299,7 @@ vps-utils/
 ├── preferred-ip-manager/               # 优选 IP 管理与测速工具
 │   ├── README.md                      # preferred-ip-manager 详细指南
 │   ├── install.sh                     # 自动安装与 Systemd 每日定时测速服务脚本
+│   ├── preferred-ip-manager.sh        # 日常运维与服务管理 CLI 工具
 │   ├── sub-worker.js                  # Cloudflare Worker 订阅服务
 │   ├── process_ips.py                 # 自动化测速与推送脚本
 │   ├── warp_tester.py                 # WARP MASQUE/QUIC 端点优选引擎

@@ -273,10 +273,14 @@ exec "\$PYTHON_BIN" "${INSTALL_SHARE_DIR}/process_ips.py" "\$@"
 EOF
   chmod +x "${BIN_DIR}/preferred-ip-tester"
 
-  # 软链接 preferred-ip-sync 方便记忆调用
-  ln -sf "${BIN_DIR}/preferred-ip-tester" "${BIN_DIR}/preferred-ip-sync"
+  # 安装全局运维管理工具: /usr/local/bin/preferred-ip-manager 与 /usr/local/bin/preferred-ip
+  if [[ -f "${SCRIPT_DIR}/preferred-ip-manager.sh" ]]; then
+    cp -f "${SCRIPT_DIR}/preferred-ip-manager.sh" "${BIN_DIR}/preferred-ip-manager"
+    chmod +x "${BIN_DIR}/preferred-ip-manager"
+    ln -sf "${BIN_DIR}/preferred-ip-manager" "${BIN_DIR}/preferred-ip"
+  fi
 
-  success "核心组件与 CLI 命令安装完成: ${BIN_DIR}/preferred-ip-tester"
+  success "核心组件与 CLI 命令安装完成: ${BIN_DIR}/preferred-ip-manager, ${BIN_DIR}/preferred-ip-tester"
 }
 
 set_config_value() {
@@ -601,8 +605,8 @@ main() {
       else
         echo -e " • Telegram 代理 : 未配置 (直连)"
       fi
-      echo -e " • 手动测试 : ${CYAN}preferred-ip-tester${NC} 或 ${CYAN}sudo $0 --run-now${NC}"
-      echo -e " • 查看状态 : ${CYAN}sudo $0 --status${NC}"
+      echo -e " • 运维管理 : ${CYAN}preferred-ip-manager status | run | logs | restart${NC}"
+      echo -e " • 快速测速 : ${CYAN}preferred-ip-tester${NC}"
       echo -e " • 配置文件 : ${CONFIG_FILE}"
       echo -e "${GREEN}================================================================${NC}"
       ;;
