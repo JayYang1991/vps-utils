@@ -9,10 +9,11 @@
 #   支持两种模式：
 #     1. Client 模式（默认）：直接作为代理客户端使用（兼容 singbox-sub-converter / subconverter 格式）
 #     2. Server 模式（--mode server / --server）：转换为服务端网关转发模式：
-#        - 自动清除所有客户端路由与 DNS 规则
+#        - 自动清除原有客户端 DNS/Experimental 与默认路由，并配置精准入站分流路由
 #        - outbounds 节点仅保留 443 和 8443 端口的 VLESS+Reality 节点
 #        - 8443 端口节点重写为 127.0.0.1:5000，443 端口节点重写为 127.0.0.1:5001
-#        - 自动新增 1 个 VLESS+Reality 入站端口（默认 12345）
+#        - 自动新增 SOCKS5 本地入站 (127.0.0.1:1080) 与 2 个 VLESS+Reality 入站 (默认 12345, 12346)
+#        - 自动分流路由：SOCKS (1080) 与 VLESS (12345) 路由至 5000 出站；VLESS (12346) 路由至 5001 出站
 #        - 支持各项端口映射与入站参数自定义
 #
 #   1. 备份原配置文件至 /tmp 目录
@@ -52,6 +53,7 @@ MODE="client"
 
 # Server 模式参数
 INBOUND_PORT="12345"
+INBOUND_PORT_2="12346"
 INBOUND_LISTEN="::"
 INBOUND_DOMAIN=""
 INBOUND_UUID=""
@@ -96,13 +98,14 @@ show_help() {
   echo "  -h, --help                     显示本帮助信息"
   echo ""
   echo "Server 模式专属参数 (搭配 --mode server 或 --server 使用):"
-  echo "  --inbound-port PORT            VLESS Reality 入站监听端口 (默认: 12345)"
+  echo "  --inbound-port PORT            VLESS Reality 入站 1 监听端口 (默认: 12345, 路由至 5000 出站)"
+  echo "  --inbound-port-2 PORT          VLESS Reality 入站 2 监听端口 (默认: 12346, 路由至 5001 出站)"
   echo "  --inbound-listen ADDR          入站监听绑定地址 (默认: ::)"
   echo "  --inbound-domain DOMAIN        入站 Reality 伪装域名/SNI (默认自动继承或从节点提取)"
   echo "  --inbound-uuid UUID            入站 VLESS 用户 UUID (默认自动继承或从节点提取)"
   echo "  --inbound-privkey KEY          入站 Reality PrivateKey (默认自动继承或自动生成)"
   echo "  --inbound-shortid ID           入站 Reality Short ID (默认自动继承或从节点提取)"
-  echo "  --socks-port PORT              SOCKS5 入站监听端口 (默认: 1080)"
+  echo "  --socks-port PORT              SOCKS5 入站监听端口 (默认: 1080, 路由至 5000 出站)"
   echo "  --socks-listen ADDR            SOCKS5 入站监听绑定地址 (默认: 127.0.0.1)"
   echo "  --port-8443 PORT               原 8443 节点映射的目标本地端口 (默认: 5000)"
   echo "  --port-443 PORT                原 443 节点映射的目标本地端口 (默认: 5001)"
@@ -113,11 +116,11 @@ show_help() {
   echo "  1. 默认客户端订阅更新:"
   echo "     $0 http://154.12.34.56:8000/sub?token=my_secret_token"
   echo ""
-  echo "  2. 服务端模式订阅更新 (清除路由，保留 443/8443 Reality 节点并映射至 5001/5000，开启 12345 入站):"
+  echo "  2. 服务端模式订阅更新 (开启 1080 SOCKS + 12345/12346 Reality 入站，自动路由分流至 5000/5001 端口):"
   echo "     $0 http://154.12.34.56:8000/sub?token=my_secret_token --server"
   echo ""
   echo "  3. 自定义 Server 模式入站端口与映射目标:"
-  echo "     $0 -u \"http://154.12.34.56:8000/sub?token=my_secret_token\" --server --inbound-port 12345 --port-8443 5000 --port-443 5001 -y"
+  echo "     $0 -u \"http://154.12.34.56:8000/sub?token=my_secret_token\" --server --inbound-port 12345 --inbound-port-2 12346 --port-8443 5000 --port-443 5001 -y"
 }
 
 check_if_running_as_root() {
@@ -266,8 +269,12 @@ parse_arguments() {
         TIMEOUT="$2"
         shift 2
         ;;
-      --inbound-port)
+      --inbound-port|--inbound-port-1|--inbound-port1)
         INBOUND_PORT="$2"
+        shift 2
+        ;;
+      --inbound-port-2|--inbound-port2)
+        INBOUND_PORT_2="$2"
         shift 2
         ;;
       --inbound-listen)
@@ -375,7 +382,7 @@ main() {
   echo " 配置路径 : ${CONFIG_PATH}"
   echo " 备份目录 : ${BACKUP_DIR}"
   if [[ "$MODE" == "server" ]]; then
-    echo " 更新模式 : ${green}Server 转发模式${reset} (SOCKS: ${SOCKS_LISTEN}:${SOCKS_PORT}, Reality: ${INBOUND_LISTEN}:${INBOUND_PORT}, 节点映射: 8443->${PORT_8443}, 443->${PORT_443})"
+    echo " 更新模式 : ${green}Server 转发模式${reset} (SOCKS: ${SOCKS_LISTEN}:${SOCKS_PORT} -> ${PORT_8443}, Reality1: ${INBOUND_LISTEN}:${INBOUND_PORT} -> ${PORT_8443}, Reality2: ${INBOUND_LISTEN}:${INBOUND_PORT_2} -> ${PORT_443})"
   else
     echo " 更新模式 : ${aoi}Client 客户端模式${reset}"
   fi
@@ -429,11 +436,12 @@ main() {
 
   # Server 模式转换流程
   if [[ "$MODE" == "server" ]]; then
-    echo "${aoi}info: 正在执行 Server 模式转换 (清除路由规则，过滤 443/8443 Reality 节点并映射本地端口，生成 ${SOCKS_PORT} SOCKS 与 ${INBOUND_PORT} Reality 入站)...${reset}"
+    echo "${aoi}info: 正在执行 Server 模式转换 (分流路由: SOCKS/${INBOUND_PORT}->${PORT_8443}, ${INBOUND_PORT_2}->${PORT_443})...${reset}"
     ensure_python_converter
 
     local py_cmd=("python3" "$PYTHON_CONVERTER" "-i" "$TEMP_CONFIG" "-o" "$TEMP_CONFIG" "-e" "$CONFIG_PATH")
     [[ -n "$INBOUND_PORT" ]] && py_cmd+=("--inbound-port" "$INBOUND_PORT")
+    [[ -n "$INBOUND_PORT_2" ]] && py_cmd+=("--inbound-port-2" "$INBOUND_PORT_2")
     [[ -n "$INBOUND_LISTEN" ]] && py_cmd+=("--inbound-listen" "$INBOUND_LISTEN")
     [[ -n "$INBOUND_DOMAIN" ]] && py_cmd+=("--inbound-domain" "$INBOUND_DOMAIN")
     [[ -n "$INBOUND_UUID" ]] && py_cmd+=("--inbound-uuid" "$INBOUND_UUID")
@@ -535,7 +543,7 @@ except Exception:
     echo "${green}================================================================${reset}"
     echo " 配置文件路径 : ${CONFIG_PATH}"
     if [[ "$MODE" == "server" ]]; then
-      echo " 运行模式     : ${green}Server 转发网关模式 (SOCKS5 端口: ${SOCKS_PORT}, Reality 端口: ${INBOUND_PORT})${reset}"
+      echo " 运行模式     : ${green}Server 转发网关模式 (SOCKS5: ${SOCKS_PORT} -> ${PORT_8443}, Reality: ${INBOUND_PORT} -> ${PORT_8443}, Reality: ${INBOUND_PORT_2} -> ${PORT_443})${reset}"
     else
       echo " 运行模式     : ${aoi}Client 客户端模式${reset}"
     fi
@@ -548,7 +556,7 @@ except Exception:
     echo "${yellow}warning: 未检测到 systemctl 命令，无法自动重启服务。请手动重启 sing-box 服务。${reset}"
     echo " 配置文件路径 : ${CONFIG_PATH}"
     if [[ "$MODE" == "server" ]]; then
-      echo " 运行模式     : ${green}Server 转发网关模式 (SOCKS5 端口: ${SOCKS_PORT}, Reality 端口: ${INBOUND_PORT})${reset}"
+      echo " 运行模式     : ${green}Server 转发网关模式 (SOCKS5: ${SOCKS_PORT} -> ${PORT_8443}, Reality: ${INBOUND_PORT} -> ${PORT_8443}, Reality: ${INBOUND_PORT_2} -> ${PORT_443})${reset}"
     else
       echo " 运行模式     : ${aoi}Client 客户端模式${reset}"
     fi

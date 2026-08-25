@@ -5,12 +5,15 @@ convert_sub_to_server.py
 sing-box 订阅配置转 Server 模式转换脚本
 
 功能：
-1. 删除所有客户端路由与 DNS 规则 (route, dns, experimental)
+1. 清除原有客户端 DNS/Experimental 与默认路由，并配置精准入站分流路由规则
 2. outbounds 节点只保留 443 和 8443 端口的 vless+reality 协议节点 (支持自定义端口映射)
-3. 8443 端口站点默认修改为 5000 端口，IP 修改为 127.0.0.1
-4. 443 端口站点默认修改为 5001 端口，IP 修改为 127.0.0.1
-5. 新增 1 个 vless+reality 入站端口（默认 12345）与 1 个 SOCKS5 入站端口（默认 1080）
-6. 支持丰富的命令行参数配置与现有配置继承
+3. 8443 端口站点默认修改为 5000 端口，IP 修改为 127.0.0.1 (tag: vless-out-5000)
+4. 443 端口站点默认修改为 5001 端口，IP 修改为 127.0.0.1 (tag: vless-out-5001)
+5. 新增 2 个 vless+reality 入站（默认 12345 和 12346 端口）与 1 个 SOCKS5 本地入站（默认 127.0.0.1:1080）
+6. 自动配置分流路由规则：
+   - socks-in (1080) 与 vless-in-12345 请求路由至 5000 出站 (vless-out-5000)
+   - vless-in-12346 请求路由至 5001 出站 (vless-out-5001)
+7. 支持丰富的命令行参数配置与现有配置继承
 """
 
 import sys
@@ -112,7 +115,9 @@ def parse_port_mappings(mapping_str, default_8443, default_443, default_ip):
     """
     mappings = {
         8443: {"host": default_ip, "port": default_8443},
-        443: {"host": default_ip, "port": default_443}
+        443: {"host": default_ip, "port": default_443},
+        default_8443: {"host": default_ip, "port": default_8443},
+        default_443: {"host": default_ip, "port": default_443}
     }
 
     if not mapping_str:
@@ -159,6 +164,7 @@ def convert_to_server_config(
     output_path=None,
     existing_config_path="/etc/sing-box/config.json",
     inbound_port=12345,
+    inbound_port_2=12346,
     inbound_listen="::",
     inbound_domain=None,
     inbound_uuid=None,
@@ -182,8 +188,7 @@ def convert_to_server_config(
     if not isinstance(data, dict):
         raise ValueError("配置文件内容不是合法的 JSON 对象")
 
-    # 1. 删除所有客户端路由与 DNS 规则
-    data.pop("route", None)
+    # 1. 删除旧客户端路由与 DNS 规则
     data.pop("dns", None)
     data.pop("experimental", None)
 
@@ -199,6 +204,7 @@ def convert_to_server_config(
     # 2. 筛选并重写 outbounds 节点
     original_outbounds = data.get("outbounds", [])
     filtered_outbounds = []
+    port_to_outbound_tag = {}
 
     extracted_outbound_uuid = None
     extracted_outbound_domain = None
@@ -228,10 +234,15 @@ def convert_to_server_config(
                     elif isinstance(s_id, str):
                         extracted_outbound_shortid = s_id
 
-                # 重写 outbound 端口与目标 IP
+                # 重写 outbound 端口与目标 IP 并规范 tag
                 target_rule = mappings[server_port]
+                target_port = target_rule["port"]
+                outbound_tag = f"vless-out-{target_port}"
+
+                ob["tag"] = outbound_tag
                 ob["server"] = target_rule["host"]
-                ob["server_port"] = target_rule["port"]
+                ob["server_port"] = target_port
+                port_to_outbound_tag[target_port] = outbound_tag
 
                 # 补全 sing-box 1.8+ utls 规范
                 if "utls" not in tls or not isinstance(tls["utls"], dict) or not tls["utls"].get("enabled"):
@@ -239,12 +250,24 @@ def convert_to_server_config(
 
                 filtered_outbounds.append(ob)
 
-    if not filtered_outbounds:
-        sys.stderr.write(f"[WARN] 警告: 未在订阅配置中检索到匹配端口 ({list(mappings.keys())}) 的 vless+reality 节点！\n")
-    
+    # 严格校验：确保 5000 和 5001 端口对应的 VLESS 出站站点都存在
+    missing_ports = []
+    if port_8443 not in port_to_outbound_tag:
+        missing_ports.append(f"{port_8443} 端口 (原 8443/{port_8443})")
+    if port_443 not in port_to_outbound_tag:
+        missing_ports.append(f"{port_443} 端口 (原 443/{port_443})")
+
+    if missing_ports:
+        raise ValueError(
+            f"校验失败: 下载的配置文件中缺少必需的 VLESS 协议站点！\n"
+            f"  缺失目标站点: {', '.join(missing_ports)}\n"
+            f"  已检索到匹配站点: {[f'{port} (tag: {tag})' for port, tag in port_to_outbound_tag.items()]}\n"
+            f"  Server 模式要求订阅源必须同时包含映射到 {port_8443} (原 8443) 和 {port_443} (原 443) 端口的 VLESS Reality 节点。"
+        )
+
     data["outbounds"] = filtered_outbounds
 
-    # 3. 准备生成入站节点 (1 个 SOCKS5 1080 入站 + 1 个 VLESS+Reality 12345 入站)
+    # 3. 准备生成入站节点 (SOCKS 1080 + VLESS 12345 + VLESS 12346)
     existing_info = extract_from_existing_config(existing_config_path)
 
     # 决策 UUID
@@ -266,6 +289,8 @@ def convert_to_server_config(
     final_handshake_port = int(inbound_handshake_port or 443)
 
     inbound_blocks = []
+    vless_1_tag = f"vless-in-{inbound_port}"
+    vless_2_tag = f"vless-in-{inbound_port_2}" if inbound_port_2 and int(inbound_port_2) > 0 else None
 
     # (1) SOCKS5 入站 (默认 1080 本地监听)
     if socks_port and int(socks_port) > 0:
@@ -277,10 +302,10 @@ def convert_to_server_config(
             "listen_port": int(socks_port)
         })
 
-    # (2) VLESS + Reality 入站 (默认 12345)
+    # (2) VLESS + Reality 入站 1 (默认 12345 端口 -> 路由至 5000)
     inbound_blocks.append({
         "type": "vless",
-        "tag": "vless-reality-in",
+        "tag": vless_1_tag,
         "listen": inbound_listen,
         "listen_port": int(inbound_port),
         "users": [
@@ -306,7 +331,73 @@ def convert_to_server_config(
         }
     })
 
+    # (3) VLESS + Reality 入站 2 (默认 12346 端口 -> 路由至 5001)
+    if vless_2_tag:
+        inbound_blocks.append({
+            "type": "vless",
+            "tag": vless_2_tag,
+            "listen": inbound_listen,
+            "listen_port": int(inbound_port_2),
+            "users": [
+                {
+                    "uuid": final_uuid,
+                    "flow": "xtls-rprx-vision"
+                }
+            ],
+            "tls": {
+                "enabled": True,
+                "server_name": final_domain,
+                "reality": {
+                    "enabled": True,
+                    "handshake": {
+                        "server": final_handshake_server,
+                        "server_port": final_handshake_port
+                    },
+                    "private_key": final_privkey,
+                    "short_id": [
+                        final_shortid
+                    ]
+                }
+            }
+        })
+
     data["inbounds"] = inbound_blocks
+
+    # 4. 配置分流路由规则
+    # 出站目标 tag (安全回退)
+    available_tags = [ob.get("tag") for ob in filtered_outbounds if ob.get("tag")]
+    target_out_5000 = port_to_outbound_tag.get(port_8443, f"vless-out-{port_8443}")
+    target_out_5001 = port_to_outbound_tag.get(port_443, f"vless-out-{port_443}")
+
+    if target_out_5000 not in available_tags and available_tags:
+        target_out_5000 = available_tags[0]
+    if target_out_5001 not in available_tags and available_tags:
+        target_out_5001 = available_tags[-1]
+
+    route_rules = []
+
+    # 规则 1: socks-in (1080) 与 vless-in-12345 -> 路由至 5000 端口出站
+    inbounds_5000 = []
+    if socks_port and int(socks_port) > 0:
+        inbounds_5000.append("socks-in")
+    inbounds_5000.append(vless_1_tag)
+
+    route_rules.append({
+        "inbound": inbounds_5000,
+        "outbound": target_out_5000
+    })
+
+    # 规则 2: vless-in-12346 -> 路由至 5001 端口出站
+    if vless_2_tag:
+        route_rules.append({
+            "inbound": [vless_2_tag],
+            "outbound": target_out_5001
+        })
+
+    data["route"] = {
+        "rules": route_rules,
+        "final": target_out_5000
+    }
 
     # 输出文件
     target_out = output_path or input_path
@@ -317,19 +408,22 @@ def convert_to_server_config(
     print("================================================")
     print("✅ 配置文件已成功转换为 Server 转发模式！")
     print("================================================")
+    actual_socks_listen = socks_listen if socks_listen else "127.0.0.1"
     if socks_port and int(socks_port) > 0:
-        actual_socks_listen = socks_listen if socks_listen else "127.0.0.1"
-        print(f" 入站监听 [1] : {actual_socks_listen}:{socks_port} (SOCKS5 本地协议)")
-        print(f" 入站监听 [2] : {inbound_listen}:{inbound_port} (VLESS + Reality 协议)")
-    else:
-        print(f" 入站监听 : {inbound_listen}:{inbound_port} (VLESS + Reality 协议)")
-    print(f" 入站 SNI  : {final_domain}")
-    print(f" 入站 UUID : {final_uuid}")
+        print(f" 入站监听 [1] : {actual_socks_listen}:{socks_port} (SOCKS5 本地) -> 路由至 {target_out_5000}")
+    print(f" 入站监听 [2] : {inbound_listen}:{inbound_port} (VLESS+Reality) -> 路由至 {target_out_5000}")
+    if vless_2_tag:
+        print(f" 入站监听 [3] : {inbound_listen}:{inbound_port_2} (VLESS+Reality) -> 路由至 {target_out_5001}")
+    print(f" 入站 SNI    : {final_domain}")
+    print(f" 入站 UUID   : {final_uuid}")
     print(f" 入站 ShortID: {final_shortid}")
-    print(f" 路由状态 : 已清除所有路由规则 (直连全部出站)")
+    print(f" 路由分流规则:")
+    print(f"   - 入站 [{', '.join(inbounds_5000)}] -> {target_out_5000}")
+    if vless_2_tag:
+        print(f"   - 入站 [{vless_2_tag}] -> {target_out_5001}")
     print(f" 出站节点 : 保留 {len(filtered_outbounds)} 个 VLESS+Reality 转发节点:")
     for idx, ob in enumerate(filtered_outbounds, 1):
-        print(f"   [{idx}] {ob.get('tag', 'vless-reality')} -> {ob.get('server')}:{ob.get('server_port')}")
+        print(f"   [{idx}] {ob.get('tag')} -> {ob.get('server')}:{ob.get('server_port')}")
     print("================================================")
 
     return target_out
@@ -339,7 +433,8 @@ def main():
     parser.add_argument("-i", "--input", required=True, help="输入的 sing-box 订阅配置文件路径")
     parser.add_argument("-o", "--output", help="输出的配置文件路径 (默认直接覆盖输入文件)")
     parser.add_argument("-e", "--existing-config", default="/etc/sing-box/config.json", help="宿主机现有配置文件路径 (默认: /etc/sing-box/config.json)")
-    parser.add_argument("--inbound-port", type=int, default=12345, help="VLESS Reality 入站监听端口 (默认: 12345)")
+    parser.add_argument("--inbound-port", "--inbound-port-1", type=int, default=12345, dest="inbound_port", help="VLESS Reality 入站 1 监听端口 (默认: 12345, 路由至 5000)")
+    parser.add_argument("--inbound-port-2", type=int, default=12346, help="VLESS Reality 入站 2 监听端口 (默认: 12346, 路由至 5001)")
     parser.add_argument("--inbound-listen", default="::", help="入站监听地址 (默认: ::)")
     parser.add_argument("--inbound-domain", "--inbound-sni", dest="inbound_domain", help="入站 Reality 伪装域名/SNI")
     parser.add_argument("--inbound-uuid", help="入站 VLESS 用户 UUID")
@@ -362,6 +457,7 @@ def main():
             output_path=args.output,
             existing_config_path=args.existing_config,
             inbound_port=args.inbound_port,
+            inbound_port_2=args.inbound_port_2,
             inbound_listen=args.inbound_listen,
             inbound_domain=args.inbound_domain,
             inbound_uuid=args.inbound_uuid,
