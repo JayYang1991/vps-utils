@@ -60,7 +60,7 @@ PY_VER="$($PYTHON_EXEC --version 2>&1)"
 echo "🔍 最终选定的 Python 解释器: $PY_VER ($PYTHON_EXEC)"
 
 # 2. 需要检查与安装的第三方依赖包 (空格分隔字符串，完美兼容 dash/sh)
-DEPENDENCIES="requests telethon"
+DEPENDENCIES="requests telethon python_socks"
 missing_deps=""
 
 echo "⚙️ 正在检查 Python 依赖包..."
@@ -70,7 +70,11 @@ for dep in $DEPENDENCIES; do
         echo "✅ [已存在] 依赖包 '$dep' 已安装，跳过。"
     else
         echo "⚠️ [缺失] 依赖包 '$dep' 未安装。"
-        missing_deps="$missing_deps $dep"
+        if [ "$dep" = "python_socks" ]; then
+            missing_deps="$missing_deps python-socks[asyncio]"
+        else
+            missing_deps="$missing_deps $dep"
+        fi
     fi
 done
 

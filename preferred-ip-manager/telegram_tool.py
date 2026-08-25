@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import time
 import logging
+import urllib.parse
 from telethon import TelegramClient, utils
 from telethon.network.mtprotosender import MTProtoSender
 from telethon.tl.functions.upload import GetFileRequest
@@ -15,6 +16,55 @@ from telethon.errors import AuthKeyNotFound
 API_ID = os.getenv('TG_API_ID')
 API_HASH = os.getenv('TG_API_HASH')
 SESSION_NAME = '/home/jason/user_data/config/telegram/my_tg_session'
+
+def parse_proxy(proxy_str):
+    """
+    解析代理配置字符串为 Telethon / python-socks 兼容字典。
+    支持格式:
+      socks5://127.0.0.1:1080
+      socks5h://127.0.0.1:1080 (支持远程 DNS 解析)
+      socks5://user:pass@127.0.0.1:1080
+      http://127.0.0.1:7890
+      http://user:pass@127.0.0.1:7890
+      socks4://127.0.0.1:1080
+      127.0.0.1:1080 (默认为 socks5)
+    """
+    if not proxy_str:
+        return None
+    proxy_str = str(proxy_str).strip()
+    if not proxy_str:
+        return None
+    
+    if '://' not in proxy_str:
+        proxy_str = 'socks5://' + proxy_str
+    
+    try:
+        parsed = urllib.parse.urlparse(proxy_str)
+        scheme = (parsed.scheme or 'socks5').lower()
+        
+        if scheme in ('socks5', 'socks5h'):
+            proxy_type = 'socks5'
+        elif scheme in ('socks4', 'socks4a'):
+            proxy_type = 'socks4'
+        elif scheme in ('http', 'https'):
+            proxy_type = 'http'
+        else:
+            proxy_type = scheme
+            
+        res = {
+            'proxy_type': proxy_type,
+            'addr': parsed.hostname or '127.0.0.1',
+            'port': parsed.port or (1080 if 'socks' in proxy_type else 8080),
+        }
+        if parsed.username:
+            res['username'] = urllib.parse.unquote(parsed.username)
+        if parsed.password:
+            res['password'] = urllib.parse.unquote(parsed.password)
+        res['rdns'] = True
+        return res
+    except Exception as e:
+        print(f"⚠️ [WARN] 代理格式解析异常 ({proxy_str}): {e}")
+        return None
 
 # 检查配置的函数
 def check_config():
@@ -428,15 +478,18 @@ async def show_messages(client, chat_id, limit):
 
 async def main():
     parser = argparse.ArgumentParser(description="Telegram 助手: 列表获取、预览与下载")
+    parser.add_argument("--proxy", "-p", type=str, default="", help="指定连接 Telegram 的代理 (例如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890，亦可设置环境变量 TG_PROXY/ALL_PROXY)")
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
     # List 命令
-    subparsers.add_parser("list", help="显示最近的聊天对话列表")
+    list_parser = subparsers.add_parser("list", help="显示最近的聊天对话列表")
+    list_parser.add_argument("--proxy", "-p", type=str, default="", help="指定代理地址")
 
     # Show 命令
     show_parser = subparsers.add_parser("show", help="展示指定聊天的消息和资源列表")
     show_parser.add_argument("--id", type=int, required=True, help="目标聊天的 ID")
     show_parser.add_argument("--limit", "-l", type=int, default=20, help="展示的消息数量 (默认: 20)")
+    show_parser.add_argument("--proxy", "-p", type=str, default="", help="指定代理地址")
 
     # Download 命令
     dl_parser = subparsers.add_parser("download", help="下载指定聊天的文件")
@@ -449,17 +502,25 @@ async def main():
     dl_parser.add_argument("--mode", "-m", choices=["parallel", "standard"], default="parallel", help="大文件下载模式: parallel (并行, 默认) 或 standard (标准)")
     dl_parser.add_argument("--chunk-size", type=int, default=512, help="分块大小 (KB, 默认: 512)")
     dl_parser.add_argument("--concurrency", "-c", type=int, default=4, help="并发线程数 (默认: 4)")
+    dl_parser.add_argument("--proxy", "-p", type=str, default="", help="指定代理地址 (例如 socks5://127.0.0.1:1080)")
 
     args = parser.parse_args()
 
     if not check_config():
         return
 
+    # 解析代理配置 (命令行参数优先，环境变量兜底)
+    proxy_str = getattr(args, "proxy", "") or os.getenv('TG_PROXY') or os.getenv('ALL_PROXY') or os.getenv('all_proxy') or os.getenv('HTTPS_PROXY') or os.getenv('https_proxy') or os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+    proxy_config = parse_proxy(proxy_str)
+    if proxy_config:
+        print(f"🌐 [INFO] 正在通过代理连接 Telegram: {proxy_config['proxy_type']}://{proxy_config['addr']}:{proxy_config['port']}")
+
     # 初始化 Client 时增加自动重连和无限重试
     client = TelegramClient(
         SESSION_NAME, 
         API_ID, 
         API_HASH,
+        proxy=proxy_config,
         connection_retries=None, # 无限重试连接
         retry_delay=2            # 重试间隔
     )

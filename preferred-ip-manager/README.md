@@ -166,12 +166,24 @@ python3 process_ips.py --target warp --yes
 
 ### 3. Telegram 资源下载与管理助手 (`telegram_tool.py`)
 
-```bash
-# 查看最近的对话/频道列表
-python telegram_tool.py list
+支持直接连接或通过 **SOCKS5 / SOCKS5h (远程 DNS 解析) / HTTP / SOCKS4** 代理连接 Telegram 下载候选 IP 资源：
 
-# 按频道名称搜索并下载包含 "CF中转" 关键字的最新 1 个文件
+```bash
+# 1. 查看最近的对话/频道列表 (通过 SOCKS5h 远程 DNS 代理)
+python telegram_tool.py list --proxy socks5h://127.0.0.1:1080
+
+# 2. 按频道名称搜索并下载包含 "CF中转" 关键字的最新文件 (通过 HTTP 代理)
+python telegram_tool.py download -n 'CF中转' --limit 1 -o ./origin-iplist --proxy http://127.0.0.1:7890
+
+# 3. 通过环境变量设置默认代理 (避免每次手动输入 --proxy)
+export TG_PROXY="socks5h://127.0.0.1:1080"
 python telegram_tool.py download -n 'CF中转' --limit 1 -o ./origin-iplist
+```
+
+在 `process_ips.py` 中也可直接使用 `--tg-proxy` / `--proxy` 参数：
+```bash
+# 执行 CDN 测速流程，并指定通过本地 1080 端口 SOCKS5 代理下载 Telegram 资源
+python3 process_ips.py --target cdn --tg-proxy socks5://127.0.0.1:1080 --mode speed --top 20
 ```
 
 ---
@@ -194,19 +206,22 @@ python telegram_tool.py download -n 'CF中转' --limit 1 -o ./origin-iplist
 #### 一键安装与服务管理
 
 ```bash
-# 1. 一键安装组件并启动每日定时服务 (需 root 权限)
+# 1. 默认一键安装组件并启动每日定时服务 (需 root 权限)
 sudo bash install.sh --install
 
-# 2. 查看定时器计划、下次执行时间与服务状态
+# 2. 安装定时服务并指定 Telegram 下载代理 (SOCKS5 / HTTP)
+sudo bash install.sh --install --proxy socks5://127.0.0.1:1080
+
+# 3. 查看定时器计划、下次执行时间与服务状态
 sudo bash install.sh --status
 
-# 3. 立即手动触发一次测速与本地同步 (支持实时查看日志)
+# 4. 立即手动触发一次测速与本地同步 (支持实时查看日志)
 sudo bash install.sh --run-now
 
-# 4. 查看最近测速服务日志
+# 5. 查看最近测速服务日志
 sudo bash install.sh --logs
 
-# 5. 卸载定时器与服务
+# 6. 卸载定时器与服务
 sudo bash install.sh --uninstall -y
 ```
 
@@ -220,6 +235,7 @@ CONCURRENCY="200"          # 并发数
 MIN_SPEED="5.0"            # 最低达标速度 (MB/s)
 MAX_DELAY="300"            # 最大允许延迟 (ms)
 EXTRA_ARGS="--skip-tg --no-upload -y"  # 严格本地运行参数
+TG_PROXY="socks5://127.0.0.1:1080"     # Telegram 下载代理 (可选)
 ```
 
 ---

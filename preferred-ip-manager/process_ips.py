@@ -345,7 +345,7 @@ class IPSourceManager:
         return port_groups
 
     @classmethod
-    def collect_ips(cls, skip_tg: bool, input_file: Optional[str] = None, allowed_ports: Optional[List[str]] = None, auto_yes: bool = False) -> Dict[str, List[Tuple[str, str]]]:
+    def collect_ips(cls, skip_tg: bool, input_file: Optional[str] = None, allowed_ports: Optional[List[str]] = None, auto_yes: bool = False, tg_proxy: str = "") -> Dict[str, List[Tuple[str, str]]]:
         """汇总候选 IP 池并根据端口白名单进行筛选"""
         groups = collections.defaultdict(list)
         file_ip_count = 0
@@ -359,7 +359,8 @@ class IPSourceManager:
             file_ip_count = sum(len(v) for v in groups.values())
             log_info(f"从指定本地文件中成功解析到 {file_ip_count} 个有效 IP 候选")
         elif not skip_tg:
-            download_cmd = f"{TG_TOOL} download -n 'CF中转' --limit 1 -o {DOWNLOAD_DIR}"
+            proxy_flag = f" --proxy '{tg_proxy}'" if tg_proxy else ""
+            download_cmd = f"{TG_TOOL} download -n 'CF中转' --limit 1 -o {DOWNLOAD_DIR}{proxy_flag}"
             run_command(download_cmd, "从 Telegram 下载最新的 IP 列表")
 
             files = glob.glob(os.path.join(DOWNLOAD_DIR, "*.txt"))
@@ -648,6 +649,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     cdn_group.add_argument("--skip-tg", "--skip-telegram", "--sub-only", dest="skip_tg", action="store_true",
                            default=os.getenv("SKIP_TG", "").lower() in ("true", "1", "yes"),
                            help="跳过从 Telegram 下载文件，仅从订阅服务器获取现有及历史 IP 列表进行测速")
+    cdn_group.add_argument("--tg-proxy", "--proxy", dest="tg_proxy",
+                           default=os.getenv("TG_PROXY", ""),
+                           help="从 Telegram 下载文件时使用的代理 (例如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890，支持环境变量 TG_PROXY/ALL_PROXY)")
     cdn_group.add_argument("--httping", action="store_true",
                            help="[延迟模式可选] 使用 HTTPing 代替 TCPing 测量延迟 (默认使用 TCPing)")
     cdn_group.add_argument("--no-fallback", dest="fallback", action="store_false", default=True,
@@ -763,7 +767,8 @@ def run_cdn_workflow(args: argparse.Namespace):
         skip_tg=args.skip_tg or bool(args.input_file),
         input_file=args.input_file,
         allowed_ports=allowed_ports,
-        auto_yes=args.yes
+        auto_yes=args.yes,
+        tg_proxy=args.tg_proxy
     )
 
     if not any(groups.values()):

@@ -5,10 +5,11 @@
 #
 # 功能：
 # 1. 自动检测系统环境，安装 Python 运行依赖与测速核心 (cfst, process_ips.py, warp_tester.py, telegram_tool.py) 到 /usr/local/bin
-# 2. 部署 Systemd Timer 定时器，每天北京时间凌晨 02:00 至 06:00 随机时间点执行测速
-# 3. 自动将 443 端口最优 IP 写入 /etc/cloudflare-access-tcp/access.env 并热重载 cloudflare-access-tcp 服务
-# 4. 默认严格禁用远端 API 推送 (--no-upload)，仅在本地生效与同步
-# 5. 提供完整生命周期管理 (--install, --uninstall, --status, --run-now, --logs)
+# 2. 支持在安装时直接指定代理参数 (--proxy / --tg-proxy)，供 Telegram 资源下载与加速
+# 3. 部署 Systemd Timer 定时器，每天北京时间凌晨 02:00 至 06:00 随机时间点执行测速
+# 4. 自动将 443 端口最优 IP 写入 /etc/cloudflare-access-tcp/access.env 并热重载 cloudflare-access-tcp 服务
+# 5. 默认严格禁用远端 API 推送 (--no-upload)，仅在本地生效与同步
+# 6. 提供完整生命周期管理 (--install, --uninstall, --status, --run-now, --logs)
 #
 # GitHub: https://github.com/JayYang1991/vps-utils
 #
@@ -52,6 +53,16 @@ TIMER_FILE="/etc/systemd/system/${SERVICE_NAME}.timer"
 ACTION="install"
 ASSUME_YES=false
 
+# 可选自定义配置项
+TG_PROXY_ARG="${TG_PROXY:-}"
+MODE_ARG="speed"
+PORTS_ARG="443"
+CONCURRENCY_ARG="200"
+MIN_SPEED_ARG="5.0"
+MAX_DELAY_ARG="300"
+MAX_LOSS_ARG="1.0"
+TOP_COUNT_ARG="20"
+
 show_help() {
   echo -e "${CYAN}${BOLD}preferred-ip-manager 优选测速与 Systemd 定时服务管理脚本${NC}"
   echo ""
@@ -65,7 +76,14 @@ show_help() {
   echo "  --logs                      查看最近的测速服务执行日志 (journalctl)"
   echo "  -h, --help                  显示本帮助菜单"
   echo ""
-  echo "通用选项:"
+  echo "自定义配置选项 (搭配 --install 或独立使用以写入 /etc/preferred-ip-manager/config.env):"
+  echo "  -p, --proxy, --tg-proxy URL 指定 Telegram 下载候选 IP 时所使用的代理 (如 socks5h://127.0.0.1:1080、socks5://127.0.0.1:1080 或 http://127.0.0.1:7890)"
+  echo "  --ports PORTS               待测试端口列表 (默认: 443)"
+  echo "  --mode MODE                 测速模式: speed (大带宽模式) 或 latency (延迟模式) (默认: speed)"
+  echo "  --concurrency NUM           并发测速线程数 (默认: 200)"
+  echo "  --min-speed SPEED           大带宽测速达标下限 MB/s (默认: 5.0)"
+  echo "  --max-delay MS              最大允许延迟上限 (默认: 300)"
+  echo "  --top NUM                   最终保留的最优节点数量 (默认: 20)"
   echo "  -y, --yes                   非交互模式，跳过确认提示直接执行"
   echo ""
   echo "定时触发规则:"
@@ -73,6 +91,16 @@ show_help() {
   echo "  • 触发策略: RandomizedDelaySec=4h (4小时内随机时刻执行，避免请求峰值)"
   echo "  • 同步策略: 将 443 端口最优 IP 写入 /etc/cloudflare-access-tcp/access.env 并重启服务"
   echo "  • 安全限制: 默认包含 --no-upload，严格不调用远端 API 更新优选 IP 列表"
+  echo ""
+  echo "使用示例:"
+  echo "  1. 默认安装定时测速服务:"
+  echo "     sudo bash $0 --install"
+  echo ""
+  echo "  2. 安装定时服务并指定 SOCKS5 代理用于 Telegram 抓取:"
+  echo "     sudo bash $0 --install --proxy socks5://127.0.0.1:1080"
+  echo ""
+  echo "  3. 查看定时器计划与下一次触发时间:"
+  echo "     sudo bash $0 --status"
 }
 
 check_if_running_as_root() {
@@ -119,7 +147,7 @@ install_system_packages() {
 }
 
 setup_python_environment() {
-  log "正在配置 Python 依赖环境 (requests, telethon)..."
+  log "正在配置 Python 依赖环境 (requests, telethon, python-socks)..."
   mkdir -p "$INSTALL_SHARE_DIR"
 
   local venv_dir="${INSTALL_SHARE_DIR}/.venv"
@@ -144,9 +172,9 @@ setup_python_environment() {
     pip_flags+=("--break-system-packages")
   fi
 
-  if ! "$py_exec" -m pip install "${pip_flags[@]}" requests telethon > /dev/null 2>&1; then
-    warn "pip 安装遇到警告，尝试直接安装 requests telethon..."
-    "$py_exec" -m pip install requests telethon || true
+  if ! "$py_exec" -m pip install "${pip_flags[@]}" requests telethon "python-socks[asyncio]" > /dev/null 2>&1; then
+    warn "pip 安装遇到警告，尝试直接安装 requests telethon python-socks..."
+    "$py_exec" -m pip install requests telethon "python-socks[asyncio]" || true
   fi
 
   if ! "$py_exec" -c "import requests" > /dev/null 2>&1; then
@@ -239,10 +267,22 @@ EOF
   success "核心组件与 CLI 命令安装完成: ${BIN_DIR}/preferred-ip-tester"
 }
 
+set_config_value() {
+  local key="$1"
+  local val="$2"
+  local file="$3"
+
+  if grep -q "^${key}=" "$file" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=\"${val}\"|" "$file"
+  else
+    echo "${key}=\"${val}\"" >> "$file"
+  fi
+}
+
 configure_env() {
   if [[ ! -f "$CONFIG_FILE" ]]; then
-    log "正在生成默认配置文件: ${CONFIG_FILE} ..."
-    cat <<'EOF' > "$CONFIG_FILE"
+    log "正在生成配置文件: ${CONFIG_FILE} ..."
+    cat <<EOF > "$CONFIG_FILE"
 # ==============================================================================
 # preferred-ip-manager 定时任务配置环境文件
 # 路径: /etc/preferred-ip-manager/config.env
@@ -252,25 +292,25 @@ configure_env() {
 TARGET="cdn"
 
 # 测速模式: speed (大带宽模式) 或 latency (延迟模式)
-MODE="speed"
+MODE="${MODE_ARG}"
 
 # 待测端口列表 (逗号分隔，默认测试 443 端口)
-PORTS="443"
+PORTS="${PORTS_ARG}"
 
 # 并发测速线程数 (默认 200)
-CONCURRENCY="200"
+CONCURRENCY="${CONCURRENCY_ARG}"
 
 # 带宽测速下限阀值 (MB/s，默认 5.0)
-MIN_SPEED="5.0"
+MIN_SPEED="${MIN_SPEED_ARG}"
 
 # 延迟上限过滤 (ms，默认 300)
-MAX_DELAY="300"
+MAX_DELAY="${MAX_DELAY_ARG}"
 
 # 丢包率上限过滤 (0.0~1.0，默认 1.0)
-MAX_LOSS="1.0"
+MAX_LOSS="${MAX_LOSS_ARG}"
 
 # 保留的最优节点数量
-TOP_COUNT="20"
+TOP_COUNT="${TOP_COUNT_ARG}"
 
 # 单 IP 下载测速时长 (秒)
 DOWNLOAD_TIME="10"
@@ -281,6 +321,9 @@ TEST_COUNT="20"
 # 附加执行参数 (默认跳过 Telegram 交互并严格禁止远端 API 推送)
 EXTRA_ARGS="--skip-tg --no-upload -y"
 
+# Telegram 下载代理 (可选，如通过 SOCKS5 代理下载: socks5://127.0.0.1:1080 或 http://127.0.0.1:7890)
+TG_PROXY="${TG_PROXY_ARG}"
+
 # 自定义测速文件下载 URL (留空使用默认测速地址)
 CFST_URL=""
 
@@ -288,9 +331,19 @@ CFST_URL=""
 CF_SUB_URL="https://sub.19910417.xyz"
 EOF
     chmod 644 "$CONFIG_FILE"
-    log "已生成默认配置: ${CONFIG_FILE}"
+    log "已生成配置: ${CONFIG_FILE}"
   else
-    log "保留已有配置文件: ${CONFIG_FILE}"
+    log "正在更新已有配置文件: ${CONFIG_FILE} ..."
+    if [[ -n "$TG_PROXY_ARG" ]]; then
+      set_config_value "TG_PROXY" "$TG_PROXY_ARG" "$CONFIG_FILE"
+      log "已更新 Telegram 代理配置: ${TG_PROXY_ARG}"
+    fi
+    if [[ "$PORTS_ARG" != "443" ]]; then
+      set_config_value "PORTS" "$PORTS_ARG" "$CONFIG_FILE"
+    fi
+    if [[ "$MODE_ARG" != "speed" ]]; then
+      set_config_value "MODE" "$MODE_ARG" "$CONFIG_FILE"
+    fi
   fi
 }
 
@@ -411,6 +464,15 @@ show_status() {
   if [[ -f "$SERVICE_FILE" ]]; then
     echo -e " 服务状态     : $(systemctl is-active "${SERVICE_NAME}.service" 2>/dev/null || echo 'inactive')"
     echo -e " 配置文件     : ${CONFIG_FILE}"
+    if [[ -f "$CONFIG_FILE" ]]; then
+      local proxy_cfg
+      proxy_cfg=$(grep '^TG_PROXY=' "$CONFIG_FILE" | cut -d= -f2- | tr -d '"' || echo "")
+      if [[ -n "$proxy_cfg" ]]; then
+        echo -e " Telegram 代理: ${GREEN}${proxy_cfg}${NC}"
+      else
+        echo -e " Telegram 代理: 未配置 (直连)"
+      fi
+    fi
     echo -e " CLI 测试命令 : preferred-ip-tester"
   fi
   echo "================================================================"
@@ -456,6 +518,34 @@ parse_arguments() {
         ACTION="logs"
         shift
         ;;
+      -p|--proxy|--tg-proxy)
+        TG_PROXY_ARG="$2"
+        shift 2
+        ;;
+      --ports)
+        PORTS_ARG="$2"
+        shift 2
+        ;;
+      --mode)
+        MODE_ARG="$2"
+        shift 2
+        ;;
+      --concurrency)
+        CONCURRENCY_ARG="$2"
+        shift 2
+        ;;
+      --min-speed)
+        MIN_SPEED_ARG="$2"
+        shift 2
+        ;;
+      --max-delay)
+        MAX_DELAY_ARG="$2"
+        shift 2
+        ;;
+      --top)
+        TOP_COUNT_ARG="$2"
+        shift 2
+        ;;
       -y|--yes)
         ASSUME_YES=true
         shift
@@ -494,6 +584,11 @@ main() {
       echo -e " • 执行周期 : 每天北京时间 02:00 ~ 06:00 随机时刻自动测速"
       echo -e " • 同步行为 : 443 端口最优 IP 自动写入 /etc/cloudflare-access-tcp/access.env"
       echo -e " • 安全模式 : --no-upload 严格不推送远端 API"
+      if [[ -n "$TG_PROXY_ARG" ]]; then
+        echo -e " • Telegram 代理 : ${GREEN}${TG_PROXY_ARG}${NC}"
+      else
+        echo -e " • Telegram 代理 : 未配置 (直连)"
+      fi
       echo -e " • 手动测试 : ${CYAN}preferred-ip-tester${NC} 或 ${CYAN}sudo $0 --run-now${NC}"
       echo -e " • 查看状态 : ${CYAN}sudo $0 --status${NC}"
       echo -e " • 配置文件 : ${CONFIG_FILE}"
