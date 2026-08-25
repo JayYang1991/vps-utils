@@ -836,8 +836,16 @@ def run_cdn_workflow(args: argparse.Namespace):
 
 
 def main():
+    import shlex
+    normalized_argv = []
+    for arg in sys.argv[1:]:
+        if arg.startswith('-') and ' ' in arg:
+            normalized_argv.extend(shlex.split(arg))
+        else:
+            normalized_argv.append(arg)
+
     parser = build_arg_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(normalized_argv)
 
     if args.target == 'warp':
         run_warp_workflow(args)
