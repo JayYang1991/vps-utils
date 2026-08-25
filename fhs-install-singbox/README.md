@@ -138,7 +138,10 @@ bash update-singbox-keys.sh -a --domain www.apple.com -y
      - 原 **8443** 端口节点默认重写为 `127.0.0.1:5000`；
      - 原 **443** 端口节点默认重写为 `127.0.0.1:5001`；
      - 支持通过参数灵活自定义目标 IP 与端口；
-   - **自动创建 Reality 入站监听**：默认生成 1 个 `vless+reality` 入站监听端口（默认端口 `12345`），自动继承或生成安全密钥对与 Short ID；
+   - **自动创建 SOCKS5 与 Reality 双入站监听**：
+     - 新增 **SOCKS5 入站**（默认端口 `1080`，协议 `socks`，供本地应用或 Docker 网关直连）；
+     - 新增 **VLESS + Reality 入站**（默认端口 `12345`，支持安全身份鉴权与流量直连）；
+     - 自动继承或生成安全 Reality 密钥对与 Short ID；
    - **核心转换引擎**：由配套 Python 脚本 [`convert_sub_to_server.py`](./convert_sub_to_server.py) 实现，既可由 Shell 脚本自动调度，也可独立运行。
 
 在目标 Linux 服务器上以 `root` 权限运行：
@@ -147,12 +150,13 @@ bash update-singbox-keys.sh -a --domain www.apple.com -y
 # 1. 默认 Client 客户端模式更新:
 bash update-singbox-sub.sh http://154.12.34.56:8000/sub?token=your_sub_token
 
-# 2. Server 服务端转发模式更新 (清除路由，保留 443/8443 Reality 节点并映射至 5001/5000，开启 12345 入站):
+# 2. Server 服务端转发模式更新 (清除路由，保留 443/8443 Reality 节点并映射至 5001/5000，开启 1080 SOCKS 与 12345 Reality 入站):
 bash update-singbox-sub.sh http://154.12.34.56:8000/sub?token=your_sub_token --server
 
 # 3. 自定义 Server 模式入站端口与映射目标 (非交互执行):
 bash update-singbox-sub.sh -u "http://154.12.34.56:8000/sub?token=your_sub_token" \
   --server \
+  --socks-port 1080 \
   --inbound-port 12345 \
   --port-8443 5000 \
   --port-443 5001 \
@@ -170,8 +174,10 @@ bash update-singbox-sub.sh -u "http://154.12.34.56:8000/sub?token=your_sub_token
 | `-b, --backup-dir DIR` | `/tmp` | 指定备份目录 |
 | `-A, --user-agent AGENT` | `sing-box` | 指定 HTTP 请求 User-Agent |
 | `-t, --timeout SECONDS` | `30` | 指定下载超时秒数 |
+| `--socks-port PORT` | `1080` | **(Server模式)** SOCKS5 入站监听端口 (设为 0 可关闭) |
+| `--socks-listen ADDR` | `127.0.0.1` | **(Server模式)** SOCKS5 本地入站监听绑定地址 |
 | `--inbound-port PORT` | `12345` | **(Server模式)** VLESS Reality 入站监听端口 |
-| `--inbound-listen ADDR` | `::` | **(Server模式)** 入站监听绑定地址 |
+| `--inbound-listen ADDR` | `::` | **(Server模式)** Reality 入站监听绑定地址 |
 | `--inbound-domain DOMAIN` | 自动提取 | **(Server模式)** 入站 Reality 伪装域名/SNI |
 | `--inbound-uuid UUID` | 自动继承/提取 | **(Server模式)** 入站 VLESS 用户 UUID |
 | `--inbound-privkey KEY` | 自动继承/生成 | **(Server模式)** 入站 Reality PrivateKey |

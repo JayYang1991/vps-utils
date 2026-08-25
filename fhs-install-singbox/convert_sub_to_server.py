@@ -9,7 +9,7 @@ sing-box 订阅配置转 Server 模式转换脚本
 2. outbounds 节点只保留 443 和 8443 端口的 vless+reality 协议节点 (支持自定义端口映射)
 3. 8443 端口站点默认修改为 5000 端口，IP 修改为 127.0.0.1
 4. 443 端口站点默认修改为 5001 端口，IP 修改为 127.0.0.1
-5. 新增 1 个 vless+reality 入站端口（默认 12345）
+5. 新增 1 个 vless+reality 入站端口（默认 12345）与 1 个 SOCKS5 入站端口（默认 1080）
 6. 支持丰富的命令行参数配置与现有配置继承
 """
 
@@ -166,6 +166,8 @@ def convert_to_server_config(
     inbound_shortid=None,
     inbound_handshake_server=None,
     inbound_handshake_port=443,
+    socks_port=1080,
+    socks_listen="127.0.0.1",
     port_8443=5000,
     port_443=5001,
     target_ip="127.0.0.1",
@@ -242,7 +244,7 @@ def convert_to_server_config(
     
     data["outbounds"] = filtered_outbounds
 
-    # 3. 准备生成 1 个 vless+reality 入站节点 (默认 12345)
+    # 3. 准备生成入站节点 (1 个 SOCKS5 1080 入站 + 1 个 VLESS+Reality 12345 入站)
     existing_info = extract_from_existing_config(existing_config_path)
 
     # 决策 UUID
@@ -263,7 +265,20 @@ def convert_to_server_config(
     final_handshake_server = inbound_handshake_server or final_domain
     final_handshake_port = int(inbound_handshake_port or 443)
 
-    inbound_block = {
+    inbound_blocks = []
+
+    # (1) SOCKS5 入站 (默认 1080 本地监听)
+    if socks_port and int(socks_port) > 0:
+        actual_socks_listen = socks_listen if socks_listen else "127.0.0.1"
+        inbound_blocks.append({
+            "type": "socks",
+            "tag": "socks-in",
+            "listen": actual_socks_listen,
+            "listen_port": int(socks_port)
+        })
+
+    # (2) VLESS + Reality 入站 (默认 12345)
+    inbound_blocks.append({
         "type": "vless",
         "tag": "vless-reality-in",
         "listen": inbound_listen,
@@ -289,9 +304,9 @@ def convert_to_server_config(
                 ]
             }
         }
-    }
+    })
 
-    data["inbounds"] = [inbound_block]
+    data["inbounds"] = inbound_blocks
 
     # 输出文件
     target_out = output_path or input_path
@@ -302,7 +317,12 @@ def convert_to_server_config(
     print("================================================")
     print("✅ 配置文件已成功转换为 Server 转发模式！")
     print("================================================")
-    print(f" 入站监听 : {inbound_listen}:{inbound_port} (VLESS + Reality)")
+    if socks_port and int(socks_port) > 0:
+        actual_socks_listen = socks_listen if socks_listen else "127.0.0.1"
+        print(f" 入站监听 [1] : {actual_socks_listen}:{socks_port} (SOCKS5 本地协议)")
+        print(f" 入站监听 [2] : {inbound_listen}:{inbound_port} (VLESS + Reality 协议)")
+    else:
+        print(f" 入站监听 : {inbound_listen}:{inbound_port} (VLESS + Reality 协议)")
     print(f" 入站 SNI  : {final_domain}")
     print(f" 入站 UUID : {final_uuid}")
     print(f" 入站 ShortID: {final_shortid}")
@@ -327,6 +347,8 @@ def main():
     parser.add_argument("--inbound-shortid", "--inbound-short-id", dest="inbound_shortid", help="入站 Reality Short ID")
     parser.add_argument("--inbound-handshake-server", help="入站 Reality Handshake Server 目标地址")
     parser.add_argument("--inbound-handshake-port", type=int, default=443, help="入站 Reality Handshake 目标端口 (默认: 443)")
+    parser.add_argument("--socks-port", type=int, default=1080, help="SOCKS5 入站监听端口 (默认: 1080)")
+    parser.add_argument("--socks-listen", default="127.0.0.1", help="SOCKS5 入站监听地址 (默认: 127.0.0.1)")
     parser.add_argument("--port-8443", type=int, default=5000, help="原 8443 节点映射的目标本地端口 (默认: 5000)")
     parser.add_argument("--port-443", type=int, default=5001, help="原 443 节点映射的目标本地端口 (默认: 5001)")
     parser.add_argument("--target-ip", default="127.0.0.1", help="节点重写的目标 IP 地址 (默认: 127.0.0.1)")
@@ -347,6 +369,8 @@ def main():
             inbound_shortid=args.inbound_shortid,
             inbound_handshake_server=args.inbound_handshake_server,
             inbound_handshake_port=args.inbound_handshake_port,
+            socks_port=args.socks_port,
+            socks_listen=args.socks_listen,
             port_8443=args.port_8443,
             port_443=args.port_443,
             target_ip=args.target_ip,

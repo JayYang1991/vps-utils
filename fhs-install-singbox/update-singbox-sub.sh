@@ -57,6 +57,8 @@ INBOUND_DOMAIN=""
 INBOUND_UUID=""
 INBOUND_PRIVKEY=""
 INBOUND_SHORTID=""
+SOCKS_PORT="1080"
+SOCKS_LISTEN="127.0.0.1"
 PORT_8443="5000"
 PORT_443="5001"
 TARGET_IP="127.0.0.1"
@@ -100,6 +102,8 @@ show_help() {
   echo "  --inbound-uuid UUID            入站 VLESS 用户 UUID (默认自动继承或从节点提取)"
   echo "  --inbound-privkey KEY          入站 Reality PrivateKey (默认自动继承或自动生成)"
   echo "  --inbound-shortid ID           入站 Reality Short ID (默认自动继承或从节点提取)"
+  echo "  --socks-port PORT              SOCKS5 入站监听端口 (默认: 1080)"
+  echo "  --socks-listen ADDR            SOCKS5 入站监听绑定地址 (默认: 127.0.0.1)"
   echo "  --port-8443 PORT               原 8443 节点映射的目标本地端口 (默认: 5000)"
   echo "  --port-443 PORT                原 443 节点映射的目标本地端口 (默认: 5001)"
   echo "  --target-ip IP                 节点重写的目标 IP 地址 (默认: 127.0.0.1)"
@@ -286,6 +290,14 @@ parse_arguments() {
         INBOUND_SHORTID="$2"
         shift 2
         ;;
+      --socks-port)
+        SOCKS_PORT="$2"
+        shift 2
+        ;;
+      --socks-listen)
+        SOCKS_LISTEN="$2"
+        shift 2
+        ;;
       --port-8443)
         PORT_8443="$2"
         shift 2
@@ -363,7 +375,7 @@ main() {
   echo " 配置路径 : ${CONFIG_PATH}"
   echo " 备份目录 : ${BACKUP_DIR}"
   if [[ "$MODE" == "server" ]]; then
-    echo " 更新模式 : ${green}Server 转发模式${reset} (入站: ${INBOUND_LISTEN}:${INBOUND_PORT}, 节点映射: 8443->${PORT_8443}, 443->${PORT_443})"
+    echo " 更新模式 : ${green}Server 转发模式${reset} (SOCKS: ${SOCKS_LISTEN}:${SOCKS_PORT}, Reality: ${INBOUND_LISTEN}:${INBOUND_PORT}, 节点映射: 8443->${PORT_8443}, 443->${PORT_443})"
   else
     echo " 更新模式 : ${aoi}Client 客户端模式${reset}"
   fi
@@ -417,7 +429,7 @@ main() {
 
   # Server 模式转换流程
   if [[ "$MODE" == "server" ]]; then
-    echo "${aoi}info: 正在执行 Server 模式转换 (清除路由规则，过滤 443/8443 Reality 节点并映射本地端口，生成 ${INBOUND_PORT} 入站)...${reset}"
+    echo "${aoi}info: 正在执行 Server 模式转换 (清除路由规则，过滤 443/8443 Reality 节点并映射本地端口，生成 ${SOCKS_PORT} SOCKS 与 ${INBOUND_PORT} Reality 入站)...${reset}"
     ensure_python_converter
 
     local py_cmd=("python3" "$PYTHON_CONVERTER" "-i" "$TEMP_CONFIG" "-o" "$TEMP_CONFIG" "-e" "$CONFIG_PATH")
@@ -427,6 +439,8 @@ main() {
     [[ -n "$INBOUND_UUID" ]] && py_cmd+=("--inbound-uuid" "$INBOUND_UUID")
     [[ -n "$INBOUND_PRIVKEY" ]] && py_cmd+=("--inbound-privkey" "$INBOUND_PRIVKEY")
     [[ -n "$INBOUND_SHORTID" ]] && py_cmd+=("--inbound-shortid" "$INBOUND_SHORTID")
+    [[ -n "$SOCKS_PORT" ]] && py_cmd+=("--socks-port" "$SOCKS_PORT")
+    [[ -n "$SOCKS_LISTEN" ]] && py_cmd+=("--socks-listen" "$SOCKS_LISTEN")
     [[ -n "$PORT_8443" ]] && py_cmd+=("--port-8443" "$PORT_8443")
     [[ -n "$PORT_443" ]] && py_cmd+=("--port-443" "$PORT_443")
     [[ -n "$TARGET_IP" ]] && py_cmd+=("--target-ip" "$TARGET_IP")
@@ -521,7 +535,7 @@ except Exception:
     echo "${green}================================================================${reset}"
     echo " 配置文件路径 : ${CONFIG_PATH}"
     if [[ "$MODE" == "server" ]]; then
-      echo " 运行模式     : ${green}Server 转发网关模式 (入站端口: ${INBOUND_PORT})${reset}"
+      echo " 运行模式     : ${green}Server 转发网关模式 (SOCKS5 端口: ${SOCKS_PORT}, Reality 端口: ${INBOUND_PORT})${reset}"
     else
       echo " 运行模式     : ${aoi}Client 客户端模式${reset}"
     fi
@@ -534,7 +548,7 @@ except Exception:
     echo "${yellow}warning: 未检测到 systemctl 命令，无法自动重启服务。请手动重启 sing-box 服务。${reset}"
     echo " 配置文件路径 : ${CONFIG_PATH}"
     if [[ "$MODE" == "server" ]]; then
-      echo " 运行模式     : ${green}Server 转发网关模式 (入站端口: ${INBOUND_PORT})${reset}"
+      echo " 运行模式     : ${green}Server 转发网关模式 (SOCKS5 端口: ${SOCKS_PORT}, Reality 端口: ${INBOUND_PORT})${reset}"
     else
       echo " 运行模式     : ${aoi}Client 客户端模式${reset}"
     fi
