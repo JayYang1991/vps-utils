@@ -51,6 +51,10 @@ while [ $# -gt 0 ]; do
       ACTION="update"
       shift 1
       ;;
+    uninstall|--uninstall)
+      ACTION="uninstall"
+      shift 1
+      ;;
     -i|--ip|--server-ip)
       SERVER_IP="$2"
       shift 2
@@ -72,6 +76,43 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# 如果是卸载操作，执行卸载流程
+if [ "$ACTION" = "uninstall" ]; then
+    echo "================================================"
+    echo "正在卸载 sing-box 订阅转换服务 ($SERVICE_NAME)..."
+    echo "================================================"
+
+    echo "1. 正在停止并禁用 systemd 服务..."
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        systemctl stop "$SERVICE_NAME" || true
+    fi
+    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        systemctl disable "$SERVICE_NAME" || true
+    fi
+
+    echo "2. 检查并清理残留进程..."
+    pkill -9 -f "app.main" 2>/dev/null || true
+
+    echo "3. 正在移除 systemd 服务配置..."
+    if [ -f "$SERVICE_FILE" ]; then
+        rm -f "$SERVICE_FILE"
+        systemctl daemon-reload || true
+        systemctl reset-failed 2>/dev/null || true
+    fi
+
+    echo "4. 正在清理安装目录 ($TARGET_DIR)..."
+    if [ -d "$TARGET_DIR" ]; then
+        rm -rf "$TARGET_DIR"
+    fi
+
+    rm -f /tmp/singbox-sub-converter.*.tar.gz 2>/dev/null || true
+
+    echo "------------------------------------------------"
+    echo "✅ sing-box 订阅转换服务已成功卸载并清理完毕！"
+    echo "------------------------------------------------"
+    exit 0
+fi
+
 # 如果更新操作未显式传入新 IP，继承已保存的 SERVER_HOST
 if [ -z "$SERVER_IP" ] && [ -n "$EXISTING_IP" ]; then
     SERVER_IP="$EXISTING_IP"
@@ -89,6 +130,9 @@ if [ -z "$SERVER_IP" ]; then
     echo ""
     echo "  2. 在线更新: sudo ./install.sh update <SERVER_IP> [端口号]"
     echo "     示例:     sudo ./install.sh update 154.12.34.56"
+    echo ""
+    echo "  3. 一键卸载: sudo ./install.sh uninstall"
+    echo "     或使用:   sudo ./uninstall.sh"
     echo "================================================"
     exit 1
 fi

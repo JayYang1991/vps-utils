@@ -200,7 +200,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 | **[cloudflare-zero-trust](./cloudflare-zero-trust)** | Cloudflare Zero Trust (Cloudflare One) 套件：VPS 出口 NAT 转发、SOCKS5 客户端与诊断工具 | `setup-cloudflare-one.sh`<br>`docker-run.sh`<br>`test-masque.py`<br>`install.sh` | [cloudflare-zero-trust 详细指南](./cloudflare-zero-trust/README.md) |
 | **[subconverter](./subconverter)** | 通用代理订阅格式转换后端服务（带 Systemd 一键安装与端口配置） | `install.sh` | [subconverter 详细指南](./subconverter/README.md) |
 | **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理、CDN 测速与 WARP Endpoint 优选同步工具 | `sub-worker.js`<br>`warp_tester.py`<br>`process_ips.py`<br>`telegram_tool.py` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
-| **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
+| **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`uninstall.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
 | **[cloudflare-access-tcp](./cloudflare-access-tcp)** | 代理客户端 Cloudflare Access TCP 转发容器 (Ubuntu 24.04 + Systemd 自启) | `install.sh`<br>`docker-entrypoint.sh`<br>`Dockerfile` | [cloudflare-access-tcp 详细指南](./cloudflare-access-tcp/README.md) |
 
 ---
@@ -238,7 +238,7 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 - **自适应识别**：根据客户端 User-Agent 自动分发 Clash YAML、sing-box JSON 或通用 Base64 订阅。
 - **动态节点合并**：自动聚合服务端配置与 Cloudflare 优选 IP 节点，自动清理空测速组。
-- **`install.sh` & `pack.sh`**：提供一键自动化部署与 GitHub Actions 打包发布脚本。
+- **`install.sh` & `uninstall.sh` & `pack.sh`**：提供一键自动化部署、一键卸载清理与 GitHub Actions 打包发布脚本。
 
 ### 7. [cloudflare-vless-proxy](./cloudflare-vless-proxy) — Cloudflare Worker VLESS 住宅中继代理与管理门户
 
@@ -299,7 +299,8 @@ vps-utils/
 │   └── telegram_tool.py               # Telegram 资源抓取脚本
 ├── singbox-sub-converter/              # sing-box 自适应订阅转换服务
 │   ├── README.md                      # singbox-sub-converter 详细指南
-│   ├── install.sh                     # 自动安装/更新脚本
+│   ├── install.sh                     # 自动安装/更新/卸载脚本
+│   ├── uninstall.sh                   # 一键卸载与清理脚本
 │   ├── pack.sh                        # 自动化打包脚本
 │   └── app/                           # FastAPI 后端与前端静态文件
 ├── cloudflare-vless-proxy/             # Cloudflare Worker VLESS 住宅中继代理与管理门户

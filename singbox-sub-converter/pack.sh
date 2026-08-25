@@ -37,6 +37,8 @@ rm -f "${OUTPUT_PATH}"
 # 先打包至 /tmp 临时文件，避免写当前目录引发 tar 警告/报错
 tar --exclude="./install.sh" \
     --exclude="./install*.sh" \
+    --exclude="./uninstall.sh" \
+    --exclude="./uninstall*.sh" \
     --exclude="./${SCRIPT_NAME}" \
     --exclude="./*.tar.gz" \
     --exclude="./.git" \

@@ -110,8 +110,9 @@ curl -s http://127.0.0.1:8000/api/logs
 
 ---
 
-## 服务管理命令
+## 服务管理与卸载命令
 
+### 1. 服务日常运维管理
 ```bash
 # 查看服务状态
 sudo systemctl status singbox-sub-converter
@@ -125,6 +126,27 @@ sudo systemctl stop singbox-sub-converter
 # 查看服务日志
 sudo journalctl -u singbox-sub-converter -n 50 --no-pager
 ```
+
+### 2. 一键卸载与清理服务
+若需彻底卸载 singbox-sub-converter 并清理 Systemd 服务与安装目录，可使用以下任一方式：
+
+- **方式 A：远程一键卸载（推荐）**
+  ```bash
+  sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/singbox-sub-converter/uninstall.sh)
+  ```
+- **方式 B：本地一键卸载脚本**
+  ```bash
+  cd singbox-sub-converter
+  sudo ./uninstall.sh
+  # 或免交互强制卸载
+  sudo ./uninstall.sh -y
+  # 或卸载但保留用户数据配置
+  sudo ./uninstall.sh --keep-data
+  ```
+- **方式 C：通过 install.sh 卸载**
+  ```bash
+  sudo ./install.sh uninstall
+  ```
 
 ---
 
