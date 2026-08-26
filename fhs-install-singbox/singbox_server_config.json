@@ -5,6 +5,18 @@
   },
   "inbounds": [
     {
+      "type": "socks",
+      "tag": "socks-in",
+      "listen": "0.0.0.0",
+      "listen_port": {SINGBOX_SOCKS_PORT},
+      "users": [
+        {
+          "username": "{SINGBOX_SOCKS_USER}",
+          "password": "{SINGBOX_SOCKS_PASS}"
+        }
+      ]
+    },
+    {
       "type": "vless",
       "tag": "vless-grpc",
       "listen": "127.0.0.1",
@@ -17,9 +29,36 @@
       ],
       "transport": {
         "type": "ws",
-        "path": "/singbox-ws-path",
+        "path": "{SINGBOX_WS_PATH}",
         "headers": {
-          "Host": "proxy.19910417.xyz"
+          "Host": "{SINGBOX_WS_HOST}"
+        }
+      }
+    },
+    {
+      "type": "vless",
+      "tag": "vless-reality",
+      "listen": "0.0.0.0",
+      "listen_port": 8443,
+      "users": [
+        {
+          "uuid": "{SINGBOX_UUID}",
+          "flow": "xtls-rprx-vision"
+        }
+      ],
+      "tls": {
+        "enabled": true,
+        "server_name": "{SINGBOX_DOMAIN}",
+        "reality": {
+          "enabled": true,
+          "handshake": {
+            "server": "{SINGBOX_DOMAIN}",
+            "server_port": 443
+          },
+          "private_key": "{SINGBOX_PRIVATE_KEY}",
+          "short_id": [
+            "{SINGBOX_SHORT_ID}"
+          ]
         }
       }
     },
@@ -49,331 +88,28 @@
           ]
         }
       }
-    },
-    {
-      "type": "vless",
-      "tag": "vless-reality-2053",
-      "listen": "0.0.0.0",
-      "listen_port": 2053,
-      "users": [
-        {
-          "uuid": "{SINGBOX_UUID}",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_DOMAIN}",
-        "reality": {
-          "enabled": true,
-          "handshake": {
-            "server": "{SINGBOX_DOMAIN}",
-            "server_port": 443
-          },
-          "private_key": "{SINGBOX_PRIVATE_KEY}",
-          "short_id": [
-            "{SINGBOX_SHORT_ID}"
-          ]
-        }
-      }
-    },
-    {
-      "type": "vless",
-      "tag": "vless-reality-2083",
-      "listen": "0.0.0.0",
-      "listen_port": 2083,
-      "users": [
-        {
-          "uuid": "{SINGBOX_UUID}",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_DOMAIN}",
-        "reality": {
-          "enabled": true,
-          "handshake": {
-            "server": "{SINGBOX_DOMAIN}",
-            "server_port": 443
-          },
-          "private_key": "{SINGBOX_PRIVATE_KEY}",
-          "short_id": [
-            "{SINGBOX_SHORT_ID}"
-          ]
-        }
-      }
-    },
-    {
-      "type": "vless",
-      "tag": "vless-reality-2087",
-      "listen": "::",
-      "listen_port": 2087,
-      "users": [
-        {
-          "uuid": "{SINGBOX_UUID}",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_DOMAIN}",
-        "reality": {
-          "enabled": true,
-          "handshake": {
-            "server": "{SINGBOX_DOMAIN}",
-            "server_port": 443
-          },
-          "private_key": "{SINGBOX_PRIVATE_KEY}",
-          "short_id": [
-            "{SINGBOX_SHORT_ID}"
-          ]
-        }
-      }
-    },
-    {
-      "type": "vless",
-      "tag": "vless-reality-2096",
-      "listen": "::",
-      "listen_port": 2096,
-      "users": [
-        {
-          "uuid": "{SINGBOX_UUID}",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_DOMAIN}",
-        "reality": {
-          "enabled": true,
-          "handshake": {
-            "server": "{SINGBOX_DOMAIN}",
-            "server_port": 443
-          },
-          "private_key": "{SINGBOX_PRIVATE_KEY}",
-          "short_id": [
-            "{SINGBOX_SHORT_ID}"
-          ]
-        }
-      }
-    },
-    {
-      "type": "vless",
-      "tag": "vless-reality-8080",
-      "listen": "::",
-      "listen_port": 8080,
-      "users": [
-        {
-          "uuid": "{SINGBOX_UUID}",
-          "flow": "xtls-rprx-vision"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_DOMAIN}",
-        "reality": {
-          "enabled": true,
-          "handshake": {
-            "server": "{SINGBOX_DOMAIN}",
-            "server_port": 443
-          },
-          "private_key": "{SINGBOX_PRIVATE_KEY}",
-          "short_id": [
-            "{SINGBOX_SHORT_ID}"
-          ]
-        }
-      }
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in",
-      "listen": "::",
-      "listen_port": "{SINGBOX_HY2_PORT}",
-      "users": [
-        {
-          "password": "{SINGBOX_HY2_PASSWORD}"
-        }
-      ],
-      "up_mbps": {SINGBOX_HY2_UP_MBPS},
-      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_HY2_DOMAIN}",
-        "alpn": [
-          "h3"
-        ],
-        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
-        "key_path": "{SINGBOX_HY2_KEY_PATH}"
-      },
-      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in-443",
-      "listen": "::",
-      "listen_port": 443,
-      "users": [
-        {
-          "password": "{SINGBOX_HY2_PASSWORD}"
-        }
-      ],
-      "up_mbps": {SINGBOX_HY2_UP_MBPS},
-      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_HY2_DOMAIN}",
-        "alpn": [
-          "h3"
-        ],
-        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
-        "key_path": "{SINGBOX_HY2_KEY_PATH}"
-      },
-      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in-8443",
-      "listen": "::",
-      "listen_port": 8443,
-      "users": [
-        {
-          "password": "{SINGBOX_HY2_PASSWORD}"
-        }
-      ],
-      "up_mbps": {SINGBOX_HY2_UP_MBPS},
-      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_HY2_DOMAIN}",
-        "alpn": [
-          "h3"
-        ],
-        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
-        "key_path": "{SINGBOX_HY2_KEY_PATH}"
-      },
-      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in-2053",
-      "listen": "::",
-      "listen_port": 2053,
-      "users": [
-        {
-          "password": "{SINGBOX_HY2_PASSWORD}"
-        }
-      ],
-      "up_mbps": {SINGBOX_HY2_UP_MBPS},
-      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_HY2_DOMAIN}",
-        "alpn": [
-          "h3"
-        ],
-        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
-        "key_path": "{SINGBOX_HY2_KEY_PATH}"
-      },
-      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in-2087",
-      "listen": "::",
-      "listen_port": 2087,
-      "users": [
-        {
-          "password": "{SINGBOX_HY2_PASSWORD}"
-        }
-      ],
-      "up_mbps": {SINGBOX_HY2_UP_MBPS},
-      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_HY2_DOMAIN}",
-        "alpn": [
-          "h3"
-        ],
-        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
-        "key_path": "{SINGBOX_HY2_KEY_PATH}"
-      },
-      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in-2083",
-      "listen": "::",
-      "listen_port": 2083,
-      "users": [
-        {
-          "password": "{SINGBOX_HY2_PASSWORD}"
-        }
-      ],
-      "up_mbps": {SINGBOX_HY2_UP_MBPS},
-      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_HY2_DOMAIN}",
-        "alpn": [
-          "h3"
-        ],
-        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
-        "key_path": "{SINGBOX_HY2_KEY_PATH}"
-      },
-      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in-2096",
-      "listen": "::",
-      "listen_port": 2096,
-      "users": [
-        {
-          "password": "{SINGBOX_HY2_PASSWORD}"
-        }
-      ],
-      "up_mbps": {SINGBOX_HY2_UP_MBPS},
-      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_HY2_DOMAIN}",
-        "alpn": [
-          "h3"
-        ],
-        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
-        "key_path": "{SINGBOX_HY2_KEY_PATH}"
-      },
-      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in-4500",
-      "listen": "::",
-      "listen_port": 4500,
-      "users": [
-        {
-          "password": "{SINGBOX_HY2_PASSWORD}"
-        }
-      ],
-      "up_mbps": {SINGBOX_HY2_UP_MBPS},
-      "down_mbps": {SINGBOX_HY2_DOWN_MBPS},
-      "tls": {
-        "enabled": true,
-        "server_name": "{SINGBOX_HY2_DOMAIN}",
-        "alpn": [
-          "h3"
-        ],
-        "certificate_path": "{SINGBOX_HY2_CERT_PATH}",
-        "key_path": "{SINGBOX_HY2_KEY_PATH}"
-      },
-      "masquerade": "{SINGBOX_HY2_MASQUERADE}"
     }
   ],
   "outbounds": [
     {
       "type": "direct",
       "tag": "direct"
+    },
+    {
+      "type": "socks",
+      "tag": "socks-2028",
+      "server": "{SOCKS_OUT_SERVER}",
+      "server_port": {SOCKS_OUT_PORT}
     }
-  ]
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "vless-reality-443"
+        ],
+        "outbound": "socks-2028"
+      }
+    ]
+  }
 }

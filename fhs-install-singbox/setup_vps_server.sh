@@ -65,12 +65,15 @@ show_help() {
   echo "  --singbox-sub-converter-port PORT  Specify singbox-sub-converter port (default: 8000, env: SINGBOX_SUB_CONVERTER_PORT)"
   echo ""
   echo "sing-box Configuration (Env Vars):"
-  echo "  SINGBOX_PORT (default: 443)"
-  echo "  SINGBOX_DOMAIN (default: www.cloudflare.com)"
+  echo "  SINGBOX_VERSION (default: 1.12.20)"
+  echo "  SINGBOX_DOMAIN (default: dl.google.com)"
   echo "  SINGBOX_UUID, SINGBOX_SHORT_ID, SINGBOX_LOG_LEVEL"
-  echo "  SINGBOX_HY2_PORT (default: 123)"
-  echo "  SINGBOX_HY2_DOMAIN (default: hy2.jayyang.cn)"
-  echo "  SINGBOX_HY2_PASSWORD, SINGBOX_HY2_UP_MBPS, SINGBOX_HY2_DOWN_MBPS, SINGBOX_HY2_MASQUERADE"
+  echo "  SINGBOX_SOCKS_PORT (default: 10086)"
+  echo "  SINGBOX_SOCKS_USER, SINGBOX_SOCKS_PASS"
+  echo "  SINGBOX_WS_PATH (default: /singbox-ws-path)"
+  echo "  SINGBOX_WS_HOST (default: proxy.19910417.xyz)"
+  echo "  SOCKS_OUT_SERVER (default: 127.0.0.1)"
+  echo "  SOCKS_OUT_PORT (default: 2080)"
 }
 
 log() {
@@ -312,18 +315,18 @@ check_ssh_until_success() {
 }
 
 install_singbox() {
-  local version="${SINGBOX_VERSION:-1.12.19}"
-  local port="${SINGBOX_PORT:-443}"
-  local domain="${SINGBOX_DOMAIN:-www.cloudflare.com}"
+  local version="${SINGBOX_VERSION:-1.12.20}"
+  local domain="${SINGBOX_DOMAIN:-dl.google.com}"
   local uuid="${SINGBOX_UUID:-auto}"
   local short_id="${SINGBOX_SHORT_ID:-auto}"
-  local log_level="${SINGBOX_LOG_LEVEL:-info}"
-  local hy2_port="${SINGBOX_HY2_PORT:-123}"
-  local hy2_domain="${SINGBOX_HY2_DOMAIN:-hy2.jayyang.cn}"
-  local hy2_password="${SINGBOX_HY2_PASSWORD:-auto}"
-  local hy2_up_mbps="${SINGBOX_HY2_UP_MBPS:-200}"
-  local hy2_down_mbps="${SINGBOX_HY2_DOWN_MBPS:-200}"
-  local hy2_masquerade="${SINGBOX_HY2_MASQUERADE:-https://www.cloudflare.com}"
+  local log_level="${SINGBOX_LOG_LEVEL:-warning}"
+  local socks_port="${SINGBOX_SOCKS_PORT:-10086}"
+  local socks_user="${SINGBOX_SOCKS_USER:-auto}"
+  local socks_pass="${SINGBOX_SOCKS_PASS:-auto}"
+  local ws_path="${SINGBOX_WS_PATH:-/singbox-ws-path}"
+  local ws_host="${SINGBOX_WS_HOST:-proxy.19910417.xyz}"
+  local socks_out_srv="${SOCKS_OUT_SERVER:-127.0.0.1}"
+  local socks_out_prt="${SOCKS_OUT_PORT:-2080}"
   local force_flag=""
   [[ "$FORCE_INSTALL" == "true" ]] && force_flag="--force"
 
@@ -334,7 +337,7 @@ install_singbox() {
     ssh -T -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
     sudo dpkg --configure -a || true
     curl -4 -L -q --retry 5 --retry-delay 10 -H 'Cache-Control: no-cache' -o /tmp/install-singbox-server.sh https://raw.githubusercontent.com/JayYang1991/vps-utils/${REPO_BRANCH}/fhs-install-singbox/install-singbox-server.sh
-    sudo bash /tmp/install-singbox-server.sh --version ${version} --port ${port} --domain ${domain} --uuid ${uuid} --short-id ${short_id} --log-level ${log_level} --hy2-port ${hy2_port} --hy2-domain ${hy2_domain} --hy2-password ${hy2_password} --hy2-up-mbps ${hy2_up_mbps} --hy2-down-mbps ${hy2_down_mbps} --hy2-masquerade '${hy2_masquerade}' ${force_flag}
+    sudo bash /tmp/install-singbox-server.sh --version ${version} --domain ${domain} --uuid ${uuid} --short-id ${short_id} --log-level ${log_level} --socks-port ${socks_port} --socks-user '${socks_user}' --socks-pass '${socks_pass}' --ws-path '${ws_path}' --ws-host '${ws_host}' --socks-out-server '${socks_out_srv}' --socks-out-port ${socks_out_prt} ${force_flag}
 eof
   )
   local ret_val=$?
@@ -393,7 +396,10 @@ update_singbox_keys() {
 
   local extra_flags=""
   [[ -n "$SINGBOX_DOMAIN" ]] && extra_flags="${extra_flags} --domain '${SINGBOX_DOMAIN}'"
-  [[ -n "$SINGBOX_HY2_DOMAIN" ]] && extra_flags="${extra_flags} --hy2-domain '${SINGBOX_HY2_DOMAIN}'"
+  [[ -n "$SINGBOX_UUID" ]] && extra_flags="${extra_flags} --uuid '${SINGBOX_UUID}'"
+  [[ -n "$SINGBOX_SHORT_ID" ]] && extra_flags="${extra_flags} --short-id '${SINGBOX_SHORT_ID}'"
+  [[ -n "$SINGBOX_SOCKS_USER" ]] && extra_flags="${extra_flags} --socks-user '${SINGBOX_SOCKS_USER}'"
+  [[ -n "$SINGBOX_SOCKS_PASS" ]] && extra_flags="${extra_flags} --socks-pass '${SINGBOX_SOCKS_PASS}'"
 
   ssh -t -o StrictHostKeyChecking=no -o BatchMode=yes "${SSH_USER}@${VPS_IP}" << eof
     sudo dpkg --configure -a || true

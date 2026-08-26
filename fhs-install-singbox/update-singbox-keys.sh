@@ -5,13 +5,14 @@
 # Reference: https://sing-box.sagernet.org/
 #
 # Description:
-#   用于更新/重置 sing-box 服务端各项密钥与凭证及域名参数：
+#   用于更新/重置 sing-box 服务端各项密钥、凭证与网络参数：
 #   - VLESS UUID
 #   - Reality Keypair (PrivateKey & PublicKey)
 #   - Reality Short ID
-#   - Hysteria2 Password
-#   - Reality SNI 伪装域名 (可选)
-#   - Hysteria2 TLS 域名 (可选)
+#   - Reality SNI 伪装域名 (dl.google.com 等)
+#   - SOCKS5 入站用户名与密码
+#   - SOCKS 出站代理端口与目标
+#   - VLESS WS 传输路径与 Host
 #
 # ===================== Color Output =====================
 if [[ -t 1 ]] && [[ -n "$TERM" ]] && [[ "$TERM" != "dumb" ]] && command -v tput > /dev/null 2>&1; then
@@ -34,15 +35,22 @@ CONFIG_PATH="/etc/sing-box/config.json"
 UPDATE_UUID=false
 UPDATE_REALITY=false
 UPDATE_SHORT_ID=false
-UPDATE_HY2=false
 UPDATE_DOMAIN=false
-UPDATE_HY2_DOMAIN=false
+UPDATE_SOCKS=false
+UPDATE_SOCKS_PORT=false
+UPDATE_WS=false
+UPDATE_SOCKS_OUT=false
 
 CUSTOM_UUID=""
 CUSTOM_SHORT_ID=""
-CUSTOM_HY2_PASS=""
 CUSTOM_DOMAIN=""
-CUSTOM_HY2_DOMAIN=""
+CUSTOM_SOCKS_USER=""
+CUSTOM_SOCKS_PASS=""
+CUSTOM_SOCKS_PORT=""
+CUSTOM_WS_PATH=""
+CUSTOM_WS_HOST=""
+CUSTOM_SOCKS_OUT_SERVER=""
+CUSTOM_SOCKS_OUT_PORT=""
 
 ASSUME_YES=false
 EXPLICIT_OPTION=false
@@ -51,29 +59,34 @@ NEW_UUID=""
 NEW_PRIVATE_KEY=""
 NEW_PUBLIC_KEY=""
 NEW_SHORT_ID=""
-NEW_HY2_PASS=""
+NEW_SOCKS_USER=""
+NEW_SOCKS_PASS=""
 
 show_help() {
   echo "用法: $0 [选项]"
   echo ""
   echo "选项:"
-  echo "  -a, --all                      更新所有密钥 (默认操作，不含域名修改)"
+  echo "  -a, --all                      更新所有密钥与凭据 (UUID, Reality 密钥对, Short ID, SOCKS 凭据)"
   echo "  --uuid [UUID]                  更新 VLESS UUID (可选自定义 UUID，默认自动生成)"
   echo "  --reality-key, --private-key    重置 Reality 密钥对 (PrivateKey 与 PublicKey)"
   echo "  --short-id [SHORT_ID]          更新 Reality Short ID (可选自定义 8 位十六进制，默认自动生成)"
-  echo "  --hy2-password [PASSWORD]      更新 Hysteria2 密码 (可选自定义密码，默认自动生成)"
-  echo "  --domain DOMAIN                更新 Reality SNI 伪装域名 (例如: www.cloudflare.com)"
-  echo "  --hy2-domain DOMAIN            更新 Hysteria2 TLS 证书域名并重新生成证书"
+  echo "  --domain DOMAIN                更新 Reality SNI 伪装域名 (例如: dl.google.com)"
+  echo "  --socks-user USER              更新 SOCKS5 入站用户名"
+  echo "  --socks-pass PASS              更新 SOCKS5 入站密码 (不填参数则自动随机生成)"
+  echo "  --socks-port PORT              更新 SOCKS5 入站监听端口 (例如: 10086)"
+  echo "  --ws-path PATH                 更新 VLESS WS 路径 (例如: /custom-ws-path)"
+  echo "  --ws-host HOST                 更新 VLESS WS 伪装 Host (例如: proxy.19910417.xyz)"
+  echo "  --socks-out-port PORT          更新 SOCKS 出站代理端口 (默认 2080)"
+  echo "  --socks-out-server IP          更新 SOCKS 出站代理 IP (默认 127.0.0.1)"
   echo "  -c, --config PATH              指定配置文件路径 (默认: /etc/sing-box/config.json)"
   echo "  -y, --yes                      跳过确认提示直接执行"
   echo "  -h, --help                     显示本帮助信息"
   echo ""
   echo "示例:"
-  echo "  $0                            # 交互式重置所有密钥"
+  echo "  $0                            # 重新生成所有密钥与凭据"
   echo "  $0 -y                         # 非交互式重新生成所有密钥"
-  echo "  $0 --domain www.google.com -y # 仅更新 Reality SNI 域名"
-  echo "  $0 --hy2-domain hy2.example.com -y # 仅更新 HY2 域名并更新自签证书"
-  echo "  $0 -a --domain www.apple.com -y  # 重新生成所有密钥并更新 Reality 域名"
+  echo "  $0 --domain dl.google.com -y  # 仅更新 Reality SNI 伪装域名"
+  echo "  $0 --uuid -y                  # 仅更新 VLESS UUID"
 }
 
 check_if_running_as_root() {
@@ -113,7 +126,7 @@ generate_uuid() {
   if command -v uuidgen > /dev/null 2>&1; then
     uuidgen
   else
-    python3 -c 'import uuid; print(uuid.uuid4())'
+    python3 -c "import uuid; print(uuid.uuid4())"
   fi
 }
 
@@ -121,15 +134,7 @@ generate_short_id() {
   if command -v openssl > /dev/null 2>&1; then
     openssl rand -hex 4
   else
-    python3 -c 'import secrets; print(secrets.token_hex(4))'
-  fi
-}
-
-generate_hy2_pass() {
-  if command -v openssl > /dev/null 2>&1; then
-    openssl rand -hex 16
-  else
-    python3 -c 'import secrets; print(secrets.token_hex(16))'
+    python3 -c "import secrets; print(secrets.token_hex(4))"
   fi
 }
 
@@ -140,34 +145,12 @@ generate_reality_keypair() {
   fi
   local key_output
   key_output=$(sing-box generate reality-keypair 2>&1)
-  NEW_PRIVATE_KEY=$(echo "$key_output" | awk '/PrivateKey/ {print $2}')
-  NEW_PUBLIC_KEY=$(echo "$key_output" | awk '/PublicKey/ {print $2}')
+  NEW_PRIVATE_KEY=$(echo "$key_output" | awk "/PrivateKey/ {print $2}")
+  NEW_PUBLIC_KEY=$(echo "$key_output" | awk "/PublicKey/ {print $2}")
   if [[ -z "$NEW_PRIVATE_KEY" || -z "$NEW_PUBLIC_KEY" ]]; then
     echo "${red}error: 解析 sing-box Reality 密钥对失败${reset}"
     exit 1
   fi
-}
-
-regenerate_hy2_certificates() {
-  local domain="$1"
-  local cert_dir="/etc/cert"
-  local cert_path="/etc/cert/hy2_cert.pem"
-  local key_path="/etc/cert/hy2_key.pem"
-
-  echo "${aoi}info: 正在为域名 ${domain} 重新生成 Hysteria2 自签名证书...${reset}"
-  mkdir -p "$cert_dir" || true
-  if ! openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
-    -days 3650 \
-    -subj "/CN=${domain}" \
-    -addext "subjectAltName=DNS:${domain}" \
-    -keyout "$key_path" \
-    -out "$cert_path" > /dev/null 2>&1; then
-    echo "${red}error: 生成 Hysteria2 证书失败${reset}"
-    exit 1
-  fi
-  chmod 600 "$key_path" || true
-  chmod 644 "$cert_path" || true
-  echo "${green}info: Hysteria2 证书已重新生成: $cert_path${reset}"
 }
 
 parse_arguments() {
@@ -177,7 +160,7 @@ parse_arguments() {
         UPDATE_UUID=true
         UPDATE_REALITY=true
         UPDATE_SHORT_ID=true
-        UPDATE_HY2=true
+        UPDATE_SOCKS=true
         EXPLICIT_OPTION=true
         shift
         ;;
@@ -206,16 +189,6 @@ parse_arguments() {
           shift 1
         fi
         ;;
-      --hy2-password|--hy2-pass)
-        UPDATE_HY2=true
-        EXPLICIT_OPTION=true
-        if [[ -n "$2" && "$2" != -* ]]; then
-          CUSTOM_HY2_PASS="$2"
-          shift 2
-        else
-          shift 1
-        fi
-        ;;
       --domain|--reality-domain)
         UPDATE_DOMAIN=true
         EXPLICIT_OPTION=true
@@ -223,19 +196,78 @@ parse_arguments() {
           CUSTOM_DOMAIN="$2"
           shift 2
         else
-          echo "${red}error: --domain 需要指定域名参数 (例如: --domain www.cloudflare.com)${reset}"
+          echo "${red}error: --domain 需要指定域名参数 (例如: --domain dl.google.com)${reset}"
           exit 1
         fi
         ;;
-      --hy2-domain)
-        UPDATE_HY2_DOMAIN=true
+      --socks-user)
+        UPDATE_SOCKS=true
         EXPLICIT_OPTION=true
         if [[ -n "$2" && "$2" != -* ]]; then
-          CUSTOM_HY2_DOMAIN="$2"
+          CUSTOM_SOCKS_USER="$2"
           shift 2
         else
-          echo "${red}error: --hy2-domain 需要指定域名参数 (例如: --hy2-domain hy2.jayyang.cn)${reset}"
-          exit 1
+          shift 1
+        fi
+        ;;
+      --socks-pass)
+        UPDATE_SOCKS=true
+        EXPLICIT_OPTION=true
+        if [[ -n "$2" && "$2" != -* ]]; then
+          CUSTOM_SOCKS_PASS="$2"
+          shift 2
+        else
+          shift 1
+        fi
+        ;;
+      --socks-port)
+        UPDATE_SOCKS_PORT=true
+        EXPLICIT_OPTION=true
+        if [[ -n "$2" && "$2" != -* ]]; then
+          CUSTOM_SOCKS_PORT="$2"
+          shift 2
+        else
+          shift 1
+        fi
+        ;;
+      --ws-path)
+        UPDATE_WS=true
+        EXPLICIT_OPTION=true
+        if [[ -n "$2" && "$2" != -* ]]; then
+          CUSTOM_WS_PATH="$2"
+          shift 2
+        else
+          shift 1
+        fi
+        ;;
+      --ws-host)
+        UPDATE_WS=true
+        EXPLICIT_OPTION=true
+        if [[ -n "$2" && "$2" != -* ]]; then
+          CUSTOM_WS_HOST="$2"
+          shift 2
+        else
+          shift 1
+        fi
+        ;;
+      --socks-out-port)
+        UPDATE_SOCKS_OUT=true
+        EXPLICIT_OPTION=true
+        if [[ -n "$2" && "$2" != -* ]]; then
+          CUSTOM_SOCKS_OUT_PORT="$2"
+          shift 2
+        else
+          shift 1
+        fi
+        ;;
+      --socks-out-server)
+        UPDATE_SOCKS_OUT=true
+        EXPLICIT_OPTION=true
+        if [[ -n "$2" && "$2" != -* ]]; then
+          CUSTOM_SOCKS_OUT_SERVER="$2"
+          shift 2
+        else
+          shift 1
         fi
         ;;
       -c|--config)
@@ -262,7 +294,7 @@ parse_arguments() {
     UPDATE_UUID=true
     UPDATE_REALITY=true
     UPDATE_SHORT_ID=true
-    UPDATE_HY2=true
+    UPDATE_SOCKS=true
   fi
 }
 
@@ -283,7 +315,6 @@ main() {
     exit 1
   fi
 
-  # 准备需要更新的新密钥与配置
   if [[ "$UPDATE_UUID" == "true" ]]; then
     if [[ -z "$CUSTOM_UUID" || "$CUSTOM_UUID" == "auto" ]]; then
       NEW_UUID=$(generate_uuid)
@@ -312,11 +343,16 @@ main() {
     fi
   fi
 
-  if [[ "$UPDATE_HY2" == "true" ]]; then
-    if [[ -z "$CUSTOM_HY2_PASS" || "$CUSTOM_HY2_PASS" == "auto" ]]; then
-      NEW_HY2_PASS=$(generate_hy2_pass)
+  if [[ "$UPDATE_SOCKS" == "true" ]]; then
+    if [[ -n "$CUSTOM_SOCKS_USER" ]]; then
+      NEW_SOCKS_USER="$CUSTOM_SOCKS_USER"
     else
-      NEW_HY2_PASS="$CUSTOM_HY2_PASS"
+      NEW_SOCKS_USER="user_$(openssl rand -hex 3)"
+    fi
+    if [[ -n "$CUSTOM_SOCKS_PASS" ]]; then
+      NEW_SOCKS_PASS="$CUSTOM_SOCKS_PASS"
+    else
+      NEW_SOCKS_PASS=$(openssl rand -hex 8)
     fi
   fi
 
@@ -326,9 +362,11 @@ main() {
   [[ "$UPDATE_REALITY" == "true" ]] && echo "  - Reality PrivateKey: $NEW_PRIVATE_KEY"
   [[ "$UPDATE_REALITY" == "true" ]] && echo "  - Reality PublicKey : $NEW_PUBLIC_KEY"
   [[ "$UPDATE_SHORT_ID" == "true" ]] && echo "  - Reality Short ID  : $NEW_SHORT_ID"
-  [[ "$UPDATE_HY2" == "true" ]] && echo "  - Hysteria2 Password: $NEW_HY2_PASS"
   [[ "$UPDATE_DOMAIN" == "true" ]] && echo "  - Reality SNI 域名  : $CUSTOM_DOMAIN"
-  [[ "$UPDATE_HY2_DOMAIN" == "true" ]] && echo "  - Hysteria2 TLS 域名 : $CUSTOM_HY2_DOMAIN"
+  [[ "$UPDATE_SOCKS" == "true" ]] && echo "  - SOCKS5 用户名/密码 : ${NEW_SOCKS_USER} / ${NEW_SOCKS_PASS}"
+  [[ "$UPDATE_SOCKS_PORT" == "true" ]] && echo "  - SOCKS5 监听端口   : $CUSTOM_SOCKS_PORT"
+  [[ "$UPDATE_WS" == "true" ]] && echo "  - WS Path / Host    : ${CUSTOM_WS_PATH:-未变} / ${CUSTOM_WS_HOST:-未变}"
+  [[ "$UPDATE_SOCKS_OUT" == "true" ]] && echo "  - SOCKS 出站代理    : ${CUSTOM_SOCKS_OUT_SERVER:-127.0.0.1}:${CUSTOM_SOCKS_OUT_PORT:-2080}"
   echo ""
 
   if [[ "$ASSUME_YES" == "false" ]] && [[ -t 0 ]]; then
@@ -343,7 +381,6 @@ main() {
     esac
   fi
 
-  # 备份当前配置至用户家目录（不在配置文件所在目录留存备份）
   local timestamp
   timestamp=$(date +%Y%m%d%H%M%S)
 
@@ -365,120 +402,127 @@ main() {
   fi
   echo "${green}info: 已备份当前配置至用户目录: $user_backup_path${reset}"
 
-  # 临时回滚备份存放在 /tmp，退出时自动清理
   local tmp_backup_path
   tmp_backup_path=$(mktemp /tmp/singbox_config_XXXXXX.json)
   cp "$CONFIG_PATH" "$tmp_backup_path"
   trap 'rm -f "$tmp_backup_path"' EXIT
 
-  # 若更新 HY2 域名，重新生成证书
-  if [[ "$UPDATE_HY2_DOMAIN" == "true" ]]; then
-    regenerate_hy2_certificates "$CUSTOM_HY2_DOMAIN"
-  fi
-
-  # 使用 Python 3 修改 JSON 配置
   echo "${aoi}info: 正在更新配置文件...${reset}"
   local py_output
-  py_output=$(python3 - "$CONFIG_PATH" \
-    "$UPDATE_UUID" "$NEW_UUID" \
-    "$UPDATE_REALITY" "$NEW_PRIVATE_KEY" \
-    "$UPDATE_SHORT_ID" "$NEW_SHORT_ID" \
-    "$UPDATE_HY2" "$NEW_HY2_PASS" \
-    "$UPDATE_DOMAIN" "$CUSTOM_DOMAIN" \
-    "$UPDATE_HY2_DOMAIN" "$CUSTOM_HY2_DOMAIN" << 'EOF'
+  py_output=$(python3 - "$CONFIG_PATH"     "$UPDATE_UUID" "$NEW_UUID"     "$UPDATE_REALITY" "$NEW_PRIVATE_KEY"     "$UPDATE_SHORT_ID" "$NEW_SHORT_ID"     "$UPDATE_DOMAIN" "$CUSTOM_DOMAIN"     "$UPDATE_SOCKS" "$NEW_SOCKS_USER" "$NEW_SOCKS_PASS"     "$UPDATE_SOCKS_PORT" "$CUSTOM_SOCKS_PORT"     "$UPDATE_WS" "$CUSTOM_WS_PATH" "$CUSTOM_WS_HOST"     "$UPDATE_SOCKS_OUT" "$CUSTOM_SOCKS_OUT_SERVER" "$CUSTOM_SOCKS_OUT_PORT" << 'EOF'
 import sys, json
 
 config_path = sys.argv[1]
-up_uuid = sys.argv[2] == 'true'
+up_uuid = sys.argv[2] == "true"
 val_uuid = sys.argv[3]
-up_reality = sys.argv[4] == 'true'
+up_reality = sys.argv[4] == "true"
 val_priv_key = sys.argv[5]
-up_short_id = sys.argv[6] == 'true'
+up_short_id = sys.argv[6] == "true"
 val_short_id = sys.argv[7]
-up_hy2 = sys.argv[8] == 'true'
-val_hy2_pass = sys.argv[9]
-up_domain = sys.argv[10] == 'true'
-val_domain = sys.argv[11]
-up_hy2_domain = sys.argv[12] == 'true'
-val_hy2_domain = sys.argv[13]
+up_domain = sys.argv[8] == "true"
+val_domain = sys.argv[9]
+up_socks = sys.argv[10] == "true"
+val_socks_user = sys.argv[11]
+val_socks_pass = sys.argv[12]
+up_socks_port = sys.argv[13] == "true"
+val_socks_port = sys.argv[14]
+up_ws = sys.argv[15] == "true"
+val_ws_path = sys.argv[16]
+val_ws_host = sys.argv[17]
+up_socks_out = sys.argv[18] == "true"
+val_socks_out_srv = sys.argv[19]
+val_socks_out_prt = sys.argv[20]
 
-with open(config_path, 'r', encoding='utf-8') as f:
+with open(config_path, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 cur_uuid = None
 cur_priv_key = None
 cur_short_id = None
-cur_hy2_pass = None
 cur_domain = None
-cur_hy2_domain = None
+cur_socks_user = None
+cur_socks_pass = None
 
-for ib in data.get('inbounds', []):
-    ib_type = ib.get('type')
-    if ib_type == 'vless':
-        if 'users' in ib and ib['users']:
+for ib in data.get("inbounds", []):
+    ib_type = ib.get("type")
+    if ib_type == "vless":
+        if "users" in ib and ib["users"]:
             if not cur_uuid:
-                cur_uuid = ib['users'][0].get('uuid')
+                cur_uuid = ib["users"][0].get("uuid")
             if up_uuid:
-                for u in ib['users']:
-                    u['uuid'] = val_uuid
+                for u in ib["users"]:
+                    u["uuid"] = val_uuid
 
-        tls = ib.get('tls', {})
-        reality = tls.get('reality', {})
+        tls = ib.get("tls", {})
+        reality = tls.get("reality", {}) if isinstance(tls, dict) else {}
         if reality:
             if not cur_priv_key:
-                cur_priv_key = reality.get('private_key')
+                cur_priv_key = reality.get("private_key")
             if not cur_short_id:
-                s_ids = reality.get('short_id', [])
+                s_ids = reality.get("short_id", [])
                 cur_short_id = s_ids[0] if s_ids else None
             if not cur_domain:
-                cur_domain = tls.get('server_name')
+                cur_domain = tls.get("server_name")
 
             if up_reality:
-                reality['private_key'] = val_priv_key
+                reality["private_key"] = val_priv_key
             if up_short_id:
-                reality['short_id'] = [val_short_id]
+                reality["short_id"] = [val_short_id]
             if up_domain:
-                tls['server_name'] = val_domain
-                if 'handshake' in reality:
-                    reality['handshake']['server'] = val_domain
+                tls["server_name"] = val_domain
+                if "handshake" in reality:
+                    reality["handshake"]["server"] = val_domain
 
-    elif ib_type == 'hysteria2':
-        if 'users' in ib and ib['users']:
-            if not cur_hy2_pass:
-                cur_hy2_pass = ib['users'][0].get('password')
-            if up_hy2:
-                for u in ib['users']:
-                    u['password'] = val_hy2_pass
+        if up_ws and "transport" in ib:
+            t = ib["transport"]
+            if val_ws_path:
+                t["path"] = val_ws_path
+            if val_ws_host:
+                if "headers" not in t:
+                    t["headers"] = {}
+                t["headers"]["Host"] = val_ws_host
 
-        tls = ib.get('tls', {})
-        if tls:
-            if not cur_hy2_domain:
-                cur_hy2_domain = tls.get('server_name')
-            if up_hy2_domain:
-                tls['server_name'] = val_hy2_domain
+    elif ib_type == "socks":
+        if "users" in ib and ib["users"]:
+            if not cur_socks_user:
+                cur_socks_user = ib["users"][0].get("username")
+            if not cur_socks_pass:
+                cur_socks_pass = ib["users"][0].get("password")
+            if up_socks:
+                for u in ib["users"]:
+                    u["username"] = val_socks_user
+                    u["password"] = val_socks_pass
+        if up_socks_port and val_socks_port:
+            ib["listen_port"] = int(val_socks_port)
 
-with open(config_path, 'w', encoding='utf-8') as f:
+if up_socks_out:
+    for ob in data.get("outbounds", []):
+        if ob.get("type") == "socks" or ob.get("tag") == "socks-2028":
+            if val_socks_out_srv:
+                ob["server"] = val_socks_out_srv
+            if val_socks_out_prt:
+                ob["server_port"] = int(val_socks_out_prt)
+
+with open(config_path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 
 res = {
-    "uuid": val_uuid if up_uuid else (cur_uuid or "未设/未改变"),
+    "uuid": val_uuid if up_uuid else (cur_uuid or "未变"),
     "uuid_updated": up_uuid,
-    "private_key": val_priv_key if up_reality else (cur_priv_key or "未设/未改变"),
+    "private_key": val_priv_key if up_reality else (cur_priv_key or "未变"),
     "private_key_updated": up_reality,
-    "short_id": val_short_id if up_short_id else (cur_short_id or "未设/未改变"),
+    "short_id": val_short_id if up_short_id else (cur_short_id or "未变"),
     "short_id_updated": up_short_id,
-    "hy2_password": val_hy2_pass if up_hy2 else (cur_hy2_pass or "未设/未改变"),
-    "hy2_password_updated": up_hy2,
-    "domain": val_domain if up_domain else (cur_domain or "未设/未改变"),
+    "domain": val_domain if up_domain else (cur_domain or "未变"),
     "domain_updated": up_domain,
-    "hy2_domain": val_hy2_domain if up_hy2_domain else (cur_hy2_domain or "未设/未改变"),
-    "hy2_domain_updated": up_hy2_domain
+    "socks_user": val_socks_user if up_socks else (cur_socks_user or "未变"),
+    "socks_pass": val_socks_pass if up_socks else (cur_socks_pass or "未变"),
+    "socks_updated": up_socks
 }
 print(json.dumps(res))
 EOF
-  )
+)
 
-  # 校验更新后的配置文件
   local check_err
   if ! check_err=$(sing-box check -c "$CONFIG_PATH" 2>&1); then
     echo "${red}error: 配置文件校验失败，还原原配置！${reset}"
@@ -488,7 +532,6 @@ EOF
   fi
   echo "${green}info: 配置文件校验通过${reset}"
 
-  # 重启服务
   if systemctl is-active --quiet sing-box || systemctl is-enabled --quiet sing-box; then
     echo "${aoi}info: 正在重启 sing-box 服务...${reset}"
     if ! systemctl restart sing-box; then
@@ -500,60 +543,17 @@ EOF
     echo "${green}info: sing-box 服务重启成功${reset}"
   fi
 
-  # 解析有效密钥与域名
-  local eff_uuid eff_priv_key eff_short_id eff_hy2_pass eff_domain eff_hy2_domain
-  eff_uuid=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['uuid'])" "$py_output")
-  eff_priv_key=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['private_key'])" "$py_output")
-  eff_short_id=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['short_id'])" "$py_output")
-  eff_hy2_pass=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['hy2_password'])" "$py_output")
-  eff_domain=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['domain'])" "$py_output")
-  eff_hy2_domain=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['hy2_domain'])" "$py_output")
-
   echo ""
   echo "${green}================================================================${reset}"
-  echo "${green}           sing-box 服务端配置更新成功！${reset}"
+  echo "${green}              sing-box 服务端配置更新完成！                     ${reset}"
   echo "${green}================================================================${reset}"
-  echo " 配置文件: $CONFIG_PATH"
-  echo " 备份文件: $user_backup_path"
-  echo ""
-  echo " 🔑 当前生效密钥与域名信息:"
-  echo " --------------------------------------------------------------"
-  if [[ "$UPDATE_UUID" == "true" ]]; then
-    echo "  VLESS UUID         : ${green}${eff_uuid}${reset} (已更新)"
-  else
-    echo "  VLESS UUID         : ${eff_uuid} (未变动)"
-  fi
-
-  if [[ "$UPDATE_REALITY" == "true" ]]; then
-    echo "  Reality PrivateKey : ${green}${eff_priv_key}${reset} (已更新)"
-    echo "  Reality PublicKey  : ${green}${NEW_PUBLIC_KEY}${reset} (用于客户端配置)"
-  else
-    echo "  Reality PrivateKey : ${eff_priv_key} (未变动)"
-  fi
-
-  if [[ "$UPDATE_SHORT_ID" == "true" ]]; then
-    echo "  Reality Short ID   : ${green}${eff_short_id}${reset} (已更新)"
-  else
-    echo "  Reality Short ID   : ${eff_short_id} (未变动)"
-  fi
-
-  if [[ "$UPDATE_HY2" == "true" ]]; then
-    echo "  Hysteria2 Password : ${green}${eff_hy2_pass}${reset} (已更新)"
-  else
-    echo "  Hysteria2 Password : ${eff_hy2_pass} (未变动)"
-  fi
-
-  if [[ "$UPDATE_DOMAIN" == "true" ]]; then
-    echo "  Reality SNI Domain : ${green}${eff_domain}${reset} (已更新)"
-  else
-    echo "  Reality SNI Domain : ${eff_domain} (未变动)"
-  fi
-
-  if [[ "$UPDATE_HY2_DOMAIN" == "true" ]]; then
-    echo "  Hysteria2 Domain   : ${green}${eff_hy2_domain}${reset} (已更新)"
-  else
-    echo "  Hysteria2 Domain   : ${eff_hy2_domain} (未变动)"
-  fi
+  local pub_key_display="${NEW_PUBLIC_KEY:-<未变>}"
+  [[ "$UPDATE_UUID" == "true" ]] && echo "  - 新 VLESS UUID     : $NEW_UUID"
+  [[ "$UPDATE_REALITY" == "true" ]] && echo "  - 新 Reality 公钥   : $pub_key_display"
+  [[ "$UPDATE_REALITY" == "true" ]] && echo "  - 新 Reality 私钥   : $NEW_PRIVATE_KEY"
+  [[ "$UPDATE_SHORT_ID" == "true" ]] && echo "  - 新 Short ID       : $NEW_SHORT_ID"
+  [[ "$UPDATE_DOMAIN" == "true" ]] && echo "  - 新 Reality SNI    : $CUSTOM_DOMAIN"
+  [[ "$UPDATE_SOCKS" == "true" ]] && echo "  - 新 SOCKS5 用户/密码: ${NEW_SOCKS_USER} / ${NEW_SOCKS_PASS}"
   echo "${green}================================================================${reset}"
 }
 

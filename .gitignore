@@ -25,3 +25,7 @@ ALL-*.txt
 # Logs & OS artifacts
 *.log
 .DS_Store
+
+# Local sensitive configuration files
+/config.json
+*.local.json

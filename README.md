@@ -160,7 +160,7 @@
 
 ### 步骤 1：在代理末端 VPS 上部署 sing-box
 
-使用 [`fhs-install-singbox`](./fhs-install-singbox) 脚本一键安装符合 FHS 规范的 `sing-box` 服务端（默认开放 VLESS+Reality `443`、Hysteria2 `123` 以及用于 CDN 优选接入的 `vless-grpc` `8088` 端口）：
+使用 [`fhs-install-singbox`](./fhs-install-singbox) 脚本一键安装符合 FHS 规范的 `sing-box` 服务端（默认配置 VLESS+Reality `443` 住宅代理出口、`8443` 原生直连出口、SOCKS5 `10086` 入站认证以及用于 CDN 优选接入的 `vless-grpc` `8088` 端口）：
 
 ```bash
 # 在 VPS 宿主机以 root 权限运行
