@@ -1,0 +1,30 @@
+[Unit]
+Description=VPNGate Sing-box & OpenVPN Tunnel Service
+Documentation=https://github.com/JayYang1991/vpngate-residential-tools
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target vpngate-singbox-node-updater.service
+
+[Service]
+Type=simple
+TimeoutStartSec=0
+Restart=always
+RestartSec=10
+WorkingDirectory=%PROJECT_DIR%
+
+# Clean up any lingering container before starting
+ExecStartPre=-/usr/bin/docker stop vpngate-singbox-openvpn
+ExecStartPre=-/usr/bin/docker rm vpngate-singbox-openvpn
+
+# Start container with NET_ADMIN and host config mapping
+ExecStart=/usr/bin/docker run --name vpngate-singbox-openvpn \
+    --cap-add=NET_ADMIN \
+    --device=/dev/net/tun:/dev/net/tun \
+    -v %CONFIG_DIR%:/config \
+    vpngate-singbox-openvpn:latest
+
+# Graceful stop
+ExecStop=/usr/bin/docker stop -t 10 vpngate-singbox-openvpn
+
+[Install]
+WantedBy=multi-user.target

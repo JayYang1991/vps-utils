@@ -1,0 +1,16 @@
+# 忽略运行时生成的配置文件与临时缓存
+config/config.env
+config/client.ovpn
+config/auth.txt
+config/singbox_run.json
+config/openvpn_run.ovpn
+config/vpn_status.json
+config/*.bak
+
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+
+# 忽略下载的二进制归档 (保留 Dockerfile 内部动态下载支持)
+bin/*.tar.gz
+!bin/.gitkeep

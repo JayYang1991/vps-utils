@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  vpngate-singbox-openvpn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: vpngate-singbox-openvpn:latest
+    container_name: vpngate-singbox-openvpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - ./config:/config
+    # 映射外部公开 SOCKS 端口 (供宿主机与局域网使用)
+    ports:
+      - "${PUBLIC_SOCKS_PORT:-2080}:${PUBLIC_SOCKS_PORT:-2080}"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

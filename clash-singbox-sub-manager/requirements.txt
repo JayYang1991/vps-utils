@@ -1,0 +1,3 @@
+# Clash & Sing-box Subscription Manager
+# Standard library + PyYAML for parsing Clash YAML configs
+pyyaml>=6.0

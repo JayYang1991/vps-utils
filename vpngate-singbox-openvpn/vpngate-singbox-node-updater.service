@@ -1,0 +1,16 @@
+[Unit]
+Description=VPNGate Node Daily Auto-Updater Daemon (Beijing Time 00:00-06:00)
+Documentation=https://github.com/JayYang1991/vpngate-residential-tools
+After=network-online.target docker.service
+Wants=network-online.target
+PartOf=vpngate-singbox-openvpn.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=15
+WorkingDirectory=%INSTALL_DIR%
+ExecStart=/usr/bin/python3 %INSTALL_DIR%/scripts/node_updater.py
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+# 示例 VPNGate / OpenVPN 配置文件
+# 容器启动时会自动注入 route-nopull 以及 socks-proxy 127.0.0.1 1080
+client
+dev tun
+proto tcp
+remote 219.100.37.240 443
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+cipher AES-128-CBC
+auth SHA1
+verb 3
+
+<ca>
+-----BEGIN CERTIFICATE-----
+MIIB/zCCAaegAwIBAgIQX/3yD2k5m7lFrgGgYQ4dKTANBgkqhkiG9w0BAQsFADAe
+MRwwGgYDVQQDDBN2cG5nYXRlLWNhLm9wb3NvZnQuY2EwHhcNMjAwMTAxMDAwMDAw
+WhcNMzAwMTAxMDAwMDAwWjAeMRwwGgYDVQQDDBN2cG5nYXRlLWNhLm9wb3NvZnQu
+Y2EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQC6w+...
+-----END CERTIFICATE-----
+</ca>
