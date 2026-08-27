@@ -53,7 +53,7 @@ ACTION="install"
 ASSUME_YES=false
 
 # 可选自定义配置项
-TG_PROXY_ARG="${TG_PROXY:-}"
+PROXY_ARG="${PROXY:-${TG_PROXY:-}}"
 MODE_ARG="speed"
 PORTS_ARG="443"
 CONCURRENCY_ARG="200"
@@ -77,7 +77,7 @@ show_help() {
   echo "  -h, --help                  显示本帮助菜单"
   echo ""
   echo "自定义配置选项 (搭配 --install 或独立使用以写入 /etc/preferred-ip-manager/config.env):"
-  echo "  -p, --proxy, --tg-proxy URL 指定 Telegram 下载候选 IP 时所使用的代理 (如 socks5h://127.0.0.1:1080、socks5://127.0.0.1:1080 或 http://127.0.0.1:7890)"
+  echo "  -p, --proxy, --tg-proxy URL 指定网络请求代理 (用于 Telegram 频道下载及订阅节点获取/推送，如 socks5h://127.0.0.1:1080、socks5://127.0.0.1:1080 或 http://127.0.0.1:7890)"
   echo "  --ports PORTS               待测试端口列表 (默认: 443)"
   echo "  --mode MODE                 测速模式: speed (大带宽模式) 或 latency (延迟模式) (默认: speed)"
   echo "  --concurrency NUM           并发测速线程数 (默认: 200)"
@@ -338,8 +338,8 @@ TEST_COUNT="20"
 # 附加执行参数 (默认非交互自动推送)
 EXTRA_ARGS="-y"
 
-# Telegram 下载代理 (可选，如通过 SOCKS5 代理下载: socks5://127.0.0.1:1080 或 http://127.0.0.1:7890)
-TG_PROXY="${TG_PROXY_ARG}"
+# 网络请求代理 (可选，用于 Telegram 频道下载及订阅节点获取/推送，如: socks5h://127.0.0.1:1080 或 http://127.0.0.1:7890)
+PROXY="${PROXY_ARG}"
 
 # 自定义测速文件下载 URL
 CFST_URL="${CFST_URL_ARG}"
@@ -357,9 +357,9 @@ EOF
     log "已生成配置: ${CONFIG_FILE}"
   else
     log "正在更新已有配置文件: ${CONFIG_FILE} ..."
-    if [[ -n "$TG_PROXY_ARG" ]]; then
-      set_config_value "TG_PROXY" "$TG_PROXY_ARG" "$CONFIG_FILE"
-      log "已更新 Telegram 代理配置: ${TG_PROXY_ARG}"
+    if [[ -n "$PROXY_ARG" ]]; then
+      set_config_value "PROXY" "$PROXY_ARG" "$CONFIG_FILE"
+      log "已更新网络请求代理配置: ${PROXY_ARG}"
     fi
     if [[ "$PORTS_ARG" != "443" ]]; then
       set_config_value "PORTS" "$PORTS_ARG" "$CONFIG_FILE"
@@ -492,11 +492,14 @@ show_status() {
     echo -e " 配置文件     : ${CONFIG_FILE}"
     if [[ -f "$CONFIG_FILE" ]]; then
       local proxy_cfg
-      proxy_cfg=$(grep '^TG_PROXY=' "$CONFIG_FILE" | cut -d= -f2- | tr -d '"' || echo "")
+      proxy_cfg=$(grep '^PROXY=' "$CONFIG_FILE" | cut -d= -f2- | tr -d '"' || echo "")
+      if [[ -z "$proxy_cfg" ]]; then
+        proxy_cfg=$(grep '^TG_PROXY=' "$CONFIG_FILE" | cut -d= -f2- | tr -d '"' || echo "")
+      fi
       if [[ -n "$proxy_cfg" ]]; then
-        echo -e " Telegram 代理: ${GREEN}${proxy_cfg}${NC}"
+        echo -e " 网络请求代理 : ${GREEN}${proxy_cfg}${NC}"
       else
-        echo -e " Telegram 代理: 未配置 (直连)"
+        echo -e " 网络请求代理 : 未配置 (直连)"
       fi
       local cfst_url_cfg
       cfst_url_cfg=$(grep '^CFST_URL=' "$CONFIG_FILE" | cut -d= -f2- | tr -d '"' || echo "")
@@ -547,7 +550,7 @@ parse_arguments() {
         shift
         ;;
       -p|--proxy|--tg-proxy)
-        TG_PROXY_ARG="$2"
+        PROXY_ARG="$2"
         shift 2
         ;;
       --ports)
@@ -617,10 +620,10 @@ main() {
       echo -e " • 候选数据 : 自动从 Telegram 频道拉取最新 IP 并合并在线/历史源"
       echo -e " • 测速地址 : ${CFST_URL_ARG}"
       echo -e " • 订阅同步 : 测速完成后默认自动推送结果至 Cloudflare Workers 订阅端"
-      if [[ -n "$TG_PROXY_ARG" ]]; then
-        echo -e " • Telegram 代理 : ${GREEN}${TG_PROXY_ARG}${NC}"
+      if [[ -n "$PROXY_ARG" ]]; then
+        echo -e " • 网络请求代理 : ${GREEN}${PROXY_ARG}${NC}"
       else
-        echo -e " • Telegram 代理 : 未配置 (直连)"
+        echo -e " • 网络请求代理 : 未配置 (直连)"
       fi
       echo -e " • 运维管理 : ${CYAN}preferred-ip-manager status | run | logs | restart${NC}"
       echo -e " • 快速测速 : ${CYAN}preferred-ip-tester${NC}"

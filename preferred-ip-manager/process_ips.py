@@ -126,6 +126,41 @@ def run_command(cmd: str, description: str):
         log_warn(f"{description} 执行过程中返回非零状态码")
 
 
+def format_proxy_url(proxy_str: str) -> str:
+    """标准化代理字符串，支持 socks5/socks5h/http/https 等协议"""
+    if not proxy_str:
+        return ""
+    proxy_str = str(proxy_str).strip()
+    if not proxy_str:
+        return ""
+    if "://" not in proxy_str:
+        proxy_str = f"socks5h://{proxy_str}"
+    elif proxy_str.startswith("socks5://"):
+        proxy_str = proxy_str.replace("socks5://", "socks5h://", 1)
+    return proxy_str
+
+def get_requests_proxies(proxy_arg: str = "") -> Optional[Dict[str, str]]:
+    """获取 requests 专用的 proxies 字典"""
+    raw_proxy = (
+        proxy_arg
+        or os.getenv("PROXY")
+        or os.getenv("TG_PROXY")
+        or os.getenv("ALL_PROXY")
+        or os.getenv("all_proxy")
+        or os.getenv("HTTPS_PROXY")
+        or os.getenv("https_proxy")
+        or os.getenv("HTTP_PROXY")
+        or os.getenv("http_proxy")
+        or ""
+    )
+    formatted = format_proxy_url(raw_proxy)
+    if not formatted:
+        return None
+    return {
+        "http": formatted,
+        "https": formatted
+    }
+
 # ==============================================================================
 # 2. 订阅服务器交互模块 (WorkerSyncManager)
 # ==============================================================================
@@ -143,12 +178,13 @@ class WorkerSyncManager:
         return headers
 
     @classmethod
-    def fetch_sub_ips(cls) -> List[str]:
+    def fetch_sub_ips(cls, proxy: str = "") -> List[str]:
         """从订阅服务器拉取现有在线 VLESS/Trojan 节点 IP 列表"""
         url = f"{SUB_URL}/sub?host=1&uuid=1"
         log_step(f"正在从订阅服务器获取现有 IP 列表 ({mask_url(url)})")
+        proxies = get_requests_proxies(proxy)
         try:
-            resp = requests.get(url, headers=cls.get_auth_headers(), timeout=15)
+            resp = requests.get(url, headers=cls.get_auth_headers(), proxies=proxies, timeout=15)
             if resp.status_code == 200:
                 import base64
                 content = base64.b64decode(resp.text).decode('utf-8')
@@ -177,15 +213,16 @@ class WorkerSyncManager:
         return []
 
     @classmethod
-    def fetch_history_ips(cls) -> List[str]:
+    def fetch_history_ips(cls, proxy: str = "") -> List[str]:
         """从订阅服务器拉取历史备份 IP 记录"""
         token = os.environ.get("CF_SUB_TOKEN") or os.environ.get("SUB_TOKEN")
         url = f"{SUB_URL}/api/history"
         log_step(f"正在从订阅服务器获取历史 IP 记录 ({mask_url(url)})")
+        proxies = get_requests_proxies(proxy)
         try:
             headers = cls.get_auth_headers(token)
             params = {"token": token} if token else {}
-            resp = requests.get(url, headers=headers, params=params, timeout=15)
+            resp = requests.get(url, headers=headers, params=params, proxies=proxies, timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success") and isinstance(data.get("data"), list):
@@ -206,7 +243,7 @@ class WorkerSyncManager:
         return []
 
     @classmethod
-    def upload_cdn_results(cls, file_path: str):
+    def upload_cdn_results(cls, file_path: str, proxy: str = ""):
         """将 CDN 优选结果上传推送至订阅服务器"""
         token = os.environ.get("CF_SUB_TOKEN") or os.environ.get("SUB_TOKEN")
         if not token:
@@ -215,12 +252,13 @@ class WorkerSyncManager:
 
         url = f"{SUB_URL}/api/update?type=ips&mode=overwrite"
         log_step(f"正在同步 CDN 优选结果至订阅服务器 ({mask_url(url)})")
+        proxies = get_requests_proxies(proxy)
         try:
             with open(file_path, 'rb') as f:
                 data = f.read()
             headers = cls.get_auth_headers(token)
             headers["Content-Type"] = "text/plain; charset=utf-8"
-            resp = requests.put(url, data=data, headers=headers, timeout=15)
+            resp = requests.put(url, data=data, headers=headers, proxies=proxies, timeout=15)
             if resp.status_code == 200:
                 log_info(f"{GREEN}{BOLD}✓ CDN 优选结果推送成功！{RESET} {resp.text}")
             else:
@@ -260,7 +298,7 @@ class IPSourceManager:
         return port_groups
 
     @classmethod
-    def collect_ips(cls, skip_tg: bool = False, input_file: Optional[str] = None, allowed_ports: Optional[List[str]] = None, auto_yes: bool = False, tg_proxy: str = "") -> Dict[str, List[Tuple[str, str]]]:
+    def collect_ips(cls, skip_tg: bool = False, input_file: Optional[str] = None, allowed_ports: Optional[List[str]] = None, auto_yes: bool = False, proxy: str = "") -> Dict[str, List[Tuple[str, str]]]:
         """汇总候选 IP 池 (默认从 Telegram 抓取最新列表并合并在线订阅/历史池)"""
         groups = collections.defaultdict(list)
         file_ip_count = 0
@@ -275,7 +313,7 @@ class IPSourceManager:
             log_info(f"从指定本地文件中成功解析到 {file_ip_count} 个有效 IP 候选")
         elif not skip_tg:
             # 默认从 Telegram 频道拉取最新 IP 列表文件
-            proxy_flag = f" --proxy '{tg_proxy}'" if tg_proxy else ""
+            proxy_flag = f" --proxy '{proxy}'" if proxy else ""
             download_cmd = f"{TG_TOOL} download -n 'CF中转' --limit 1 -o {DOWNLOAD_DIR}{proxy_flag}"
             run_command(download_cmd, "从 Telegram 频道下载最新的 IP 列表文件")
 
@@ -312,7 +350,7 @@ class IPSourceManager:
             log_info("已指定 --skip-tg 参数: 跳过 Telegram 文件下载，直接从订阅服务器拉取候选 IP 列表...")
 
         # 合并在线订阅 IP
-        sub_ips = WorkerSyncManager.fetch_sub_ips()
+        sub_ips = WorkerSyncManager.fetch_sub_ips(proxy=proxy)
         sub_added = 0
         for entry in sub_ips:
             if ':' in entry:
@@ -329,7 +367,7 @@ class IPSourceManager:
                         sub_added += 1
 
         # 合并历史 IP
-        history_ips = WorkerSyncManager.fetch_history_ips()
+        history_ips = WorkerSyncManager.fetch_history_ips(proxy=proxy)
         history_added = 0
         for entry in history_ips:
             if ':' in entry:
@@ -567,9 +605,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     cdn_group.add_argument("--skip-tg", "--skip-telegram", "--sub-only", dest="skip_tg", action="store_true",
                            default=os.getenv("SKIP_TG", "false").lower() in ("true", "1", "yes"),
                            help="跳过从 Telegram 下载文件，仅从订阅服务器获取现有及历史 IP 列表进行测速 (默认从 TG 拉取)")
-    cdn_group.add_argument("--tg-proxy", "--proxy", dest="tg_proxy",
-                           default=os.getenv("TG_PROXY", ""),
-                           help="从 Telegram 下载文件时使用的代理 (例如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890，支持环境变量 TG_PROXY/ALL_PROXY)")
+    cdn_group.add_argument("--proxy", "--tg-proxy", dest="proxy",
+                           default=os.getenv("PROXY", os.getenv("TG_PROXY", "")),
+                           help="连接 Telegram 与订阅服务器时使用的代理 (例如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890，支持环境变量 PROXY/TG_PROXY/ALL_PROXY)")
     cdn_group.add_argument("--httping", action="store_true",
                            help="[延迟模式可选] 使用 HTTPing 代替 TCPing 测量延迟 (默认使用 TCPing)")
     cdn_group.add_argument("--no-fallback", dest="fallback", action="store_false", default=True,
@@ -680,7 +718,7 @@ def run_cdn_workflow(args: argparse.Namespace):
         input_file=args.input_file,
         allowed_ports=allowed_ports,
         auto_yes=args.yes,
-        tg_proxy=args.tg_proxy
+        proxy=args.proxy
     )
 
     if not any(groups.values()):
@@ -735,7 +773,7 @@ def run_cdn_workflow(args: argparse.Namespace):
                 except (KeyboardInterrupt, EOFError):
                     print("\n⏸️ 用户取消推送操作。")
                     return
-            WorkerSyncManager.upload_cdn_results(FINAL_TXT)
+            WorkerSyncManager.upload_cdn_results(FINAL_TXT, proxy=args.proxy)
 
 
 def main():

@@ -566,7 +566,7 @@ async def main():
     session_file = get_session_path(session_arg)
 
     # 解析代理配置 (命令行参数优先，环境变量兜底)
-    proxy_str = getattr(args, "proxy", "") or os.getenv('TG_PROXY') or os.getenv('ALL_PROXY') or os.getenv('all_proxy') or os.getenv('HTTPS_PROXY') or os.getenv('https_proxy') or os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
+    proxy_str = getattr(args, "proxy", "") or os.getenv('PROXY') or os.getenv('TG_PROXY') or os.getenv('ALL_PROXY') or os.getenv('all_proxy') or os.getenv('HTTPS_PROXY') or os.getenv('https_proxy') or os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
     proxy_config = parse_proxy(proxy_str)
     if proxy_config:
         print(f"🌐 [INFO] 正在通过代理连接 Telegram: {proxy_config['proxy_type']}://{proxy_config['addr']}:{proxy_config['port']}")

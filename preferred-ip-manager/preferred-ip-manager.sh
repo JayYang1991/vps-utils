@@ -110,12 +110,15 @@ cmd_status() {
     echo -e " 服务状态     : ${srv_active}"
     echo -e " 配置文件     : ${CONFIG_FILE}"
     if [[ -f "$CONFIG_FILE" ]]; then
-      local tg_proxy_cfg
-      tg_proxy_cfg=$(grep '^TG_PROXY=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "")
-      if [[ -n "$tg_proxy_cfg" ]]; then
-        echo -e " Telegram 代理: ${GREEN}${tg_proxy_cfg}${NC}"
+      local proxy_cfg
+      proxy_cfg=$(grep '^PROXY=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "")
+      if [[ -z "$proxy_cfg" ]]; then
+        proxy_cfg=$(grep '^TG_PROXY=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "")
+      fi
+      if [[ -n "$proxy_cfg" ]]; then
+        echo -e " 网络请求代理 : ${GREEN}${proxy_cfg}${NC}"
       else
-        echo -e " Telegram 代理: 未配置 (直连)"
+        echo -e " 网络请求代理 : 未配置 (直连)"
       fi
       local mode_cfg
       mode_cfg=$(grep '^MODE=' "$CONFIG_FILE" 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "speed")

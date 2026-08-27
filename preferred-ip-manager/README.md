@@ -175,15 +175,15 @@ python telegram_tool.py list --proxy socks5h://127.0.0.1:1080
 # 2. 按频道名称搜索并下载包含 "CF中转" 关键字的最新文件 (通过 HTTP 代理)
 python telegram_tool.py download -n 'CF中转' --limit 1 -o ./origin-iplist --proxy http://127.0.0.1:7890
 
-# 3. 通过环境变量设置默认代理 (避免每次手动输入 --proxy)
-export TG_PROXY="socks5h://127.0.0.1:1080"
+# 3. 通过环境变量设置默认代理 (用于 Telegram 与订阅获取/推送)
+export PROXY="socks5h://127.0.0.1:1080"
 python telegram_tool.py download -n 'CF中转' --limit 1 -o ./origin-iplist
 ```
 
-在 `process_ips.py` 中也可直接使用 `--tg-proxy` / `--proxy` 参数：
+在 `process_ips.py` 中也可直接使用 `--proxy` 参数：
 ```bash
-# 执行 CDN 测速流程，并指定通过本地 1080 端口 SOCKS5 代理下载 Telegram 资源
-python3 process_ips.py --target cdn --tg-proxy socks5://127.0.0.1:1080 --mode speed --top 20
+# 执行 CDN 测速流程，并指定通过本地 1080 端口 SOCKS5 代理下载 Telegram 资源与同步订阅节点
+python3 process_ips.py --target cdn --proxy socks5h://127.0.0.1:1080 --mode speed --top 20
 ```
 
 ---
@@ -253,7 +253,7 @@ MIN_SPEED="5.0"            # 最低达标速度 (MB/s)
 MAX_DELAY="300"            # 最大允许延迟 (ms)
 EXTRA_ARGS="-y"            # 默认非交互自动推送参数
 CFST_URL="https://movies.jackyang.cc.cd/download?size=200" # 默认测速地址
-TG_PROXY="socks5://127.0.0.1:1080"     # Telegram 下载代理 (可选)
+PROXY="socks5h://127.0.0.1:1080"       # 网络请求代理 (可选，用于 Telegram 与订阅获取/推送)
 CF_SUB_URL="https://sub.19910417.xyz"  # Workers 订阅端地址
 CF_SUB_TOKEN=""            # Workers 订阅端更新 Token (若设置将自动推送)
 TG_API_ID=""               # Telegram API ID (可选，从 TG 频道拉取候选 IP 时使用)
