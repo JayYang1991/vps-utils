@@ -5,7 +5,7 @@ speedtest_runner.py
 Cloudflare Access TCP 优选 IP 测速与候选池管理引擎
 
 功能：
-1. 容器启动时从 --sub-url 在线订阅源直接拉取最新候选节点并保持原始顺序写入待选列表文件；
+1. 容器启动时从 --sub-url 在线订阅源只拉取在线节点 (/sub?host=1&uuid=1) 并保持原始顺序写入待选列表文件；
    若获取失败则保持原有待选列表文件不变 (无需测速，极速启动)。
 2. 定时任务或手动触发时，调度 cfst (CloudflareSpeedTest) 在 443 端口执行延迟与大带宽下载测速。
 3. 内置深层大带宽挖掘与零门槛自适应保底机制 (Pass 2 Auto-Fallback)。
@@ -103,15 +103,14 @@ class CandidateSourceManager:
         return results
 
     @classmethod
-    def fetch_online_ips(cls, sub_url: str, target_port: str = "443") -> List[Tuple[str, str]]:
-        """从订阅服务器拉取在线与历史节点 IP 并保持原始顺序"""
+    def fetch_sub_nodes(cls, sub_url: str, target_port: str = "443") -> List[Tuple[str, str]]:
+        """仅从在线订阅源 (/sub?host=1&uuid=1) 拉取在线节点，保持原始订阅顺序"""
         if not sub_url:
             return []
         sub_url = sub_url.rstrip('/')
         results = []
         headers = {"User-Agent": "Mozilla/5.0 (VPS-Utils; Cloudflare-Access-TCP)"}
 
-        # 1. 获取在线节点 (/sub?host=1&uuid=1)
         try:
             url = f"{sub_url}/sub?host=1&uuid=1"
             resp = requests.get(url, headers=headers, timeout=6)
@@ -136,18 +135,27 @@ class CandidateSourceManager:
                         addr = line.split(':', 1)[0].strip()
                         if is_valid_ip(addr):
                             results.append((addr, "Sub"))
-                log_info(f"从在线订阅源 ({sub_url}) 获取到 {len(results)} 个候选 IP")
+                log_info(f"从在线订阅节点源 ({url}) 获取到 {len(results)} 个在线候选 IP")
         except Exception as e:
-            log_warn(f"拉取在线订阅 IP 失败: {e}")
+            log_warn(f"拉取在线订阅节点失败: {e}")
 
-        # 2. 获取历史记录 (/api/history)
+        return results
+
+    @classmethod
+    def fetch_history_nodes(cls, sub_url: str, target_port: str = "443") -> List[Tuple[str, str]]:
+        """从历史记录源 (/api/history) 拉取历史节点"""
+        if not sub_url:
+            return []
+        sub_url = sub_url.rstrip('/')
+        results = []
+        headers = {"User-Agent": "Mozilla/5.0 (VPS-Utils; Cloudflare-Access-TCP)"}
+
         try:
             url = f"{sub_url}/api/history"
             resp = requests.get(url, headers=headers, timeout=6)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success") and isinstance(data.get("data"), list):
-                    h_count = 0
                     for record in data["data"]:
                         if isinstance(record, dict) and "ips" in record:
                             for line in record.get("ips", []):
@@ -157,8 +165,7 @@ class CandidateSourceManager:
                                     p = port_match.group(1) if port_match else "443"
                                     if is_valid_ip(addr) and (target_port == "all" or p == target_port):
                                         results.append((addr, "History"))
-                                        h_count += 1
-                    log_info(f"从历史记录获取到 {h_count} 个候选 IP")
+                    log_info(f"从历史记录获取到 {len(results)} 个历史候选 IP")
         except Exception as e:
             log_warn(f"拉取历史 IP 失败: {e}")
 
@@ -166,7 +173,7 @@ class CandidateSourceManager:
 
     @classmethod
     def collect_all_candidates(cls, sub_url: str, existing_candidates_file: str, target_port: str = "443") -> List[Tuple[str, str]]:
-        """聚合去重候选 IP 来源 (在线订阅源 + 本地现有待选列表)"""
+        """聚合去重候选 IP 来源 (用于定时/全量测速: 在线订阅源 + 历史记录 + 本地现有待选列表)"""
         seen_ips = set()
         candidates = []
 
@@ -177,9 +184,13 @@ class CandidateSourceManager:
                     seen_ips.add(ip)
                     candidates.append((ip, remark))
 
-        # 2. 在线订阅与历史源
+        # 2. 在线订阅源
         if sub_url:
-            for ip, remark in cls.fetch_online_ips(sub_url, target_port):
+            for ip, remark in cls.fetch_sub_nodes(sub_url, target_port):
+                if ip not in seen_ips:
+                    seen_ips.add(ip)
+                    candidates.append((ip, remark))
+            for ip, remark in cls.fetch_history_nodes(sub_url, target_port):
                 if ip not in seen_ips:
                     seen_ips.add(ip)
                     candidates.append((ip, remark))
@@ -362,19 +373,19 @@ def test_ip_reachability(ip: str, port: int = 443, timeout: float = 2.0) -> bool
 def update_candidates_from_sub_url(sub_url: str, output_path: str, port: str = "443", top_count: int = 20) -> bool:
     """
     容器启动时从 --sub-url 获取在线订阅更新作为待选列表文件；
-    不需要执行测速，直接使用 --sub-url 拉取节点并保持对应 IP 顺序写入待选列表文件；
+    只拉取在线节点 (/sub?host=1&uuid=1)，不执行测速，保持原始在线节点顺序写入待选列表文件；
     如果获取失败，则保持原有待选列表文件不变。
     """
     if not sub_url:
         return False
 
-    log_info(f"🔄 正在从在线订阅源 ({sub_url}) 拉取最新候选节点 (保持原始订阅顺序)...")
-    online_ips = CandidateSourceManager.fetch_online_ips(sub_url, target_port=port)
+    log_info(f"🔄 正在从在线订阅源 ({sub_url}) 拉取最新在线节点 (只拉取在线节点并保持原始顺序)...")
+    sub_nodes = CandidateSourceManager.fetch_sub_nodes(sub_url, target_port=port)
 
-    if online_ips:
+    if sub_nodes:
         seen = set()
         ordered_candidates = []
-        for ip, remark in online_ips:
+        for ip, remark in sub_nodes:
             if ip not in seen and is_valid_ip(ip):
                 seen.add(ip)
                 ordered_candidates.append((ip, remark))
@@ -388,13 +399,13 @@ def update_candidates_from_sub_url(sub_url: str, output_path: str, port: str = "
                             f.write(f"{ip}:{port}#{remark}\n")
                         else:
                             f.write(f"{ip}:{port}\n")
-                log_info(f"✨ 成功从在线订阅拉取并保持顺序保存 {len(ordered_candidates[:top_count])} 个待选 IP 至: {output_path}")
+                log_info(f"✨ 成功从在线订阅拉取并保持顺序保存 {len(ordered_candidates[:top_count])} 个在线节点至待选列表: {output_path}")
                 return True
             except Exception as e:
                 log_error(f"写入待选列表文件失败: {e}")
                 return False
 
-    log_warn(f"⚠️ 从在线订阅源 ({sub_url}) 获取更新失败或未返回有效节点，保持原有待选列表文件 ({output_path}) 不变。")
+    log_warn(f"⚠️ 从在线订阅源 ({sub_url}) 获取在线节点失败或未返回有效节点，保持原有待选列表文件 ({output_path}) 不变。")
     return False
 
 
@@ -402,7 +413,7 @@ def main():
     import shutil
     parser = argparse.ArgumentParser(description="Cloudflare Access TCP 优选 IP 测速与候选池管理引擎")
     parser.add_argument("--run", action="store_true", help="立即执行一次全流程测速并输出 TOP 20 待选列表")
-    parser.add_argument("--update-from-sub", action="store_true", help="从 --sub-url 拉取在线订阅并更新待选列表 (不测速保持原顺序)")
+    parser.add_argument("--update-from-sub", action="store_true", help="从 --sub-url 拉取在线节点并更新待选列表 (只拉取在线节点并保持原顺序)")
     parser.add_argument("--output", "-o", default=os.getenv("CANDIDATES_FILE", "/etc/cloudflare-access-tcp/candidates.txt"),
                         help="待选 IP 列表输出文件路径 (默认: /etc/cloudflare-access-tcp/candidates.txt)")
     parser.add_argument("--top", "-t", type=int, default=int(os.getenv("TOP_COUNT", "20")),
