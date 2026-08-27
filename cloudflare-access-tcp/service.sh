@@ -348,8 +348,8 @@ cmd_test() {
         else
           echo -e "${YELLOW}⚠️ 超时/不可达${NC}"
         fi
-        ((cnt++))
-        ((cnt >= 5)) && break
+        cnt=$((cnt + 1))
+        [[ $cnt -ge 5 ]] && break
       fi
     done < "$CANDIDATES_FILE"
   fi
