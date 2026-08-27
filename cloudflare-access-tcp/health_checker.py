@@ -8,7 +8,7 @@ Cloudflare Access TCP 容器内网络联通性检测、在线订阅同步与优�
 1. 容器启动时从 --sub-url 获取在线订阅更新作为待选列表文件；若获取失败则保持原有文件不变。
 2. 启动时从待选列表文件 (candidates.txt) 从前往后依次探测 443 端口并选取可用节点作为优选 IP (--preferred-ip)。
 3. 定期检测 TCP 转发端口与当前优选 IP 的网络联通性 (Health Check Loop)。
-4. 当 TCP 转发不通时，从待选列表从前往后验证可用性并自动故障转移 (Failover)。
+4. 当 TCP 转发不通或优选 IP 失效时，从待选列表从前往后验证可用性并自动故障转移 (Failover)。
 5. 每日北京时间凌晨 02:00 ~ 06:00 随机时刻自动触发测速，更新 TOP 20 待选列表并切换至最优 IP。
 6. 实时输出运行状态至 /etc/cloudflare-access-tcp/status.json 供宿主机监控。
 """
@@ -179,6 +179,8 @@ class NetworkTester:
     @staticmethod
     def test_ip_tls_edge(ip: str, port: int = 443, timeout: float = 2.0) -> bool:
         """测试 Cloudflare 边缘 IP 的 443 端口可用性"""
+        if not ip:
+            return False
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout)
@@ -247,12 +249,24 @@ def update_candidates_from_sub():
 
 def select_preferred_ip_from_candidates(candidates_file: str, domains: List[str]) -> str:
     """
-    --preferred-ip 需要从待选列表文件选取：
+    --preferred-ip 从待选列表文件选取：
     从待选列表文件从前往后依次测试 443 端口可用性，选取首个可用 IP 设置为优选 IP。
     """
     candidates = CandidatePool.read_candidates(candidates_file)
+    
+    # 若待选文件为空，但配置了 INITIAL_PREF_IP，则自动补齐保底
+    if not candidates and Config.INITIAL_PREF_IP:
+        log_info(f"待选列表为空，使用配置的 PREFERRED_IP ({Config.INITIAL_PREF_IP}) 初始化保底候选...")
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(candidates_file)), exist_ok=True)
+            with open(candidates_file, 'w', encoding='utf-8') as f:
+                f.write(f"{Config.INITIAL_PREF_IP}:443#ConfigIP\n")
+            candidates = CandidatePool.read_candidates(candidates_file)
+        except Exception:
+            pass
+
     if not candidates:
-        log_warn(f"待选列表文件 ({candidates_file}) 为空！")
+        log_warn(f"⚠️ 待选列表文件 ({candidates_file}) 为空且无配置优选 IP！")
         return ""
 
     log_info(f"🔍 正在从待选列表 ({len(candidates)} 个节点) 从前往后选取首个可用优选 IP...")
@@ -346,9 +360,14 @@ class HealthCheckerDaemon:
         log_warn("⚠️ 开始执行优选 IP 自动故障转移 (Failover 流程)...")
         candidates = CandidatePool.read_candidates(self.candidates_file)
 
-        # 若候选列表为空，则立即尝试触发一次测速获取 TOP 20
+        # 若候选列表为空，则尝试从在线订阅重新拉取或触发一次测速
         if not candidates:
-            log_warn("待选 IP 列表为空，正在尝试立即触发测速以获取可用候选...")
+            log_warn("待选 IP 列表为空，正在尝试重新拉取在线订阅...")
+            update_candidates_from_sub()
+            candidates = CandidatePool.read_candidates(self.candidates_file)
+
+        if not candidates:
+            log_warn("正在尝试触发测速以获取可用候选...")
             if self.run_speedtest_sync():
                 candidates = CandidatePool.read_candidates(self.candidates_file)
 
@@ -378,25 +397,16 @@ class HealthCheckerDaemon:
                 # 2. 重启 cloudflared 转发进程
                 ForwarderController.restart_forwarders()
 
-                # 3. 等待并验证本地转发端口联通性
+                # 3. 等待并验证本地转发端口与边缘联通性
                 time.sleep(2.0)
-                all_ok = True
-                for p in self.ports:
-                    if not NetworkTester.test_tcp_port("127.0.0.1", p, timeout=3.0):
-                        all_ok = False
-                        break
-
-                if all_ok:
-                    log_success(f"🎉 优选 IP 已成功切换为: {BOLD}{cand_ip}{RESET}，所有本地 TCP 转发端口已全部恢复！")
+                if NetworkTester.test_ip_tls_edge(cand_ip, 443, timeout=2.0):
+                    log_success(f"🎉 优选 IP 已成功切换为: {BOLD}{cand_ip}{RESET}！")
                     self.consecutive_failures = 0
                     self.save_status(True, f"已故障转移至 {cand_ip}")
                     return True
-                else:
-                    log_warn(f"切换至 {cand_ip} 后本地 TCP 转发端口仍未完全恢复，继续尝试下一个候选 IP...")
 
         log_error("❌ 待选列表中所有 IP 均测试不可用，正在触发全量重新测速重试...")
         if self.run_speedtest_sync():
-            # 重新测速后再次尝试
             new_candidates = CandidatePool.read_candidates(self.candidates_file)
             for item in new_candidates:
                 cand_ip = item["ip"]
@@ -482,7 +492,8 @@ class HealthCheckerDaemon:
             # 兼容已有 /etc/hosts 或默认值
             self.current_ip = HostsManager.get_current_preferred_ip(self.domains)
 
-        self.save_status(True, "初始化完成")
+        is_init_healthy = bool(self.current_ip and NetworkTester.test_ip_tls_edge(self.current_ip, 443, timeout=2.0))
+        self.save_status(is_init_healthy, f"优选 IP: {self.current_ip}" if self.current_ip else "未选定可用优选 IP")
 
         # 3. 启动每日定时测速线程
         if Config.AUTO_SPEEDTEST:
@@ -510,20 +521,20 @@ class HealthCheckerDaemon:
                     all_ports_ok = False
 
             # 2. 检查当前优选 IP 边缘连通性
-            edge_ok = True
+            edge_ok = False
             if self.current_ip:
                 edge_ok = NetworkTester.test_ip_tls_edge(self.current_ip, 443, timeout=Config.CONNECT_TIMEOUT)
 
             # 判定整体状态
-            if all_ports_ok and edge_ok:
+            if all_ports_ok and edge_ok and self.current_ip:
                 if self.consecutive_failures > 0:
                     log_success(f"✓ 转发链路已恢复正常 (当前优选 IP: {self.current_ip})")
                 self.consecutive_failures = 0
-                self.save_status(True, "所有本地转发端口与优选 IP 连接正常")
+                self.save_status(True, f"连接正常 (优选 IP: {self.current_ip})")
             else:
                 self.consecutive_failures += 1
                 failed_items = [f"Port {p}: {'OK' if port_statuses[p] else 'DOWN'}" for p in self.ports]
-                failed_items.append(f"Edge {self.current_ip}: {'OK' if edge_ok else 'DOWN'}")
+                failed_items.append(f"Edge {self.current_ip or 'None'}: {'OK' if edge_ok else 'DOWN'}")
                 log_warn(f"⚠️ 检测到转发链路异常 ({', '.join(failed_items)}) [连续失败: {self.consecutive_failures}/{Config.FAIL_THRESHOLD}]")
                 self.save_status(False, f"连接异常: {', '.join(failed_items)}")
 
@@ -544,6 +555,8 @@ def init_ip_cli():
     chosen_ip = select_preferred_ip_from_candidates(candidates_file, domains)
     if chosen_ip:
         log_success(f"✓ 容器启动优选 IP 选定并注入完成: {chosen_ip}")
+    else:
+        log_warn("⚠️ 启动前置初始化未能选定可用优选 IP")
     sys.exit(0)
 
 

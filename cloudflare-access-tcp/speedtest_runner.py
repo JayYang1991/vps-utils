@@ -6,6 +6,7 @@ Cloudflare Access TCP 优选 IP 测速与候选池管理引擎
 
 功能：
 1. 容器启动时从 --sub-url 在线订阅源只拉取在线节点 (/sub?host=1&uuid=1) 并保持原始顺序写入待选列表文件；
+   若直接请求受限，自动通过 Cloudflare Anycast 优选 IP 隧道重试拉取；
    若获取失败则保持原有待选列表文件不变 (无需测速，极速启动)。
 2. 定时任务或手动触发时，调度 cfst (CloudflareSpeedTest) 在 443 端口执行延迟与大带宽下载测速。
 3. 内置深层大带宽挖掘与零门槛自适应保底机制 (Pass 2 Auto-Fallback)。
@@ -103,56 +104,89 @@ class CandidateSourceManager:
         return results
 
     @classmethod
-    def fetch_sub_nodes(cls, sub_url: str, target_port: str = "443") -> List[Tuple[str, str]]:
-        """仅从在线订阅源 (/sub?host=1&uuid=1) 拉取在线节点，保持原始订阅顺序"""
+    def fetch_sub_nodes(cls, sub_url: str, target_port: str = "443", fallback_ips: Optional[List[str]] = None) -> List[Tuple[str, str]]:
+        """仅从在线订阅源 (/sub?host=1&uuid=1) 拉取在线节点，保持原始订阅顺序 (带国内 Anycast IP 重试加速)"""
         if not sub_url:
             return []
         sub_url = sub_url.rstrip('/')
         results = []
         headers = {"User-Agent": "Mozilla/5.0 (VPS-Utils; Cloudflare-Access-TCP)"}
+        url = f"{sub_url}/sub?host=1&uuid=1"
 
+        parsed = urllib.parse.urlparse(sub_url)
+        hostname = parsed.hostname or ""
+
+        content = ""
+        # 1. 尝试直接 requests 请求
         try:
-            url = f"{sub_url}/sub?host=1&uuid=1"
-            resp = requests.get(url, headers=headers, timeout=6)
+            resp = requests.get(url, headers=headers, timeout=5)
             if resp.status_code == 200 and resp.text.strip():
-                import base64
-                try:
-                    content = base64.b64decode(resp.text).decode('utf-8')
-                except Exception:
-                    content = resp.text
-                for line in content.splitlines():
-                    line = line.strip()
-                    if line.startswith(("vless://", "trojan://", "ss://")):
-                        match = re.search(r'@([^?#]+).*#(.+)$', line)
-                        if match:
-                            addr_port = match.group(1)
-                            remark = urllib.parse.unquote(match.group(2))
-                            if ':' in addr_port:
-                                addr, p = addr_port.split(':', 1)
-                                if is_valid_ip(addr) and (target_port == "all" or p == target_port):
-                                    results.append((addr, remark))
-                    elif ':' in line:
-                        addr = line.split(':', 1)[0].strip()
-                        if is_valid_ip(addr):
-                            results.append((addr, "Sub"))
-                log_info(f"从在线订阅节点源 ({url}) 获取到 {len(results)} 个在线候选 IP")
+                content = resp.text
         except Exception as e:
-            log_warn(f"拉取在线订阅节点失败: {e}")
+            log_warn(f"直接拉取在线订阅节点超时 ({e})，正在通过优选 Anycast 节点隧道重试...")
+
+        # 2. 若直接请求失败，使用 curl --resolve 通过 Cloudflare Anycast IP 隧道重试
+        if not content and hostname:
+            retry_ips = []
+            if fallback_ips:
+                retry_ips.extend(fallback_ips)
+            env_pref = os.getenv("PREFERRED_IP", "").strip()
+            if env_pref and env_pref not in retry_ips:
+                retry_ips.append(env_pref)
+            for def_ip in ["85.121.245.35", "104.16.88.99", "162.159.192.1", "104.17.0.0", "45.221.115.3"]:
+                if def_ip not in retry_ips:
+                    retry_ips.append(def_ip)
+
+            for cf_ip in retry_ips:
+                try:
+                    cmd = ["curl", "-sSL", "--connect-timeout", "3", "-m", "6", "--resolve", f"{hostname}:443:{cf_ip}", url]
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    if res.returncode == 0 and res.stdout.strip():
+                        content = res.stdout
+                        log_info(f"✓ 通过优选节点 ({cf_ip}) 成功拉取到在线订阅数据！")
+                        break
+                except Exception:
+                    continue
+
+        if content:
+            import base64
+            try:
+                decoded = base64.b64decode(content).decode('utf-8')
+            except Exception:
+                decoded = content
+            for line in decoded.splitlines():
+                line = line.strip()
+                if line.startswith(("vless://", "trojan://", "ss://")):
+                    match = re.search(r'@([^?#]+).*#(.+)$', line)
+                    if match:
+                        addr_port = match.group(1)
+                        remark = urllib.parse.unquote(match.group(2))
+                        if ':' in addr_port:
+                            addr, p = addr_port.split(':', 1)
+                            if is_valid_ip(addr) and (target_port == "all" or p == target_port):
+                                results.append((addr, remark))
+                elif ':' in line:
+                    addr = line.split(':', 1)[0].strip()
+                    if is_valid_ip(addr):
+                        results.append((addr, "Sub"))
+            log_info(f"从在线订阅节点源获取到 {len(results)} 个在线候选 IP")
+        else:
+            log_warn("未能成功拉取到在线订阅数据。")
 
         return results
 
     @classmethod
-    def fetch_history_nodes(cls, sub_url: str, target_port: str = "443") -> List[Tuple[str, str]]:
+    def fetch_history_nodes(cls, sub_url: str, target_port: str = "443", fallback_ips: Optional[List[str]] = None) -> List[Tuple[str, str]]:
         """从历史记录源 (/api/history) 拉取历史节点"""
         if not sub_url:
             return []
         sub_url = sub_url.rstrip('/')
         results = []
         headers = {"User-Agent": "Mozilla/5.0 (VPS-Utils; Cloudflare-Access-TCP)"}
+        url = f"{sub_url}/api/history"
 
         try:
-            url = f"{sub_url}/api/history"
-            resp = requests.get(url, headers=headers, timeout=6)
+            resp = requests.get(url, headers=headers, timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success") and isinstance(data.get("data"), list):
@@ -186,11 +220,11 @@ class CandidateSourceManager:
 
         # 2. 在线订阅源
         if sub_url:
-            for ip, remark in cls.fetch_sub_nodes(sub_url, target_port):
+            for ip, remark in cls.fetch_sub_nodes(sub_url, target_port, fallback_ips=[c[0] for c in candidates]):
                 if ip not in seen_ips:
                     seen_ips.add(ip)
                     candidates.append((ip, remark))
-            for ip, remark in cls.fetch_history_nodes(sub_url, target_port):
+            for ip, remark in cls.fetch_history_nodes(sub_url, target_port, fallback_ips=[c[0] for c in candidates]):
                 if ip not in seen_ips:
                     seen_ips.add(ip)
                     candidates.append((ip, remark))
