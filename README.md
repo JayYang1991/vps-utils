@@ -93,7 +93,7 @@
 [ Cloudflare Tunnel / Connector (接收 Zero Trust 进站流量) ]
                        │
                        ▼ 3. VPS 将进入 cloudflared 的流量转发至实际出口网卡
-                            (setup-cloudflare-one.sh 自动识别物理网卡如 eth0 并配置 iptables NAT MASQUERADE)
+                            (cloudflared-tunnel/setup-cloudflare-one.sh 自动识别物理网卡如 eth0 并配置 iptables NAT MASQUERADE)
 [ VPS 宿主机物理出口网卡 (eth0 / ens3) ]
                        │
                        ▼ 4. 以 VPS 原生公网 IP 访问国际互联网
@@ -189,11 +189,11 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 ### 步骤 3：在末端 VPS 上设置 NAT 转发与双重开机持久化
 
-使用 [`cloudflare-zero-trust`](./cloudflare-zero-trust) 中的 `setup-cloudflare-one.sh` 脚本，开启 VPS 内核 IP 转发并配置 `iptables` NAT MASQUERADE 规则，支持 Systemd + netfilter 双重开机自启：
+使用 [`cloudflared-tunnel`](./cloudflared-tunnel) 中的 `setup-cloudflare-one.sh` 脚本，开启 VPS 内核 IP 转发并配置 `iptables` NAT MASQUERADE 规则，支持 Systemd + netfilter 双重开机自启：
 
 ```bash
 # 自动检测物理外网网卡，一键开启 NAT 转发并配置开机持久化
-sudo bash cloudflare-zero-trust/setup-cloudflare-one.sh --setup
+sudo bash cloudflared-tunnel/setup-cloudflare-one.sh --setup
 ```
 
 ---
@@ -282,8 +282,8 @@ clash-singbox-sub-manager status
 | 子项目目录 | 核心功能定位 | 推荐入口 / 关键脚本 | 详细文档链接 |
 | :--- | :--- | :--- | :--- |
 | **[fhs-install-singbox](./fhs-install-singbox)** | sing-box 服务端 FHS 部署与 VPS 远程/Vultr 运维 | `setup_vps_server.sh`<br>`install-singbox-server.sh`<br>`update-singbox-keys.sh`<br>`update-singbox-sub.sh` | [fhs-install-singbox 详细指南](./fhs-install-singbox/README.md) |
-| **[cloudflared-tunnel](./cloudflared-tunnel)** | Cloudflare Official Agent 部署，实现 Tunnel 内网穿透与公网服务发布 | `install.sh` | [cloudflared-tunnel 详细指南](./cloudflared-tunnel/README.md) |
-| **[cloudflare-zero-trust](./cloudflare-zero-trust)** | Cloudflare Zero Trust (Cloudflare One) 套件：VPS 出口 NAT 转发、SOCKS5 客户端与诊断工具 | `setup-cloudflare-one.sh`<br>`docker-run.sh`<br>`test-masque.py`<br>`install.sh` | [cloudflare-zero-trust 详细指南](./cloudflare-zero-trust/README.md) |
+| **[cloudflared-tunnel](./cloudflared-tunnel)** | Cloudflare Official Agent 部署与目标端 VPS 出口 NAT 转发配置，实现 Tunnel 内网穿透、公网服务发布与 Exit Node 出口网关 | `install.sh`<br>`setup-cloudflare-one.sh` | [cloudflared-tunnel 详细指南](./cloudflared-tunnel/README.md) |
+| **[cloudflare-zero-trust](./cloudflare-zero-trust)** | Cloudflare Zero Trust (WARP) 客户端套件：Docker SOCKS5 代理客户端（策略路由隔离）、官方客户端与 MASQUE 诊断工具 | `docker-run.sh`<br>`test-masque.py`<br>`install.sh` | [cloudflare-zero-trust 详细指南](./cloudflare-zero-trust/README.md) |
 | **[subconverter](./subconverter)** | 通用代理订阅格式转换后端服务（带 Systemd 一键安装与端口配置） | `install.sh` | [subconverter 详细指南](./subconverter/README.md) |
 | **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理、CDN 测速与 WARP Endpoint 优选同步工具 | `install.sh`<br>`process_ips.py`<br>`warp_tester.py`<br>`sub-worker.js` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
 | **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`uninstall.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
@@ -301,13 +301,13 @@ clash-singbox-sub-manager status
 - **`setup_vps_server.sh`**：控制端远程 SSH 一键部署全套服务，支持直接指定 IP 或通过 Vultr API 自动开机。
 - **`remove_vultr_instance.sh`**：Vultr 实例交互式查询与快速销毁工具。
 
-### 2. [cloudflared-tunnel](./cloudflared-tunnel) — 内网穿透与安全发布
+### 2. [cloudflared-tunnel](./cloudflared-tunnel) — 内网穿透与目标端 VPS 出口网关
 
 - **`install.sh`**：自动识别 CPU 架构拉取 Cloudflare 官方最新二进制，支持 **命名 Tunnel 模式**（`-t TOKEN`）与 **Quick Tunnel 临时穿透模式**，一键注册 Systemd 服务。
+- **`setup-cloudflare-one.sh`**：自动开启目标端 VPS 内核 IP 转发并配置 `iptables` NAT MASQUERADE 规则，支持 Systemd + netfilter 双重开机持久化，配合 Tunnel Private Network 实现 VPS 原生 IP 出海。
 
-### 3. [cloudflare-zero-trust](./cloudflare-zero-trust) — 出口转发与本地客户端
+### 3. [cloudflare-zero-trust](./cloudflare-zero-trust) — 客户端代理与网络诊断
 
-- **`setup-cloudflare-one.sh`**：自动开启 VPS 内核 IP 转发并配置 `iptables` NAT MASQUERADE 规则，支持 Systemd + netfilter 双重开机持久化。
 - **`docker-run.sh`**：本地 Docker + Systemd SOCKS5 客户端管理脚本，内置策略路由自动隔离（防 Clash TUN 环路）与凭据安全存储。
 - **`test-masque.py`**：纯 Python 标准库实现的 RFC 9000 QUIC Initial 握手与 MASQUE 连通性/时延诊断工具。
 - **`install.sh`**：原生 Linux 环境配置官方软件源并安装 `cloudflare-warp` 客户端。
@@ -388,17 +388,18 @@ vps-utils/
 │   ├── convert_sub_to_server.py       # 订阅转 Server 模式转换核心引擎
 │   ├── remove_vultr_instance.sh       # Vultr 实例查询与清理工具
 │   └── singbox_server_config.json     # sing-box 服务端配置模板
-├── cloudflared-tunnel/                 # Cloudflare Tunnel 内网穿透服务
-│   ├── README.md                      # cloudflared-tunnel 安装指南
-│   └── install.sh                     # 自动化安装与 Systemd 服务部署脚本
-├── cloudflare-zero-trust/              # Cloudflare Zero Trust 套件与 VPS 出口配置
+├── cloudflared-tunnel/                 # Cloudflare Tunnel 内网穿透与目标端 VPS 出口配置
+│   ├── README.md                      # cloudflared-tunnel 详细指南
+│   ├── install.sh                     # 自动化安装与 Systemd 服务部署脚本
+│   └── setup-cloudflare-one.sh        # Cloudflare One VPS NAT 转发配置脚本
+├── cloudflare-zero-trust/              # Cloudflare Zero Trust 客户端与代理套件
 │   ├── README.md                      # cloudflare-zero-trust 详细指南
 │   ├── docker-run.sh                  # 容器与 Systemd 服务管理脚本
 │   ├── install.sh                     # 客户端安装与 Systemd 服务部署脚本
-│   ├── setup-cloudflare-one.sh        # Cloudflare One VPS NAT 转发配置脚本
 │   ├── test-masque.py                 # MASQUE (QUIC) 协议协商与连通性测试工具
 │   ├── Dockerfile                     # WARP + sing-box 容器构建文件
-│   └── docker-entrypoint.sh           # 容器启动自愈入口脚本
+│   ├── docker-entrypoint.sh           # 容器启动自愈入口脚本
+│   └── cloudflare-warp-socks5.service # Systemd 服务 Unit 模板
 ├── subconverter/                       # 订阅转换后端程序
 │   ├── README.md                      # subconverter 安装指南
 │   └── install.sh                     # 自动化安装与端口配置脚本
@@ -510,7 +511,7 @@ vps-utils/
   * **定向分流模式（精准网段）**：输入指定的目标 CIDR 网段（例如 VPS 内网段 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16` 或指定受限目标服务 IP 段）。
 * **Description**：（可选）例如 `vps-exit-node-routing`。
 * 点击 **Save network** 保存。
-* **生效机制**：配置完成后，加入该 Zero Trust 团队的 WARP 客户端在访问该 CIDR 范围内的目标时，流量将由 Cloudflare 骨干网直接通过此 Tunnel 转发至末端 VPS，配合 VPS 本地的 `setup-cloudflare-one.sh` NAT MASQUERADE 规则完成原生 IP 出海。
+* **生效机制**：配置完成后，加入该 Zero Trust 团队的 WARP 客户端在访问该 CIDR 范围内的目标时，流量将由 Cloudflare 骨干网直接通过此 Tunnel 转发至末端 VPS，配合 VPS 本地的 `setup-cloudflare-one.sh`（位于 [`cloudflared-tunnel`](./cloudflared-tunnel)）NAT MASQUERADE 规则完成原生 IP 出海。
 
 ---
 
