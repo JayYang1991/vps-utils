@@ -47,7 +47,7 @@
 
 ### 3. VPS 端一键自动化安装与部署 (`install.sh`)
 
-在 VPS 宿主机上以 `root` 权限（或 `sudo`）执行以下一键部署命令，脚本会自动适配 CPU 架构（x86_64 / arm64），自动下载官方最新版二进制，并注册为开机自启的 Systemd 服务：
+在 VPS 宿主机上以 `root` 权限（或 `sudo`）执行以下一键部署命令，脚本会自动适配 CPU 架构（x86_64 / arm64），下载官方最新版二进制并注册为开机自启的 Systemd 服务，**同时自动调用 `setup-cloudflare-one.sh` 一键开启内核 IP 转发与 iptables NAT MASQUERADE 双重开机持久化规则**：
 
 #### 方式 A：命名 Tunnel 生产模式 (推荐，使用 Token)
 ```bash
@@ -78,6 +78,9 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 | :--- | :--- | :--- | :--- |
 | `-t, --token` | `CLOUDFLARED_TOKEN` | (空) | Cloudflare Zero Trust 分配的 Tunnel 认证密钥 Token |
 | `-u, --url` | `LOCAL_SERVICE_URL` | `http://localhost:8000` | Quick Tunnel 模式下穿透的目标本地服务地址 |
+| `-i, --interface` | `WAN_INTERFACE` | 自动检测 (如 `eth0`) | 指定 VPS 外网物理网卡 (透传给 `setup-cloudflare-one.sh`) |
+| `-w, --warp-if` | `WARP_INTERFACE` | `auto` | 指定入站隧道网卡 (透传给 `setup-cloudflare-one.sh`) |
+| `--skip-nat` | `SKIP_NAT` | `false` | 跳过自动配置 VPS 出口 NAT MASQUERADE 规则 |
 | `-h, --help` | - | - | 显示帮助菜单 |
 
 ---

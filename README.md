@@ -169,11 +169,11 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 ---
 
-### 步骤 2：安装 cloudflared 并配置 Tunnel (为各服务绑定公网公共域名)
+### 步骤 2：安装 cloudflared 并配置 Tunnel (自动配置 VPS 出口 NAT 转发)
 
-使用 [`cloudflared-tunnel`](./cloudflared-tunnel) 建立安全隧道，**singbox-sub-converter 与 subconverter 均通过 Cloudflare Tunnel 公共域名对外提供公网访问**：
+使用 [`cloudflared-tunnel`](./cloudflared-tunnel) 建立安全隧道（**`install.sh` 脚本在安装 `cloudflared` 的同时会自动调用 `setup-cloudflare-one.sh` 开启内核 IP 转发与 `iptables` NAT MASQUERADE 双重开机持久化**）：
 
-1. **VPS 宿主机一键安装 Tunnel 服务**：
+1. **VPS 宿主机一键安装 Tunnel 服务与配置 NAT 转发**：
    ```bash
    sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/cloudflared-tunnel/install.sh) -t <YOUR_CLOUDFLARED_TOKEN>
    ```
@@ -187,13 +187,19 @@ sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/m
 
 ---
 
-### 步骤 3：在末端 VPS 上设置 NAT 转发与双重开机持久化
+### 步骤 3 (独立管理/按需配置)：在末端 VPS 上独立管理 NAT 转发与双重开机持久化
 
-使用 [`cloudflared-tunnel`](./cloudflared-tunnel) 中的 `setup-cloudflare-one.sh` 脚本，开启 VPS 内核 IP 转发并配置 `iptables` NAT MASQUERADE 规则，支持 Systemd + netfilter 双重开机自启：
+> 💡 **提示**：步骤 2 中的 `install.sh` 已默认自动调用配置。如需单独查看状态、修改网卡或清除规则，可直接运行：
 
 ```bash
-# 自动检测物理外网网卡，一键开启 NAT 转发并配置开机持久化
-sudo bash cloudflared-tunnel/setup-cloudflare-one.sh --setup
+# 查看当前 VPS 内核转发、Systemd 服务及 iptables 规则状态
+setup-cloudflare-one.sh --status
+
+# 重新配置或指定特定网卡 (如 eth0 与 warp0)
+setup-cloudflare-one.sh --setup -i eth0 -w warp0
+
+# 清除并还原 NAT 转发规则与开机服务
+setup-cloudflare-one.sh --unset
 ```
 
 ---
