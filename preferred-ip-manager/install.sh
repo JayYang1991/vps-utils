@@ -347,6 +347,11 @@ CFST_URL="${CFST_URL_ARG}"
 # Cloudflare Workers 订阅管理地址与更新 Token (用于测速完成后自动推送)
 CF_SUB_URL="https://sub.19910417.xyz"
 CF_SUB_TOKEN=""
+
+# Telegram API 与 Session 配置 (可选，用于拉取 TG 频道测速文件)
+# TG_API_ID=""
+# TG_API_HASH=""
+# TG_SESSION_PATH="/var/lib/preferred-ip-manager/tg_session"
 EOF
     chmod 644 "$CONFIG_FILE"
     log "已生成配置: ${CONFIG_FILE}"

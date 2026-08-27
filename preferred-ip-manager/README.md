@@ -256,6 +256,9 @@ CFST_URL="https://movies.jackyang.cc.cd/download?size=200" # 默认测速地址
 TG_PROXY="socks5://127.0.0.1:1080"     # Telegram 下载代理 (可选)
 CF_SUB_URL="https://sub.19910417.xyz"  # Workers 订阅端地址
 CF_SUB_TOKEN=""            # Workers 订阅端更新 Token (若设置将自动推送)
+TG_API_ID=""               # Telegram API ID (可选，从 TG 频道拉取候选 IP 时使用)
+TG_API_HASH=""             # Telegram API Hash
+TG_SESSION_PATH=""         # Telegram Session 存放路径 (可选，默认 ~/.config/telegram/my_tg_session)
 ```
 
 ---

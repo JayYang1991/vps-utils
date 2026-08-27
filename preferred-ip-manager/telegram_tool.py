@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import sys
 import argparse
 import asyncio
 import time
@@ -15,7 +16,54 @@ from telethon.errors import AuthKeyNotFound
 # 请设置环境变量 TG_API_ID 和 TG_API_HASH
 API_ID = os.getenv('TG_API_ID')
 API_HASH = os.getenv('TG_API_HASH')
-SESSION_NAME = '/home/jason/user_data/config/telegram/my_tg_session'
+
+def get_session_path(custom_path: str = "") -> str:
+    """
+    智能解析 Telegram Session 文件路径，确保父目录存在并具备容错能力。
+    优先级: 命令行参数/调用入参 > 环境变量 TG_SESSION_PATH > 默认路径候选
+    """
+    candidate = custom_path or os.getenv('TG_SESSION_PATH') or ""
+    if not candidate:
+        # 依次尝试可用路径候选
+        candidates = [
+            os.path.expanduser('~/.config/telegram/my_tg_session'),
+            '/var/lib/preferred-ip-manager/tg_session',
+            '/home/jason/user_data/config/telegram/my_tg_session',
+            os.path.expanduser('~/tg_session'),
+            '/tmp/tg_session'
+        ]
+        for c in candidates:
+            c_dir = os.path.dirname(c)
+            if not c_dir or os.path.exists(c_dir):
+                candidate = c
+                break
+            try:
+                os.makedirs(c_dir, exist_ok=True)
+                candidate = c
+                break
+            except Exception:
+                continue
+        if not candidate:
+            candidate = os.path.expanduser('~/.config/telegram/my_tg_session')
+
+    # 确保目标目录存在
+    session_dir = os.path.dirname(candidate)
+    if session_dir:
+        try:
+            os.makedirs(session_dir, exist_ok=True)
+        except Exception as e:
+            fallback = os.path.expanduser('~/.config/telegram/my_tg_session')
+            fallback_dir = os.path.dirname(fallback)
+            try:
+                os.makedirs(fallback_dir, exist_ok=True)
+                candidate = fallback
+            except Exception:
+                candidate = '/tmp/my_tg_session'
+            print(f"⚠️ [WARN] 无法创建 Session 目录 ({session_dir}): {e}，自动降级至: {candidate}")
+
+    return candidate
+
+SESSION_NAME = get_session_path()
 
 def parse_proxy(proxy_str):
     """
@@ -479,17 +527,20 @@ async def show_messages(client, chat_id, limit):
 async def main():
     parser = argparse.ArgumentParser(description="Telegram 助手: 列表获取、预览与下载")
     parser.add_argument("--proxy", "-p", type=str, default="", help="指定连接 Telegram 的代理 (例如 socks5://127.0.0.1:1080 或 http://127.0.0.1:7890，亦可设置环境变量 TG_PROXY/ALL_PROXY)")
+    parser.add_argument("--session", "-s", type=str, default="", help="指定 Telegram Session 文件路径 (亦可通过环境变量 TG_SESSION_PATH 配置)")
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
 
     # List 命令
     list_parser = subparsers.add_parser("list", help="显示最近的聊天对话列表")
     list_parser.add_argument("--proxy", "-p", type=str, default="", help="指定代理地址")
+    list_parser.add_argument("--session", "-s", type=str, default="", help="指定 Session 文件路径")
 
     # Show 命令
     show_parser = subparsers.add_parser("show", help="展示指定聊天的消息和资源列表")
     show_parser.add_argument("--id", type=int, required=True, help="目标聊天的 ID")
     show_parser.add_argument("--limit", "-l", type=int, default=20, help="展示的消息数量 (默认: 20)")
     show_parser.add_argument("--proxy", "-p", type=str, default="", help="指定代理地址")
+    show_parser.add_argument("--session", "-s", type=str, default="", help="指定 Session 文件路径")
 
     # Download 命令
     dl_parser = subparsers.add_parser("download", help="下载指定聊天的文件")
@@ -503,11 +554,16 @@ async def main():
     dl_parser.add_argument("--chunk-size", type=int, default=512, help="分块大小 (KB, 默认: 512)")
     dl_parser.add_argument("--concurrency", "-c", type=int, default=4, help="并发线程数 (默认: 4)")
     dl_parser.add_argument("--proxy", "-p", type=str, default="", help="指定代理地址 (例如 socks5://127.0.0.1:1080)")
+    dl_parser.add_argument("--session", "-s", type=str, default="", help="指定 Session 文件路径")
 
     args = parser.parse_args()
 
     if not check_config():
         return
+
+    # 解析 Session 路径
+    session_arg = getattr(args, "session", "") or ""
+    session_file = get_session_path(session_arg)
 
     # 解析代理配置 (命令行参数优先，环境变量兜底)
     proxy_str = getattr(args, "proxy", "") or os.getenv('TG_PROXY') or os.getenv('ALL_PROXY') or os.getenv('all_proxy') or os.getenv('HTTPS_PROXY') or os.getenv('https_proxy') or os.getenv('HTTP_PROXY') or os.getenv('http_proxy')
@@ -517,7 +573,7 @@ async def main():
 
     # 初始化 Client 时增加自动重连和无限重试
     client = TelegramClient(
-        SESSION_NAME, 
+        session_file, 
         API_ID, 
         API_HASH,
         proxy=proxy_config,
@@ -525,18 +581,30 @@ async def main():
         retry_delay=2            # 重试间隔
     )
     
-    async with client:
-        if args.command == "list":
-            await list_chats(client)
-        elif args.command == "show":
-            await show_messages(client, args.id, args.limit)
-        elif args.command == "download":
-            use_parallel = (args.mode == "parallel")
-            chunk_size = args.chunk_size * 1024
-            await download_files(client, args.id, args.name, args.limit, args.output, args.ids, args.filter, 
-                               use_parallel=use_parallel, chunk_size=chunk_size, concurrency=args.concurrency)
+    try:
+        async with client:
+            if args.command == "list":
+                await list_chats(client)
+            elif args.command == "show":
+                await show_messages(client, args.id, args.limit)
+            elif args.command == "download":
+                use_parallel = (args.mode == "parallel")
+                chunk_size = args.chunk_size * 1024
+                await download_files(client, args.id, args.name, args.limit, args.output, args.ids, args.filter, 
+                                   use_parallel=use_parallel, chunk_size=chunk_size, concurrency=args.concurrency)
+            else:
+                parser.print_help()
+    except Exception as e:
+        err_msg = str(e)
+        if "database is locked" in err_msg or "OperationalError" in err_msg:
+            print(f"❌ [ERROR] 打开/访问 Telegram Session 文件失败 ({session_file}): {e}")
+            print("💡 请检查该路径是否存在且具有读写权限，或通过 TG_SESSION_PATH 自定义路径。")
+        elif "AuthKeyUnregistered" in err_msg or "SessionPasswordNeeded" in err_msg or not sys.stdin.isatty():
+            print(f"❌ [ERROR] Telegram 客户端连接/认证失败: {e}")
+            print("💡 若尚未完成首次登录授权，请在终端交互式环境下手动运行一次以输入手机验证码:")
+            print("   telegram_tool.py list")
         else:
-            parser.print_help()
+            print(f"❌ [ERROR] Telegram 操作失败: {e}")
 
 if __name__ == "__main__":
     try:
