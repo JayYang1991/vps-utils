@@ -177,9 +177,9 @@ setup_python_environment() {
     pip_flags+=("--break-system-packages")
   fi
 
-  if ! "$py_exec" -m pip install "${pip_flags[@]}" requests telethon "python-socks[asyncio]" > /dev/null 2>&1; then
-    warn "pip 安装遇到警告，尝试直接安装 requests telethon python-socks..."
-    "$py_exec" -m pip install requests telethon "python-socks[asyncio]" || true
+  if ! "$py_exec" -m pip install "${pip_flags[@]}" "requests[socks]" PySocks telethon "python-socks[asyncio]" > /dev/null 2>&1; then
+    warn "pip 安装遇到警告，尝试直接安装 requests[socks] PySocks telethon python-socks..."
+    "$py_exec" -m pip install "requests[socks]" PySocks telethon "python-socks[asyncio]" || true
   fi
 
   if ! "$py_exec" -c "import requests" > /dev/null 2>&1; then
