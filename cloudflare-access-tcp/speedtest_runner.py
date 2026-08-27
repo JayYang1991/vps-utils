@@ -5,9 +5,9 @@ speedtest_runner.py
 Cloudflare Access TCP 优选 IP 测速与候选池管理引擎
 
 功能：
-1. 容器启动或定时任务时从 --sub-url 在线订阅源与历史记录拉取最新候选节点；
-   若获取失败则保持原有待选列表文件不变。
-2. 调度 cfst (CloudflareSpeedTest) 在 443 端口执行延迟与大带宽下载测速。
+1. 容器启动时从 --sub-url 在线订阅源直接拉取最新候选节点并保持原始顺序写入待选列表文件；
+   若获取失败则保持原有待选列表文件不变 (无需测速，极速启动)。
+2. 定时任务或手动触发时，调度 cfst (CloudflareSpeedTest) 在 443 端口执行延迟与大带宽下载测速。
 3. 内置深层大带宽挖掘与零门槛自适应保底机制 (Pass 2 Auto-Fallback)。
 4. 筛选并导出 TOP 20 最优 IP 至待选列表文件 (candidates.txt)。
 """
@@ -104,7 +104,7 @@ class CandidateSourceManager:
 
     @classmethod
     def fetch_online_ips(cls, sub_url: str, target_port: str = "443") -> List[Tuple[str, str]]:
-        """从订阅服务器拉取在线与历史节点 IP"""
+        """从订阅服务器拉取在线与历史节点 IP 并保持原始顺序"""
         if not sub_url:
             return []
         sub_url = sub_url.rstrip('/')
@@ -362,38 +362,47 @@ def test_ip_reachability(ip: str, port: int = 443, timeout: float = 2.0) -> bool
 def update_candidates_from_sub_url(sub_url: str, output_path: str, port: str = "443", top_count: int = 20) -> bool:
     """
     容器启动时从 --sub-url 获取在线订阅更新作为待选列表文件；
+    不需要执行测速，直接使用 --sub-url 拉取节点并保持对应 IP 顺序写入待选列表文件；
     如果获取失败，则保持原有待选列表文件不变。
     """
-    log_info(f"🔄 正在尝试从在线订阅源 ({sub_url}) 拉取最新优选候选 IP...")
+    if not sub_url:
+        return False
+
+    log_info(f"🔄 正在从在线订阅源 ({sub_url}) 拉取最新候选节点 (保持原始订阅顺序)...")
     online_ips = CandidateSourceManager.fetch_online_ips(sub_url, target_port=port)
 
     if online_ips:
-        log_info(f"✓ 成功从在线订阅源获取到 {len(online_ips)} 个最新 IP，正在执行优选测速以更新待选列表...")
-        top_results = SpeedTestEngine.run_speedtest(
-            candidates=online_ips,
-            top_count=top_count,
-            port=port,
-            concurrency=int(os.getenv("CONCURRENCY", "200")),
-            min_speed=float(os.getenv("MIN_SPEED", "5.0")),
-            max_delay=int(os.getenv("MAX_DELAY", "300")),
-            download_time=10
-        )
-        if top_results:
-            save_candidates_file(top_results, output_path, port)
-            return True
-        else:
-            log_warn("在线 IP 测速未产生有效结果，保持原有待选列表不变。")
-            return False
-    else:
-        log_warn(f"⚠️ 从在线订阅源 ({sub_url}) 获取更新失败或未返回有效节点，保持原有待选列表文件 ({output_path}) 不变。")
-        return False
+        seen = set()
+        ordered_candidates = []
+        for ip, remark in online_ips:
+            if ip not in seen and is_valid_ip(ip):
+                seen.add(ip)
+                ordered_candidates.append((ip, remark))
+
+        if ordered_candidates:
+            try:
+                os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    for ip, remark in ordered_candidates[:top_count]:
+                        if remark:
+                            f.write(f"{ip}:{port}#{remark}\n")
+                        else:
+                            f.write(f"{ip}:{port}\n")
+                log_info(f"✨ 成功从在线订阅拉取并保持顺序保存 {len(ordered_candidates[:top_count])} 个待选 IP 至: {output_path}")
+                return True
+            except Exception as e:
+                log_error(f"写入待选列表文件失败: {e}")
+                return False
+
+    log_warn(f"⚠️ 从在线订阅源 ({sub_url}) 获取更新失败或未返回有效节点，保持原有待选列表文件 ({output_path}) 不变。")
+    return False
 
 
 def main():
     import shutil
     parser = argparse.ArgumentParser(description="Cloudflare Access TCP 优选 IP 测速与候选池管理引擎")
     parser.add_argument("--run", action="store_true", help="立即执行一次全流程测速并输出 TOP 20 待选列表")
-    parser.add_argument("--update-from-sub", action="store_true", help="从 --sub-url 拉取在线订阅并更新待选列表 (失败则保持原样)")
+    parser.add_argument("--update-from-sub", action="store_true", help="从 --sub-url 拉取在线订阅并更新待选列表 (不测速保持原顺序)")
     parser.add_argument("--output", "-o", default=os.getenv("CANDIDATES_FILE", "/etc/cloudflare-access-tcp/candidates.txt"),
                         help="待选 IP 列表输出文件路径 (默认: /etc/cloudflare-access-tcp/candidates.txt)")
     parser.add_argument("--top", "-t", type=int, default=int(os.getenv("TOP_COUNT", "20")),
@@ -428,7 +437,7 @@ def main():
             port=args.port,
             top_count=args.top
         )
-        sys.exit(0 if success else 0)
+        sys.exit(0 if success else 1)
 
     if not args.run:
         parser.print_help()
