@@ -4,6 +4,8 @@
 
 在容器内部深度集成了 **CloudflareSpeedTest (cfst) 测速引擎** 与 **网络联通性检测及自动故障转移守护进程 (health_checker.py)**，具备 **每日凌晨自动测速更新待选 IP 池** 与 **TCP 故障毫秒级自动切换优选 IP** 的全自动闭环能力。
 
+日常运维管理命令已从 `install.sh` 完全剥离，独立封装为 **`service.sh`**，并在安装时自动注册至系统全局可执行路径（`/usr/local/bin/cloudflare-access-tcp` / `cf-access-tcp`）。
+
 ---
 
 ## 🌟 核心特性
@@ -17,7 +19,7 @@
 - ⚡ **多端口并发转发**：容器内采用独立并发进程与优雅信号捕获管理，支持同时映射任意数量的域名与本地 TCP 端口（默认开启 2 个端口：`5000` 与 `5001`）。
 - 🔒 **严格参数与格式校验**：内置严格的 RFC 规范域名与端口合法性校验，杜绝无效域名、超出范围端口（1-65535）或端口冲突。
 - 🛡️ **敏感凭据安全隔离**：Service Token Client ID 与 Secret 独立存储于权限为 `600` 的配置文件 (`/etc/cloudflare-access-tcp/access.env`) 中，绝不在 Systemd 单元文件或进程列表中泄露明文。
-- 🛠️ **全生命周期运维管理**：安装脚本内置 `--install`、`--status`、`--logs`、`--speedtest`、`--candidates`、`--switch-ip`、`--test`、`--restart`、`--stop`、`--uninstall` 全套指令。
+- 🛠️ **专用全局管理 CLI (`cloudflare-access-tcp`)**：安装后提供全局命令行工具，支持 `status`、`candidates`、`speedtest`、`switch-ip`、`test`、`logs`、`start`、`stop`、`restart`、`rebuild`、`uninstall` 全套指令。
 
 ---
 
@@ -79,7 +81,7 @@
 
 ---
 
-### 2. 一键安装与启动 (推荐)
+### 2. 一键安装与部署
 
 在客户端机器上克隆仓库并执行安装脚本：
 
@@ -97,11 +99,13 @@ sudo bash install.sh -i "your-client-id.access" -s "your-client-secret"
 sudo bash install.sh --service-token "your-client-id.access:your-client-secret"
 ```
 
+安装脚本会自动将专用管理工具安装至系统路径 `/usr/local/bin/cloudflare-access-tcp`（别名：`cf-access-tcp`）。
+
 ---
 
 ## ⚙️ 参数与选项说明
 
-### 命令行参数
+### 安装脚本选项 (`install.sh`)
 
 | 参数 | 简写 | 说明 | 默认值 / 示例 |
 | :--- | :--- | :--- | :--- |
@@ -117,24 +121,22 @@ sudo bash install.sh --service-token "your-client-id.access:your-client-secret"
 | `--check-interval` | 无 | TCP 连通性检测周期 (秒) | `15` |
 | `--fail-threshold` | 无 | 触发自动切换优选 IP 的连续失败次数 | `2` |
 | `--name` | `-n` | 自定义 Systemd 服务与容器名称 | `cloudflare-access-tcp` |
-| `--status` | 无 | 查看运行状态、当前生效优选 IP、健康检测与定时测速排期 | - |
-| `--candidates` | 无 | 查看当前 TOP 20 待选优选 IP 列表及延迟/下载测速指标 | - |
-| `--speedtest` | 无 | 在容器内立即触发全量测速，刷新 TOP 20 待选列表 | - |
-| `--switch-ip` | 无 | 手动将域名解析切换至指定 IP 并重载转发 | `sudo bash install.sh --switch-ip 104.16.88.99` |
-| `--logs` | `-l` | 实时追踪查看运行日志 | - |
-| `--test` | 无 | 测试各个本地 TCP 转发端口与待选 IP 池 443 端口的连通性 | - |
-| `--restart` | 无 | 重启 Systemd 服务 | - |
-| `--stop` | 无 | 停止 Systemd 服务 | - |
-| `--uninstall` | 无 | 卸载 Systemd 服务、删除容器与配置文件 | - |
+| `--no-cache` | 无 | 构建 Docker 镜像时不使用缓存 (全新编译) | 否 |
 | `--help` | `-h` | 显示完整帮助信息 | - |
 
 ---
 
-## 🛠️ 常用运维管理
+## 🛠️ 日常运维管理命令 (`cloudflare-access-tcp` / `service.sh`)
+
+安装完成后，可以在宿主机任何路径直接使用系统全局命令 `cloudflare-access-tcp` 或 `cf-access-tcp`（亦可直接运行 `./service.sh <command>`）：
+
+```bash
+# 别名 cf-access-tcp 等价于 cloudflare-access-tcp
+```
 
 ### 1. 查看运行状态与优选监控
 ```bash
-sudo bash install.sh --status
+cloudflare-access-tcp status
 ```
 输出示例：
 ```text
@@ -157,29 +159,45 @@ Docker 容器状态:   cloudflare-access-tcp (Up 2 hours)
 
 ### 2. 查看当前 TOP 20 待选 IP 池
 ```bash
-sudo bash install.sh --candidates
+cloudflare-access-tcp candidates
 ```
 
 ### 3. 立即触发全量测速刷新待选池
 ```bash
-sudo bash install.sh --speedtest
+cloudflare-access-tcp speedtest
 ```
 
 ### 4. 手动切换优选 IP
 ```bash
-sudo bash install.sh --switch-ip "162.159.192.1"
+sudo cloudflare-access-tcp switch-ip 162.159.192.1
 ```
 
-### 5. 查看实时日志
+### 5. 测试本地转发与待选 IP 连通性
 ```bash
-sudo bash install.sh --logs
-# 或
-sudo journalctl -u cloudflare-access-tcp -f
+cloudflare-access-tcp test
 ```
 
-### 6. 测试链路与待选 IP 连通性
+### 6. 查看实时运行日志
 ```bash
-sudo bash install.sh --test
+cloudflare-access-tcp logs -f
+```
+
+### 7. 服务启停与配置管理
+```bash
+# 重启服务
+sudo cloudflare-access-tcp restart
+
+# 停止服务
+sudo cloudflare-access-tcp stop
+
+# 查看或编辑配置文件
+sudo cloudflare-access-tcp config --edit
+
+# 重新编译 Docker 镜像 (使用宿主机网络)
+sudo cloudflare-access-tcp rebuild
+
+# 完全卸载清理
+sudo cloudflare-access-tcp uninstall
 ```
 
 ---

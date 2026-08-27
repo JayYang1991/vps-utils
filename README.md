@@ -293,9 +293,7 @@ clash-singbox-sub-manager status
 | **[subconverter](./subconverter)** | 通用代理订阅格式转换后端服务（带 Systemd 一键安装与端口配置） | `install.sh` | [subconverter 详细指南](./subconverter/README.md) |
 | **[preferred-ip-manager](./preferred-ip-manager)** | Cloudflare Worker 订阅管理、CDN 测速与 WARP Endpoint 优选同步工具 | `install.sh`<br>`process_ips.py`<br>`warp_tester.py`<br>`sub-worker.js` | [preferred-ip-manager 详细指南](./preferred-ip-manager/README.md) |
 | **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`uninstall.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
-| **[clash-singbox-sub-manager](./clash-singbox-sub-manager)** | 中转 VPS 节点专用：零 Subapi 依赖的本地 Sing-box 入站提取、Clash 订阅重构分发与 Web 管理器 | `install.sh`<br>`service.sh`<br>`uninstall.sh` | [clash-singbox-sub-manager 详细指南](./clash-singbox-sub-manager/README.md) |
-| **[vpngate-singbox-openvpn](./vpngate-singbox-openvpn)** | 集成部署在目标 VPS 上的 Docker 容器与 OpenVPN 节点自动更新服务，对外提供纯净住宅 IP 代理 | `install.sh`<br>`generate_ovpn.py`<br>`scripts/node_updater.py`<br>`scripts/service.sh` | [vpngate-singbox-openvpn 详细指南](./vpngate-singbox-openvpn/README.md) |
-| **[cloudflare-access-tcp](./cloudflare-access-tcp)** | 代理客户端 Cloudflare Access TCP 转发与自动优选 IP 容器 (每日凌晨测速 TOP 20 + 故障自动切换) | `install.sh`<br>`speedtest_runner.py`<br>`health_checker.py` | [cloudflare-access-tcp 详细指南](./cloudflare-access-tcp/README.md) |
+| **[cloudflare-access-tcp](./cloudflare-access-tcp)** | 代理客户端 Cloudflare Access TCP 转发与自动优选 IP 容器 (每日凌晨测速 TOP 20 + 故障自动切换) | `install.sh`<br>`service.sh`<br>`health_checker.py` | [cloudflare-access-tcp 详细指南](./cloudflare-access-tcp/README.md) |
 
 ---
 
@@ -378,8 +376,7 @@ clash-singbox-sub-manager status
 - **全自动优选 IP 双重调度策略**：
   - **策略 1（每日凌晨定时测速）**：每天北京时间凌晨 02:00 ~ 06:00 随机时刻自动测速，选取 **TOP 20 优选 IP** 存入待选列表 (`candidates.txt`)，并自动切换至 TOP 1 优选 IP；
   - **策略 2（实时连通性检测与自动故障转移）**：容器内定时检测 TCP 转发连通性，当检测不通时从待选列表从前往后验证 IP 可用性，自动切换域名解析到可用优选 IP 并热重载转发。
-- **严格校验与凭据隔离**：内置 RFC 域名与 1-65535 端口严格校验，Service Token 凭据独立保存在 `chmod 600` 文件中。
-- **Systemd 自启与全生命周期管理**：提供 `install.sh` 脚本，支持 `--install`、`--status`、`--logs`、`--speedtest`、`--candidates`、`--switch-ip`、`--test`、`--restart`、`--stop`、`--rebuild`、`--uninstall`。
+- **日常运维管理 CLI 独立剥离**：管理命令独立封装为 `service.sh`，安装时自动注册为系统全局命令 `cloudflare-access-tcp`（别名 `cf-access-tcp`），支持 `status`、`candidates`、`speedtest`、`switch-ip`、`test`、`logs`、`restart`、`rebuild`、`uninstall`。
 
 ---
 
@@ -465,7 +462,8 @@ vps-utils/
 │       └── vpn_status.json            # 实时运行状态与当前激活节点输出
 └── cloudflare-access-tcp/              # 代理客户端 Cloudflare Access TCP 转发与自动优选 IP 容器
     ├── README.md                      # cloudflare-access-tcp 详细指南
-    ├── install.sh                     # 一键安装、构建与 Systemd 容器管理脚本
+    ├── install.sh                     # 一键安装、构建与 Systemd 容器部署脚本
+    ├── service.sh                     # 宿主机日常运维管理 CLI 脚本 (安装为 cloudflare-access-tcp)
     ├── Dockerfile                     # Ubuntu 24.04 + cloudflared + cfst 容器构建文件
     ├── docker-entrypoint.sh           # 多进程守护与初始化启动入口脚本
     ├── speedtest_runner.py            # 优选 IP 测速与 TOP 20 待选池管理引擎
