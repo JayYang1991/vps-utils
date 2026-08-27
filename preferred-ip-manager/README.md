@@ -233,14 +233,20 @@ preferred-ip-manager logs -f
 preferred-ip-manager config
 sudo preferred-ip-manager config --edit
 
-# 5. 重启 / 启动 / 暂停定时任务
+# 5. 一键平滑升级至最新版本 (完全保留配置、历史数据与定时器)
+sudo preferred-ip-manager update
+
+# 6. 重启 / 启动 / 暂停定时任务
 sudo preferred-ip-manager restart
 sudo preferred-ip-manager stop
 sudo preferred-ip-manager start
 
-# 6. 一键卸载定时服务与所有组件
+# 7. 一键卸载定时服务与所有组件
 sudo preferred-ip-manager uninstall -y
 ```
+
+> [!TIP]
+> **平滑升级（Zero Config Loss）**：执行 `preferred-ip-manager update` 或 `sudo ./install.sh --update` 会自动拉取最新代码并热重载核心组件与 CLI 命令，**100% 完好保留现有 `/etc/preferred-ip-manager/config.env` 配置、`/var/lib/preferred-ip-manager/` 历史数据与定时计划**。
 
 #### 定时任务配置文件 (`/etc/preferred-ip-manager/config.env`)
 可通过修改该配置文件调整定时任务参数：

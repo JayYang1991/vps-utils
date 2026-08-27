@@ -65,12 +65,14 @@ show_help() {
   echo "  enable                      设置定时器开机自启"
   echo "  disable                     取消定时器开机自启"
   echo "  config, env [--edit]        查看当前任务配置环境文件 (--edit 可直接编辑)"
+  echo "  update, upgrade             一键平滑升级至最新版本 (完全保留配置、数据与定时器)"
   echo "  speedtest, test-cli [ARGS]  在前台直接运行交互式测速工具 (调用 preferred-ip-tester)"
   echo "  uninstall [-y]              一键卸载定时器、服务与安装组件"
   echo "  help, -h, --help            显示本帮助信息"
   echo ""
   echo "使用示例:"
   echo "  preferred-ip-manager status           # 查看定时器计划与服务状态"
+  echo "  preferred-ip-manager update           # 一键平滑升级脚本与核心组件"
   echo "  preferred-ip-manager run              # 立即执行一次测速与订阅端推送"
   echo "  preferred-ip-manager logs -f          # 实时查看测速运行日志"
   echo "  preferred-ip-manager config           # 查看当前配置文件内容"
@@ -287,6 +289,63 @@ cmd_uninstall() {
   success "${SERVICE_NAME} 定时服务与运维工具卸载完成！"
 }
 
+cmd_update() {
+  check_root
+  log "正在检查并平滑升级 preferred-ip-manager 组件至最新版本..."
+
+  local repo_dir=""
+  # 探测本地源码仓库
+  if [[ -d "/root/vps-utils/preferred-ip-manager" ]] && [[ -d "/root/vps-utils/.git" ]]; then
+    repo_dir="/root/vps-utils/preferred-ip-manager"
+  elif [[ -d "/root/preferred-ip-manager/.git" ]]; then
+    repo_dir="/root/preferred-ip-manager"
+  fi
+
+  if [[ -n "$repo_dir" ]] && command -v git >/dev/null 2>&1; then
+    log "检测到本地源码仓库: ${repo_dir}，正在拉取远程最新代码..."
+    (
+      cd "$(dirname "$repo_dir")"
+      git pull --rebase || git pull || true
+    )
+    if [[ -f "${repo_dir}/install.sh" ]]; then
+      log "正在通过本地源码安装脚本执行平滑升级 (保留配置与数据)..."
+      bash "${repo_dir}/install.sh" --update -y
+      success "已成功平滑升级 preferred-ip-manager 组件！"
+      return 0
+    fi
+  fi
+
+  # 若无本地源码仓库，通过 GitHub 远程源下载最新代码平滑替换
+  log "正在从 GitHub 官方源拉取最新组件..."
+  local raw_base="https://raw.githubusercontent.com/JayYang1991/vps-utils/main/preferred-ip-manager"
+  local mirror_base="https://ghproxy.net/https://raw.githubusercontent.com/JayYang1991/vps-utils/main/preferred-ip-manager"
+  local tmp_dir="/tmp/preferred-ip-manager-update"
+  mkdir -p "$tmp_dir"
+
+  local files=("process_ips.py" "warp_tester.py" "telegram_tool.py" "preferred-ip-manager.sh" "install.sh")
+  local all_success=true
+
+  for f in "${files[@]}"; do
+    if curl -fsSL --connect-timeout 10 -m 30 "${raw_base}/${f}" -o "${tmp_dir}/${f}" 2>/dev/null || \
+       curl -fsSL --connect-timeout 10 -m 30 "${mirror_base}/${f}" -o "${tmp_dir}/${f}" 2>/dev/null; then
+      chmod +x "${tmp_dir}/${f}" 2>/dev/null || true
+    else
+      warn "拉取最新 ${f} 失败"
+      all_success=false
+    fi
+  done
+
+  if [[ "$all_success" == "true" ]] && [[ -f "${tmp_dir}/install.sh" ]]; then
+    bash "${tmp_dir}/install.sh" --update -y
+    rm -rf "$tmp_dir" 2>/dev/null || true
+    success "已成功通过远程源平滑升级 preferred-ip-manager！"
+  else
+    error "远程更新下载失败，请检查网络连接或手动通过 git pull 更新。"
+    rm -rf "$tmp_dir" 2>/dev/null || true
+    return 1
+  fi
+}
+
 main() {
   local cmd="${1:-status}"
   shift || true
@@ -300,6 +359,9 @@ main() {
       ;;
     logs|log|--logs)
       cmd_logs "$@"
+      ;;
+    update|upgrade|--update|--upgrade)
+      cmd_update "$@"
       ;;
     restart)
       cmd_restart "$@"

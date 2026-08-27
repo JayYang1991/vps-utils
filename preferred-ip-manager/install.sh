@@ -70,6 +70,7 @@ show_help() {
   echo ""
   echo "核心操作命令:"
   echo "  --install                   安装测速组件与 Python 依赖至 /usr/local/bin 并注册每日定时服务 (默认)"
+  echo "  --update, --upgrade         平滑升级测速脚本、核心模块与 CLI 工具 (完全保留已有配置与数据)"
   echo "  --uninstall                 停止并卸载 Systemd 定时器与服务，清理安装文件与配置"
   echo "  --run-now, --test           立即触发一次优选测速与订阅端推送任务"
   echo "  --status                    查看 Systemd 服务与定时器运行状态、下一次触发时间"
@@ -97,10 +98,13 @@ show_help() {
   echo "  1. 默认安装定时测速服务:"
   echo "     sudo bash $0 --install"
   echo ""
-  echo "  2. 安装定时服务并指定 SOCKS5 代理用于 Telegram 抓取:"
-  echo "     sudo bash $0 --install --proxy socks5://127.0.0.1:1080"
+  echo "  2. 平滑更新安装最新版本 (保留配置与数据):"
+  echo "     sudo bash $0 --update"
   echo ""
-  echo "  3. 查看定时器计划与下一次触发时间:"
+  echo "  3. 安装定时服务并指定 SOCKS5 代理用于 Telegram 抓取与订阅同步:"
+  echo "     sudo bash $0 --install --proxy socks5h://127.0.0.1:1080"
+  echo ""
+  echo "  4. 查看定时器计划与下一次触发时间:"
   echo "     sudo bash $0 --status"
 }
 
@@ -533,6 +537,10 @@ parse_arguments() {
         ACTION="install"
         shift
         ;;
+      --update|--upgrade)
+        ACTION="update"
+        shift
+        ;;
       --uninstall)
         ACTION="uninstall"
         shift
@@ -628,6 +636,42 @@ main() {
       echo -e " • 运维管理 : ${CYAN}preferred-ip-manager status | run | logs | restart${NC}"
       echo -e " • 快速测速 : ${CYAN}preferred-ip-tester${NC}"
       echo -e " • 配置文件 : ${CONFIG_FILE}"
+      echo -e "${GREEN}================================================================${NC}"
+      ;;
+    update|upgrade)
+      check_if_running_as_root
+      log "正在平滑升级 preferred-ip-manager 核心组件 (保留现有配置与数据)..."
+      local py_exec
+      py_exec=$(setup_python_environment)
+      install_cfst_binary
+      install_scripts "$py_exec"
+      # 若配置文件已存在，确保兼容升级旧配置项 (如 TG_PROXY -> PROXY)
+      if [[ -f "$CONFIG_FILE" ]]; then
+        if grep -q "^TG_PROXY=" "$CONFIG_FILE" 2>/dev/null && ! grep -q "^PROXY=" "$CONFIG_FILE" 2>/dev/null; then
+          sed -i 's/^TG_PROXY=/PROXY=/g' "$CONFIG_FILE"
+          log "已自动兼容升级配置文件代理项: TG_PROXY -> PROXY"
+        fi
+      else
+        configure_env
+      fi
+      # 刷新 systemd 并保证定时器状态正常
+      if [[ -f "$SERVICE_FILE" ]] && [[ -f "$TIMER_FILE" ]]; then
+        systemctl daemon-reload
+        if systemctl is-enabled --quiet "${SERVICE_NAME}.timer" 2>/dev/null; then
+          systemctl restart "${SERVICE_NAME}.timer" 2>/dev/null || true
+        fi
+      else
+        install_systemd_service
+      fi
+      show_status
+      echo ""
+      echo -e "${GREEN}================================================================${NC}"
+      echo -e "${GREEN}      preferred-ip-manager 核心组件与命令已平滑升级成功！${NC}"
+      echo -e "${GREEN}================================================================${NC}"
+      echo -e " • 配置保护 : 已完好保留现有配置文件 (${CONFIG_FILE})"
+      echo -e " • 数据保护 : 已完好保留历史测速数据 (${DATA_DIR})"
+      echo -e " • 定时计划 : 守护定时器正常保持运行"
+      echo -e " • 运维命令 : ${CYAN}preferred-ip-manager status | run | update${NC}"
       echo -e "${GREEN}================================================================${NC}"
       ;;
     uninstall)
