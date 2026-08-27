@@ -295,7 +295,7 @@ clash-singbox-sub-manager status
 | **[singbox-sub-converter](./singbox-sub-converter)** | 基于 Python/FastAPI 的 sing-box 自适应订阅转换服务与 Web 管理后台 | `install.sh`<br>`uninstall.sh`<br>`pack.sh` | [singbox-sub-converter 详细指南](./singbox-sub-converter/README.md) |
 | **[clash-singbox-sub-manager](./clash-singbox-sub-manager)** | 中转 VPS 节点专用：零 Subapi 依赖的本地 Sing-box 入站提取、Clash 订阅重构分发与 Web 管理器 | `install.sh`<br>`service.sh`<br>`uninstall.sh` | [clash-singbox-sub-manager 详细指南](./clash-singbox-sub-manager/README.md) |
 | **[vpngate-singbox-openvpn](./vpngate-singbox-openvpn)** | 集成部署在目标 VPS 上的 Docker 容器与 OpenVPN 节点自动更新服务，对外提供纯净住宅 IP 代理 | `install.sh`<br>`generate_ovpn.py`<br>`scripts/node_updater.py`<br>`scripts/service.sh` | [vpngate-singbox-openvpn 详细指南](./vpngate-singbox-openvpn/README.md) |
-| **[cloudflare-access-tcp](./cloudflare-access-tcp)** | 代理客户端 Cloudflare Access TCP 转发容器 (Ubuntu 24.04 + Systemd 自启) | `install.sh`<br>`docker-entrypoint.sh`<br>`Dockerfile` | [cloudflare-access-tcp 详细指南](./cloudflare-access-tcp/README.md) |
+| **[cloudflare-access-tcp](./cloudflare-access-tcp)** | 代理客户端 Cloudflare Access TCP 转发与自动优选 IP 容器 (每日凌晨测速 TOP 20 + 故障自动切换) | `install.sh`<br>`speedtest_runner.py`<br>`health_checker.py` | [cloudflare-access-tcp 详细指南](./cloudflare-access-tcp/README.md) |
 
 ---
 
@@ -371,12 +371,15 @@ clash-singbox-sub-manager status
   - 提供 `vpngate-tunnel status/list-nodes/next-node/update-nodes/upgrade/restart/logs/test` 全生命周期命令；
   - 支持一键平滑升级（`--upgrade`），预构建镜像并保留配置，秒级无缝重启。
 
-### 9. [cloudflare-access-tcp](./cloudflare-access-tcp) — 代理客户端 Cloudflare Access TCP 转发容器
+### 9. [cloudflare-access-tcp](./cloudflare-access-tcp) — 代理客户端 Cloudflare Access TCP 转发与自动优选 IP 容器
 
-- **Ubuntu 24.04 编译生成**：基于 `ubuntu:24.04` 与官方 `cloudflared` 二进制，编译全程使用宿主机网络 (`--network host`)。
+- **Ubuntu 24.04 编译生成**：基于 `ubuntu:24.04`、官方 `cloudflared` 与 `cfst` 测速核心，编译全程使用宿主机网络 (`--network host`)。
 - **多端口并发转发**：默认开启 2 个 TCP 转发端口（`5000` 与 `5001`）映射远程私有服务（`movies.19910417.xyz` / `movies1.19910417.xyz`），支持任意自定义域名与端口列表。
+- **全自动优选 IP 双重调度策略**：
+  - **策略 1（每日凌晨定时测速）**：每天北京时间凌晨 02:00 ~ 06:00 随机时刻自动测速，选取 **TOP 20 优选 IP** 存入待选列表 (`candidates.txt`)，并自动切换至 TOP 1 优选 IP；
+  - **策略 2（实时连通性检测与自动故障转移）**：容器内定时检测 TCP 转发连通性，当检测不通时从待选列表从前往后验证 IP 可用性，自动切换域名解析到可用优选 IP 并热重载转发。
 - **严格校验与凭据隔离**：内置 RFC 域名与 1-65535 端口严格校验，Service Token 凭据独立保存在 `chmod 600` 文件中。
-- **Systemd 自启与全生命周期管理**：提供 `install.sh` 脚本，支持 `--install`、`--status`、`--logs`、`--test`、`--restart`、`--stop`、`--rebuild`、`--uninstall`。
+- **Systemd 自启与全生命周期管理**：提供 `install.sh` 脚本，支持 `--install`、`--status`、`--logs`、`--speedtest`、`--candidates`、`--switch-ip`、`--test`、`--restart`、`--stop`、`--rebuild`、`--uninstall`。
 
 ---
 
@@ -460,11 +463,14 @@ vps-utils/
 │       ├── ovpn_nodes/                # 批量生成的 .ovpn 节点文件目录
 │       ├── scamalytics_cache.json     # Scamalytics 威胁分 7 天本地缓存
 │       └── vpn_status.json            # 实时运行状态与当前激活节点输出
-└── cloudflare-access-tcp/              # 代理客户端 Cloudflare Access TCP 转发容器
+└── cloudflare-access-tcp/              # 代理客户端 Cloudflare Access TCP 转发与自动优选 IP 容器
     ├── README.md                      # cloudflare-access-tcp 详细指南
     ├── install.sh                     # 一键安装、构建与 Systemd 容器管理脚本
-    ├── Dockerfile                     # Ubuntu 24.04 + cloudflared 容器构建文件
-    └── docker-entrypoint.sh           # 严格参数校验与多进程守护启动脚本
+    ├── Dockerfile                     # Ubuntu 24.04 + cloudflared + cfst 容器构建文件
+    ├── docker-entrypoint.sh           # 多进程守护与初始化启动入口脚本
+    ├── speedtest_runner.py            # 优选 IP 测速与 TOP 20 待选池管理引擎
+    ├── health_checker.py              # TCP 联通性检测、故障转移与每日定时测速守护进程
+    └── origin_ips.txt                 # 内置 Cloudflare 候选 IP 种子池
 ```
 
 ---

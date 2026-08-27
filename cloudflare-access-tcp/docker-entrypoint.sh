@@ -2,8 +2,8 @@
 #
 # docker-entrypoint.sh
 # Cloudflare Access TCP Client Forwarder Container Entrypoint Script
-# 负责在容器内解析环境变量、执行严格的域名与端口校验，支持多域名共用优选 IP 静态映射，
-# 并发拉起多个 cloudflared access tcp 进程，内置进程级热自愈监控与防颠簸重试机制。
+# 负责在容器内解析环境变量、校验域名/端口、注入优选 IP 映射，
+# 并发拉起 cloudflared access tcp 转发进程与 health_checker 后台健康检测/定时测速守护进程。
 #
 
 set -eo pipefail
@@ -13,13 +13,14 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
+BOLD='\033[1m'
 NC='\033[0m'
 
 log() { echo -e "${GREEN}[INFO]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1"; }
 error() { echo -e "${RED}[ERROR]${NC} $(date '+%Y-%m-%d %H:%M:%S') $1" >&2; }
 
-# --- 字符串清洗辅助函数 (纯 Bash 去除首尾空白与包裹的引号，避免 xargs 引号解析错误) ---
+# --- 字符串清洗辅助函数 ---
 clean_val() {
   local val="$1"
   val="${val#"${val%%[![:space:]]*}"}"
@@ -46,6 +47,21 @@ PREFERRED_IP=$(clean_val "${PREFERRED_IP:-}")
 SERVICE_TOKEN_ID=$(clean_val "${SERVICE_TOKEN_ID:-}")
 SERVICE_TOKEN_SECRET=$(clean_val "${SERVICE_TOKEN_SECRET:-}")
 LOG_LEVEL=$(clean_val "${LOG_LEVEL:-info}")
+
+CONF_DIR="/etc/cloudflare-access-tcp"
+CANDIDATES_FILE="${CONF_DIR}/candidates.txt"
+mkdir -p "$CONF_DIR"
+
+# 导出供 Python 守护进程读取的环境变量
+export DOMAINS
+export PORTS
+export LISTEN_HOST
+export PREFERRED_IP
+export SERVICE_TOKEN_ID
+export SERVICE_TOKEN_SECRET
+export CONF_DIR
+export CANDIDATES_FILE
+export STATUS_FILE="${CONF_DIR}/status.json"
 
 # --- 校验函数 ---
 validate_domain() {
@@ -188,7 +204,7 @@ log "Host Listen Binding:  $LISTEN_HOST"
 if [[ -n "$PREFERRED_IP" ]]; then
   log "Preferred IP (优选):  $PREFERRED_IP (所有域名共用解析)"
 else
-  log "Preferred IP (优选):  未配置 (使用公共 DNS 解析)"
+  log "Preferred IP (优选):  自动探测/待选池管理模式"
 fi
 log "Forward Rules Count:  ${#DOMAIN_ARRAY[@]}"
 
@@ -197,9 +213,9 @@ for i in "${!DOMAIN_ARRAY[@]}"; do
 done
 echo -e "${CYAN}------------------------------------------------------${NC}"
 
-# --- 注入优选 IP 静态域名映射 (修改容器 /etc/hosts) ---
+# --- 注入初始优选 IP 静态域名映射 (若配置) ---
 if [[ -n "$PREFERRED_IP" ]]; then
-  log "⚡ 正在向容器 /etc/hosts 注入优选 IP 静态映射 (${PREFERRED_IP}) ..."
+  log "⚡ 正在向容器 /etc/hosts 注入初始优选 IP 映射 (${PREFERRED_IP}) ..."
   for target_d in "${DOMAIN_ARRAY[@]}"; do
     sed -i "/[[:space:]]${target_d}\$/d" /etc/hosts 2>/dev/null || true
     echo "${PREFERRED_IP} ${target_d}" >> /etc/hosts
@@ -207,10 +223,11 @@ if [[ -n "$PREFERRED_IP" ]]; then
   done
 fi
 
-# --- 进程级自愈管理与信号捕获 ---
+# --- 进程级管理与信号捕获 ---
 declare -A CHILD_PIDS
 declare -A CRASH_COUNTS
 declare -A LAST_CRASH_TIMES
+HEALTH_CHECKER_PID=""
 
 start_forward_process() {
   local idx="$1"
@@ -227,26 +244,44 @@ start_forward_process() {
   
   local pid=$!
   CHILD_PIDS[$idx]=$pid
-  log "规则 #$((idx+1)) [0.0.0.0:${listen_port} -> ${target_domain}] 转发进程已成功拉起 (PID: $pid)"
+  log "规则 #$((idx+1)) [0.0.0.0:${listen_port} -> ${target_domain}] 转发进程已拉起 (PID: $pid)"
+}
+
+start_health_checker() {
+  log "正在拉起健康检测与自动故障转移守护进程 (health_checker.py)..."
+  python3 /app/health_checker.py &
+  HEALTH_CHECKER_PID=$!
+  log "健康检测与优选 IP 守护进程已启动 (PID: $HEALTH_CHECKER_PID)"
 }
 
 cleanup() {
   local exit_code="${1:-0}"
   echo ""
-  warn "正在处理退出信号，准备停止所有 cloudflared access tcp 转发进程..."
+  warn "正在处理退出信号，准备停止所有子进程..."
+  
+  if [[ -n "$HEALTH_CHECKER_PID" ]] && kill -0 "$HEALTH_CHECKER_PID" 2>/dev/null; then
+    kill -TERM "$HEALTH_CHECKER_PID" 2>/dev/null || true
+  fi
+
   for idx in "${!DOMAIN_ARRAY[@]}"; do
     local pid="${CHILD_PIDS[$idx]}"
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       kill -TERM "$pid" 2>/dev/null || true
     fi
   done
+
+  # 等待子进程退出
   for idx in "${!DOMAIN_ARRAY[@]}"; do
     local pid="${CHILD_PIDS[$idx]}"
     if [[ -n "$pid" ]]; then
       wait "$pid" 2>/dev/null || true
     fi
   done
-  log "所有转发进程已安全退出。"
+  if [[ -n "$HEALTH_CHECKER_PID" ]]; then
+    wait "$HEALTH_CHECKER_PID" 2>/dev/null || true
+  fi
+
+  log "所有转发与监控进程已安全退出。"
   exit "$exit_code"
 }
 
@@ -259,36 +294,29 @@ for i in "${!DOMAIN_ARRAY[@]}"; do
   LAST_CRASH_TIMES[$i]=0
 done
 
-log "所有 cloudflared TCP 转发进程已成功启动！正在监听连接并开启自愈守护..."
+# 启动后台健康检测守护进程
+start_health_checker
+
+log "所有 cloudflared TCP 转发进程与健康检测守护已就绪！开启运行监听..."
 
 # 持续自愈监控循环
 while true; do
   current_time=$(date +%s)
+  
+  # 监控 cloudflared 转发进程
   for i in "${!DOMAIN_ARRAY[@]}"; do
     pid="${CHILD_PIDS[$i]}"
     if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
-      warn "⚠️ 检测到规则 #$((i+1)) [${DOMAIN_ARRAY[i]}:${PORT_ARRAY[i]}] 转发进程 (原 PID: ${pid:-none}) 异常退出！"
-      
-      # 防颠簸判定 (10秒内连续崩溃超过5次视为致命错误，交由 Systemd 兜底)
-      last_crash="${LAST_CRASH_TIMES[$i]:-0}"
-      time_diff=$((current_time - last_crash))
-      
-      if (( time_diff < 10 )); then
-        CRASH_COUNTS[$i]=$(( ${CRASH_COUNTS[$i]:-0} + 1 ))
-      else
-        CRASH_COUNTS[$i]=1
-      fi
-      LAST_CRASH_TIMES[$i]=$current_time
-
-      if (( ${CRASH_COUNTS[$i]} > 5 )); then
-        error "❌ 规则 #$((i+1)) 在 10 秒内连续崩溃超过 5 次，可能存在凭证失效或配置错误！"
-        error "正在退出容器以触发 Systemd 容器级自愈守护..."
-        cleanup 1
-      fi
-
-      log "🔄 正在执行单进程级热自愈，重新拉起规则 #$((i+1)) ..."
+      # 重新拉起
       start_forward_process "$i"
     fi
   done
-  sleep 2
+
+  # 监控 health_checker 进程
+  if [[ -z "$HEALTH_CHECKER_PID" ]] || ! kill -0 "$HEALTH_CHECKER_PID" 2>/dev/null; then
+    warn "⚠️ 检测到 health_checker.py 异常退出，正在重新拉起..."
+    start_health_checker
+  fi
+
+  sleep 1.5
 done
