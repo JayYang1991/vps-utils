@@ -467,8 +467,7 @@ vps-utils/
     ├── Dockerfile                     # Ubuntu 24.04 + cloudflared + cfst 容器构建文件
     ├── docker-entrypoint.sh           # 多进程守护与初始化启动入口脚本
     ├── speedtest_runner.py            # 优选 IP 测速与 TOP 20 待选池管理引擎
-    ├── health_checker.py              # TCP 联通性检测、故障转移与每日定时测速守护进程
-    └── origin_ips.txt                 # 内置 Cloudflare 候选 IP 种子池
+    └── health_checker.py              # TCP 联通性检测、故障转移与每日定时测速守护进程
 ```
 
 ---

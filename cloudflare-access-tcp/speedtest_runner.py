@@ -73,7 +73,7 @@ class CandidateSourceManager:
 
     @staticmethod
     def parse_file(file_path: str, target_port: str = "443") -> List[Tuple[str, str]]:
-        """从 IP 列表中提取匹配目标端口的 IP"""
+        """从待选 IP 列表中提取匹配目标端口的 IP"""
         results = []
         if not os.path.exists(file_path):
             return results
@@ -92,12 +92,12 @@ class CandidateSourceManager:
                         port = port_match.group(1) if port_match else "443"
                         remark = rest[len(port):].lstrip('#').strip() if port_match else ""
                         if is_valid_ip(ip) and (target_port == "all" or port == target_port):
-                            results.append((ip, remark or "Seed"))
+                            results.append((ip, remark or "Candidate"))
                     else:
                         # 纯 IP
                         ip = line.split('#')[0].strip()
                         if is_valid_ip(ip):
-                            results.append((ip, "Seed"))
+                            results.append((ip, "Candidate"))
         except Exception as e:
             log_warn(f"解析文件 {file_path} 异常: {e}")
         return results
@@ -165,12 +165,12 @@ class CandidateSourceManager:
         return results
 
     @classmethod
-    def collect_all_candidates(cls, seed_file: str, sub_url: str, existing_candidates_file: str, target_port: str = "443") -> List[Tuple[str, str]]:
-        """聚合去重所有候选 IP 来源"""
+    def collect_all_candidates(cls, sub_url: str, existing_candidates_file: str, target_port: str = "443") -> List[Tuple[str, str]]:
+        """聚合去重候选 IP 来源 (在线订阅源 + 本地现有待选列表)"""
         seen_ips = set()
         candidates = []
 
-        # 1. 现有候选列表 (高优先级)
+        # 1. 现有候选列表
         if existing_candidates_file and os.path.exists(existing_candidates_file):
             for ip, remark in cls.parse_file(existing_candidates_file, target_port):
                 if ip not in seen_ips:
@@ -180,13 +180,6 @@ class CandidateSourceManager:
         # 2. 在线订阅与历史源
         if sub_url:
             for ip, remark in cls.fetch_online_ips(sub_url, target_port):
-                if ip not in seen_ips:
-                    seen_ips.add(ip)
-                    candidates.append((ip, remark))
-
-        # 3. 本地内置种子文件
-        if seed_file and os.path.exists(seed_file):
-            for ip, remark in cls.parse_file(seed_file, target_port):
                 if ip not in seen_ips:
                     seen_ips.add(ip)
                     candidates.append((ip, remark))
@@ -366,11 +359,10 @@ def test_ip_reachability(ip: str, port: int = 443, timeout: float = 2.0) -> bool
         return False
 
 
-def update_candidates_from_sub_url(sub_url: str, output_path: str, seed_file: str = "/app/origin_ips.txt",
-                                   port: str = "443", top_count: int = 20) -> bool:
+def update_candidates_from_sub_url(sub_url: str, output_path: str, port: str = "443", top_count: int = 20) -> bool:
     """
     容器启动时从 --sub-url 获取在线订阅更新作为待选列表文件；
-    如果获取失败，则保持原有文件不变；若原有文件亦不存在，则使用种子文件初始化。
+    如果获取失败，则保持原有待选列表文件不变。
     """
     log_info(f"🔄 正在尝试从在线订阅源 ({sub_url}) 拉取最新优选候选 IP...")
     online_ips = CandidateSourceManager.fetch_online_ips(sub_url, target_port=port)
@@ -394,22 +386,6 @@ def update_candidates_from_sub_url(sub_url: str, output_path: str, seed_file: st
             return False
     else:
         log_warn(f"⚠️ 从在线订阅源 ({sub_url}) 获取更新失败或未返回有效节点，保持原有待选列表文件 ({output_path}) 不变。")
-        # 若现有待选文件不存在，则使用种子文件初始化保底
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            if seed_file and os.path.exists(seed_file):
-                log_info(f"检测到原有待选列表文件不存在，正在使用内置种子文件 ({seed_file}) 初始化...")
-                seed_ips = CandidateSourceManager.parse_file(seed_file, port)
-                if seed_ips:
-                    top_results = SpeedTestEngine.run_speedtest(
-                        candidates=seed_ips[:500],
-                        top_count=top_count,
-                        port=port,
-                        concurrency=100,
-                        min_speed=0.0
-                    )
-                    if top_results:
-                        save_candidates_file(top_results, output_path, port)
-                        return True
         return False
 
 
@@ -432,8 +408,6 @@ def main():
                         help="最大允许延迟 ms (默认: 300)")
     parser.add_argument("--sub-url", default=os.getenv("CF_SUB_URL", "https://sub.19910417.xyz"),
                         help="Cloudflare Workers 订阅拉取 URL")
-    parser.add_argument("--seed-file", default=os.getenv("SEED_FILE", "/app/origin_ips.txt"),
-                        help="本地内置候选 IP 种子文件路径 (默认: /app/origin_ips.txt)")
     parser.add_argument("--test-ip", default="", help="测试单个 IP 的 443 端口连通性")
 
     args = parser.parse_args()
@@ -451,7 +425,6 @@ def main():
         success = update_candidates_from_sub_url(
             sub_url=args.sub_url,
             output_path=args.output,
-            seed_file=args.seed_file,
             port=args.port,
             top_count=args.top
         )
@@ -463,7 +436,6 @@ def main():
 
     log_info("=== 开始执行 Cloudflare Access TCP 优选 IP 测速流程 ===")
     candidates = CandidateSourceManager.collect_all_candidates(
-        seed_file=args.seed_file,
         sub_url=args.sub_url,
         existing_candidates_file=args.output,
         target_port=args.port

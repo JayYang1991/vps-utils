@@ -61,10 +61,9 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 WORKDIR /app
 
-# 拷贝测速引擎、健康检测守护及种子 IP 文件
+# 拷贝测速引擎、健康检测守护脚本
 COPY speedtest_runner.py /app/speedtest_runner.py
 COPY health_checker.py /app/health_checker.py
-COPY origin_ips.txt /app/origin_ips.txt
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
 RUN chmod +x /docker-entrypoint.sh /app/speedtest_runner.py /app/health_checker.py

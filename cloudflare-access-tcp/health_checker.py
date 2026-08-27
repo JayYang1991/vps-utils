@@ -64,7 +64,6 @@ class Config:
     CANDIDATES_FILE = os.getenv("CANDIDATES_FILE", "/etc/cloudflare-access-tcp/candidates.txt")
     STATUS_FILE = os.getenv("STATUS_FILE", "/etc/cloudflare-access-tcp/status.json")
     CONF_DIR = os.getenv("CONF_DIR", "/etc/cloudflare-access-tcp")
-    SEED_FILE = os.getenv("SEED_FILE", "/app/origin_ips.txt")
     
     CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "15"))
     FAIL_THRESHOLD = int(os.getenv("FAIL_THRESHOLD", "2"))
@@ -239,7 +238,6 @@ def update_candidates_from_sub():
         update_candidates_from_sub_url(
             sub_url=sub_url,
             output_path=Config.CANDIDATES_FILE,
-            seed_file=Config.SEED_FILE,
             port="443",
             top_count=20
         )
@@ -254,17 +252,7 @@ def select_preferred_ip_from_candidates(candidates_file: str, domains: List[str]
     """
     candidates = CandidatePool.read_candidates(candidates_file)
     if not candidates:
-        log_warn(f"待选列表文件 ({candidates_file}) 为空，尝试使用内置种子池...")
-        if os.path.exists(Config.SEED_FILE):
-            from speedtest_runner import CandidateSourceManager, save_candidates_file
-            seed_ips = CandidateSourceManager.parse_file(Config.SEED_FILE, "443")
-            if seed_ips:
-                items = [{"ip": ip, "speed": 0, "latency": 100, "loss_rate": 0, "colo": remark} for ip, remark in seed_ips[:20]]
-                save_candidates_file(items, candidates_file, "443")
-                candidates = CandidatePool.read_candidates(candidates_file)
-
-    if not candidates:
-        log_error("❌ 无法获取任何候选 IP，无法选取优选 IP！")
+        log_warn(f"待选列表文件 ({candidates_file}) 为空！")
         return ""
 
     log_info(f"🔍 正在从待选列表 ({len(candidates)} 个节点) 从前往后选取首个可用优选 IP...")
@@ -358,9 +346,9 @@ class HealthCheckerDaemon:
         log_warn("⚠️ 开始执行优选 IP 自动故障转移 (Failover 流程)...")
         candidates = CandidatePool.read_candidates(self.candidates_file)
 
-        # 若候选列表为空，则立即触发一次应急测速获取 TOP 20
+        # 若候选列表为空，则立即尝试触发一次测速获取 TOP 20
         if not candidates:
-            log_warn("待选 IP 列表为空，正在立即触发应急测速以获取可用候选...")
+            log_warn("待选 IP 列表为空，正在尝试立即触发测速以获取可用候选...")
             if self.run_speedtest_sync():
                 candidates = CandidatePool.read_candidates(self.candidates_file)
 
