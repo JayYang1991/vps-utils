@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 health_checker.py
-Cloudflare Access TCP 容器内网络联通性检测与优选 IP 自动故障转移守护进程
+Cloudflare Access TCP 容器内网络联通性检测、在线订阅同步与优选 IP 自动故障转移守护进程
 
 功能：
-1. 定期检测 TCP 转发端口与当前优选 IP 的网络联通性 (Health Check Loop)。
-2. 当 TCP 转发不通时，从待选列表 (candidates.txt) 从前往后依次测试 IP 可用性，
-   自动将域名切换解析到可用优选 IP 并重载 cloudflared 转发进程 (Failover)。
-3. 每日北京时间凌晨 02:00 ~ 06:00 随机时刻自动触发测速，更新 TOP 20 待选列表并切换至最优 IP。
-4. 实时输出运行状态至 /etc/cloudflare-access-tcp/status.json 供宿主机监控。
+1. 容器启动时从 --sub-url 获取在线订阅更新作为待选列表文件；若获取失败则保持原有文件不变。
+2. 启动时从待选列表文件 (candidates.txt) 从前往后依次探测 443 端口并选取可用节点作为优选 IP (--preferred-ip)。
+3. 定期检测 TCP 转发端口与当前优选 IP 的网络联通性 (Health Check Loop)。
+4. 当 TCP 转发不通时，从待选列表从前往后验证可用性并自动故障转移 (Failover)。
+5. 每日北京时间凌晨 02:00 ~ 06:00 随机时刻自动触发测速，更新 TOP 20 待选列表并切换至最优 IP。
+6. 实时输出运行状态至 /etc/cloudflare-access-tcp/status.json 供宿主机监控。
 """
 
 import os
@@ -58,10 +59,12 @@ class Config:
     PORTS_STR = os.getenv("PORTS", "5000,5001")
     LISTEN_HOST = os.getenv("LISTEN_HOST", "127.0.0.1")
     INITIAL_PREF_IP = os.getenv("PREFERRED_IP", "").strip()
+    CF_SUB_URL = os.getenv("CF_SUB_URL", "https://sub.19910417.xyz").strip()
     
     CANDIDATES_FILE = os.getenv("CANDIDATES_FILE", "/etc/cloudflare-access-tcp/candidates.txt")
     STATUS_FILE = os.getenv("STATUS_FILE", "/etc/cloudflare-access-tcp/status.json")
     CONF_DIR = os.getenv("CONF_DIR", "/etc/cloudflare-access-tcp")
+    SEED_FILE = os.getenv("SEED_FILE", "/app/origin_ips.txt")
     
     CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "15"))
     FAIL_THRESHOLD = int(os.getenv("FAIL_THRESHOLD", "2"))
@@ -152,7 +155,6 @@ class ForwarderController:
         """发送 SIGTERM 通知 entrypoint 进程管理器热重载 cloudflared 进程"""
         log_info("🔄 正在触发 cloudflared access tcp 转发进程重启以加载新 IP 映射...")
         try:
-            # 查找所有 cloudflared 进程并发送 SIGTERM，容器 entrypoint 守护会自动毫秒级拉起新进程
             subprocess.run(["pkill", "-TERM", "cloudflared"], check=False)
             time.sleep(1.5)
             log_info("cloudflared 进程重载指令已发送完成")
@@ -227,6 +229,62 @@ class CandidatePool:
         return candidates
 
 
+def update_candidates_from_sub():
+    """从 --sub-url 拉取在线订阅更新待选列表，失败则保持原样"""
+    sub_url = Config.CF_SUB_URL
+    if not sub_url:
+        return
+    try:
+        from speedtest_runner import update_candidates_from_sub_url
+        update_candidates_from_sub_url(
+            sub_url=sub_url,
+            output_path=Config.CANDIDATES_FILE,
+            seed_file=Config.SEED_FILE,
+            port="443",
+            top_count=20
+        )
+    except Exception as e:
+        log_warn(f"拉取在线订阅更新异常: {e}，保持原有待选列表不变。")
+
+
+def select_preferred_ip_from_candidates(candidates_file: str, domains: List[str]) -> str:
+    """
+    --preferred-ip 需要从待选列表文件选取：
+    从待选列表文件从前往后依次测试 443 端口可用性，选取首个可用 IP 设置为优选 IP。
+    """
+    candidates = CandidatePool.read_candidates(candidates_file)
+    if not candidates:
+        log_warn(f"待选列表文件 ({candidates_file}) 为空，尝试使用内置种子池...")
+        if os.path.exists(Config.SEED_FILE):
+            from speedtest_runner import CandidateSourceManager, save_candidates_file
+            seed_ips = CandidateSourceManager.parse_file(Config.SEED_FILE, "443")
+            if seed_ips:
+                items = [{"ip": ip, "speed": 0, "latency": 100, "loss_rate": 0, "colo": remark} for ip, remark in seed_ips[:20]]
+                save_candidates_file(items, candidates_file, "443")
+                candidates = CandidatePool.read_candidates(candidates_file)
+
+    if not candidates:
+        log_error("❌ 无法获取任何候选 IP，无法选取优选 IP！")
+        return ""
+
+    log_info(f"🔍 正在从待选列表 ({len(candidates)} 个节点) 从前往后选取首个可用优选 IP...")
+    for idx, item in enumerate(candidates):
+        cand_ip = item["ip"]
+        remark = item.get("remark", "")
+        if NetworkTester.test_ip_tls_edge(cand_ip, 443, timeout=2.0):
+            log_success(f"✓ 选定优选 IP: {BOLD}{cand_ip}{RESET} [排名 #{idx+1}, {remark}] (443 端口验证通过)")
+            HostsManager.update_preferred_ip(cand_ip, domains)
+            return cand_ip
+        else:
+            log_warn(f"  - 候选 IP {cand_ip} ({remark}) 443 端口不可达，测试下一个...")
+
+    # 若均未响应，保底选用列表第一个
+    fallback_ip = candidates[0]["ip"]
+    log_warn(f"⚠️ 待选列表中所有 IP 测试均未即时响应，保底选取 TOP 1: {fallback_ip}")
+    HostsManager.update_preferred_ip(fallback_ip, domains)
+    return fallback_ip
+
+
 class HealthCheckerDaemon:
     """主守护进程：健康检查、故障转移与定时测速"""
 
@@ -242,7 +300,6 @@ class HealthCheckerDaemon:
         
         self.next_speedtest_time: Optional[datetime.datetime] = None
         self.last_speedtest_time: Optional[datetime.datetime] = None
-        self.last_check_status: Dict[str, Any] = {}
 
     def save_status(self, is_healthy: bool, details: str = ""):
         """保存当前运行状态至 JSON 文件"""
@@ -295,8 +352,8 @@ class HealthCheckerDaemon:
 
     def perform_failover(self) -> bool:
         """
-        策略 2: 当 TCP 检测不通时从文件读取并切换优选 IP，
-        从待选 IP 列表文件从前往后测试 IP 可用后设置为优选 IP，将域名切换解析到该优选 IP。
+        策略 2: 当 TCP 检测不通时从待选列表文件从前往后测试 IP 可用后设置为优选 IP，
+        将域名切换解析到该优选 IP。
         """
         log_warn("⚠️ 开始执行优选 IP 自动故障转移 (Failover 流程)...")
         candidates = CandidatePool.read_candidates(self.candidates_file)
@@ -426,32 +483,20 @@ class HealthCheckerDaemon:
         log_info(f"健康检查周期: 每 {Config.CHECK_INTERVAL} 秒")
         log_info(f"故障转移阈值: 连续失败 {Config.FAIL_THRESHOLD} 次")
 
-        # 检查现有优选 IP
-        hosts_ip = HostsManager.get_current_preferred_ip(self.domains)
-        if Config.INITIAL_PREF_IP:
-            self.current_ip = Config.INITIAL_PREF_IP
-            HostsManager.update_preferred_ip(self.current_ip, self.domains)
-        elif hosts_ip:
-            self.current_ip = hosts_ip
-            log_info(f"继承 /etc/hosts 已有优选 IP: {self.current_ip}")
+        # 1. 启动时从 --sub-url 获取在线订阅更新作为待选列表文件；若获取失败则保持原有文件不变
+        update_candidates_from_sub()
+
+        # 2. 从待选列表文件选取首个可用的优选 IP 并注入 /etc/hosts
+        selected_ip = select_preferred_ip_from_candidates(self.candidates_file, self.domains)
+        if selected_ip:
+            self.current_ip = selected_ip
         else:
-            # 尝试从 candidates.txt 取 TOP 1
-            candidates = CandidatePool.read_candidates(self.candidates_file)
-            if candidates:
-                self.current_ip = candidates[0]["ip"]
-                log_info(f"从待选列表加载 TOP 1 优选 IP: {self.current_ip}")
-                HostsManager.update_preferred_ip(self.current_ip, self.domains)
-            else:
-                log_info("未检测到预设优选 IP 与待选列表，正在执行首次启动测速...")
-                if self.run_speedtest_sync():
-                    candidates = CandidatePool.read_candidates(self.candidates_file)
-                    if candidates:
-                        self.current_ip = candidates[0]["ip"]
-                        HostsManager.update_preferred_ip(self.current_ip, self.domains)
+            # 兼容已有 /etc/hosts 或默认值
+            self.current_ip = HostsManager.get_current_preferred_ip(self.domains)
 
         self.save_status(True, "初始化完成")
 
-        # 启动每日定时测速线程
+        # 3. 启动每日定时测速线程
         if Config.AUTO_SPEEDTEST:
             t = threading.Thread(target=self.schedule_daily_speedtest, daemon=True, name="DailySpeedtestThread")
             t.start()
@@ -498,6 +543,22 @@ class HealthCheckerDaemon:
                     self.perform_failover()
 
 
+def init_ip_cli():
+    """CLI 启动前置初始化模式：拉取在线更新并从待选池选取优选 IP 注入 /etc/hosts"""
+    domains = Config.get_domains()
+    candidates_file = Config.CANDIDATES_FILE
+    log_info(f"⚡ 正在执行容器启动前置初始化 (订阅更新与优选 IP 选取)...")
+    
+    # 1. 在线更新 (失败保持原样)
+    update_candidates_from_sub()
+    
+    # 2. 从待选列表选取优选 IP
+    chosen_ip = select_preferred_ip_from_candidates(candidates_file, domains)
+    if chosen_ip:
+        log_success(f"✓ 容器启动优选 IP 选定并注入完成: {chosen_ip}")
+    sys.exit(0)
+
+
 def handle_signals(signum, frame):
     log_info("收到退出信号，正在停止健康检查守护进程...")
     sys.exit(0)
@@ -505,6 +566,9 @@ def handle_signals(signum, frame):
 if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_signals)
     signal.signal(signal.SIGINT, handle_signals)
+
+    if "--init-ip" in sys.argv or "--init-only" in sys.argv:
+        init_ip_cli()
 
     daemon = HealthCheckerDaemon()
     daemon.start_monitoring_loop()

@@ -2,8 +2,8 @@
 #
 # docker-entrypoint.sh
 # Cloudflare Access TCP Client Forwarder Container Entrypoint Script
-# 负责在容器内解析环境变量、校验域名/端口、注入优选 IP 映射，
-# 并发拉起 cloudflared access tcp 转发进程与 health_checker 后台健康检测/定时测速守护进程。
+# 负责在容器内解析环境变量、校验域名/端口、从 --sub-url 获取在线订阅更新待选列表，
+# 从待选列表选取优选 IP 注入 /etc/hosts，并拉起 cloudflared 转发与 health_checker 守护进程。
 #
 
 set -eo pipefail
@@ -47,6 +47,7 @@ PREFERRED_IP=$(clean_val "${PREFERRED_IP:-}")
 SERVICE_TOKEN_ID=$(clean_val "${SERVICE_TOKEN_ID:-}")
 SERVICE_TOKEN_SECRET=$(clean_val "${SERVICE_TOKEN_SECRET:-}")
 LOG_LEVEL=$(clean_val "${LOG_LEVEL:-info}")
+CF_SUB_URL=$(clean_val "${CF_SUB_URL:-https://sub.19910417.xyz}")
 
 CONF_DIR="/etc/cloudflare-access-tcp"
 CANDIDATES_FILE="${CONF_DIR}/candidates.txt"
@@ -59,6 +60,7 @@ export LISTEN_HOST
 export PREFERRED_IP
 export SERVICE_TOKEN_ID
 export SERVICE_TOKEN_SECRET
+export CF_SUB_URL
 export CONF_DIR
 export CANDIDATES_FILE
 export STATUS_FILE="${CONF_DIR}/status.json"
@@ -201,11 +203,7 @@ log "Service Token ID:     $(mask_token "$SERVICE_TOKEN_ID")"
 log "Service Token Secret: ********************"
 log "Container Listen:     0.0.0.0 (Bridge Isolation Mode)"
 log "Host Listen Binding:  $LISTEN_HOST"
-if [[ -n "$PREFERRED_IP" ]]; then
-  log "Preferred IP (优选):  $PREFERRED_IP (所有域名共用解析)"
-else
-  log "Preferred IP (优选):  自动探测/待选池管理模式"
-fi
+log "Online Sub URL:       $CF_SUB_URL"
 log "Forward Rules Count:  ${#DOMAIN_ARRAY[@]}"
 
 for i in "${!DOMAIN_ARRAY[@]}"; do
@@ -213,15 +211,9 @@ for i in "${!DOMAIN_ARRAY[@]}"; do
 done
 echo -e "${CYAN}------------------------------------------------------${NC}"
 
-# --- 注入初始优选 IP 静态域名映射 (若配置) ---
-if [[ -n "$PREFERRED_IP" ]]; then
-  log "⚡ 正在向容器 /etc/hosts 注入初始优选 IP 映射 (${PREFERRED_IP}) ..."
-  for target_d in "${DOMAIN_ARRAY[@]}"; do
-    sed -i "/[[:space:]]${target_d}\$/d" /etc/hosts 2>/dev/null || true
-    echo "${PREFERRED_IP} ${target_d}" >> /etc/hosts
-    log "  -> [优选 DNS 映射] ${target_d}  ===>  ${PREFERRED_IP}"
-  done
-fi
+# --- 启动前置初始化：从 --sub-url 更新待选列表并选取优选 IP 注入 /etc/hosts ---
+log "⚡ 正在执行启动前置初始化 (拉取在线订阅更新待选池并选取优选 IP)..."
+python3 /app/health_checker.py --init-ip || true
 
 # --- 进程级管理与信号捕获 ---
 declare -A CHILD_PIDS
