@@ -71,7 +71,7 @@ show_help() {
   echo ""
   echo "使用示例:"
   echo "  preferred-ip-manager status           # 查看定时器计划与服务状态"
-  echo "  preferred-ip-manager run              # 立即执行一次测速与本地同步"
+  echo "  preferred-ip-manager run              # 立即执行一次测速与订阅端推送"
   echo "  preferred-ip-manager logs -f          # 实时查看测速运行日志"
   echo "  preferred-ip-manager config           # 查看当前配置文件内容"
   echo "  preferred-ip-manager restart          # 重启定时器"
@@ -132,7 +132,7 @@ cmd_status() {
 
 cmd_run() {
   check_root
-  log "正在立即触发一次优选测速与 cloudflare-access-tcp 写入任务..."
+  log "正在立即触发一次优选测速与订阅端推送任务..."
   if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
     warn "检测到当前有测速服务正在运行中..."
   fi

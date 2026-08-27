@@ -195,13 +195,15 @@ python3 process_ips.py --target cdn --tg-proxy socks5://127.0.0.1:1080 --mode sp
 #### 核心自动化机制
 1. **安装至系统全局路径**：
    - 自动安装 Python 依赖（`requests`, `telethon`），并部署 `cfst`、`process_ips.py`、`warp_tester.py`、`telegram_tool.py` 至 `/usr/local/bin/`；
-   - 创建全局命令行快捷入口：`preferred-ip-tester` 与 `preferred-ip-sync`。
+   - 创建全局命令行快捷入口：`preferred-ip-tester` 与 `preferred-ip-manager`。
 2. **每日定时随机测速**：
    - 配置 Systemd Timer，**每天北京时间凌晨 02:00 ~ 06:00 随机时刻**自动执行（`RandomizedDelaySec=4h`，分散请求避免网络风暴）。
-3. **本地联动同步**：
-   - 测速完成后自动筛选 443 端口最优 IP 写入 `/etc/cloudflare-access-tcp/access.env` 并热重载 `cloudflare-access-tcp` 服务。
-4. **安全隔离（禁用远端 API 覆盖）**：
-   - 定时任务默认附带 `--no-upload` 参数，**严格禁止向远端 Cloudflare Worker 推送更新**，仅在本地服务生效。
+3. **Telegram 自动拉取与订阅合并**：
+   - 默认从 Telegram 频道拉取最新候选 IP，并与 Cloudflare Workers 在线订阅/历史数据池合并去重。
+4. **默认自动推送至订阅端**：
+   - 测速完成后自动将 TOP 20 最优 IP 推送更新至 Cloudflare Workers 订阅服务器。
+5. **默认大带宽测速地址**：
+   - 默认测速下载地址为 `https://movies.jackyang.cc.cd/download?size=200`。
 
 #### 1. 一键安装与配置
 
@@ -221,7 +223,7 @@ sudo bash install.sh --install --proxy socks5h://127.0.0.1:1080
 # 1. 查看定时器计划、下次触发时间与服务状态
 preferred-ip-manager status
 
-# 2. 立即手动触发一次测速与本地同步 (并实时跟踪日志)
+# 2. 立即手动触发一次测速与订阅端推送 (并实时跟踪日志)
 sudo preferred-ip-manager run
 
 # 3. 查看最近测速服务日志 (-f 实时跟踪)
@@ -249,8 +251,11 @@ PORTS="443"                # 待测端口
 CONCURRENCY="200"          # 并发数
 MIN_SPEED="5.0"            # 最低达标速度 (MB/s)
 MAX_DELAY="300"            # 最大允许延迟 (ms)
-EXTRA_ARGS="--skip-tg --no-upload -y"  # 严格本地运行参数
+EXTRA_ARGS="-y"            # 默认非交互自动推送参数
+CFST_URL="https://movies.jackyang.cc.cd/download?size=200" # 默认测速地址
 TG_PROXY="socks5://127.0.0.1:1080"     # Telegram 下载代理 (可选)
+CF_SUB_URL="https://sub.19910417.xyz"  # Workers 订阅端地址
+CF_SUB_TOKEN=""            # Workers 订阅端更新 Token (若设置将自动推送)
 ```
 
 ---

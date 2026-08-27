@@ -322,7 +322,7 @@ clash-singbox-sub-manager status
 
 ### 5. [preferred-ip-manager](./preferred-ip-manager) — 优选 IP 与 WARP Endpoint 管理
 
-- **`install.sh`**：一键部署测速组件与 Python 依赖至 `/usr/local/bin`，注册每日北京时间 02:00~06:00 随机测速与本地 `cloudflare-access-tcp` 同步的 Systemd 定时服务。
+- **`install.sh`**：一键部署测速组件与 Python 依赖至 `/usr/local/bin`，注册每日北京时间 02:00~06:00 随机测速并自动推送至 Cloudflare Workers 订阅端的 Systemd 定时服务。
 - **`preferred-ip-manager.sh`**：日常运维全局 CLI 命令（`preferred-ip-manager status/run/logs/restart/config/uninstall`），彻底解耦日常运维与安装脚本。
 - **`sub-worker.js`**：Cloudflare Worker 订阅分发与 WARP 端点管理服务端，提供现代化暗黑拟物后台、历史备份及客户端配置生成。
 - **`warp_tester.py`**：基于 RFC 9000 MASQUE/QUIC 的 Cloudflare WARP Anycast Endpoint 深度优选与测速引擎。

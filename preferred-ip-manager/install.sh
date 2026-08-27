@@ -7,9 +7,8 @@
 # 1. 自动检测系统环境，安装 Python 运行依赖与测速核心 (cfst, process_ips.py, warp_tester.py, telegram_tool.py) 到 /usr/local/bin
 # 2. 支持在安装时直接指定代理参数 (--proxy / --tg-proxy)，供 Telegram 资源下载与加速
 # 3. 部署 Systemd Timer 定时器，每天北京时间凌晨 02:00 至 06:00 随机时间点执行测速
-# 4. 自动将 443 端口最优 IP 写入 /etc/cloudflare-access-tcp/access.env 并热重载 cloudflare-access-tcp 服务
-# 5. 默认严格禁用远端 API 推送 (--no-upload)，仅在本地生效与同步
-# 6. 提供完整生命周期管理 (--install, --uninstall, --status, --run-now, --logs)
+# 4. 测速时默认从 Telegram 频道抓取最新候选 IP，测速后默认自动推送至 Cloudflare Workers 订阅端
+# 5. 提供完整生命周期管理 (--install, --uninstall, --status, --run-now, --logs)
 #
 # GitHub: https://github.com/JayYang1991/vps-utils
 #
@@ -62,6 +61,7 @@ MIN_SPEED_ARG="5.0"
 MAX_DELAY_ARG="300"
 MAX_LOSS_ARG="1.0"
 TOP_COUNT_ARG="20"
+CFST_URL_ARG="https://movies.jackyang.cc.cd/download?size=200"
 
 show_help() {
   echo -e "${CYAN}${BOLD}preferred-ip-manager 优选测速与 Systemd 定时服务管理脚本${NC}"
@@ -71,7 +71,7 @@ show_help() {
   echo "核心操作命令:"
   echo "  --install                   安装测速组件与 Python 依赖至 /usr/local/bin 并注册每日定时服务 (默认)"
   echo "  --uninstall                 停止并卸载 Systemd 定时器与服务，清理安装文件与配置"
-  echo "  --run-now, --test           立即触发一次优选测速与 cloudflare-access-tcp 写入流程"
+  echo "  --run-now, --test           立即触发一次优选测速与订阅端推送任务"
   echo "  --status                    查看 Systemd 服务与定时器运行状态、下一次触发时间"
   echo "  --logs                      查看最近的测速服务执行日志 (journalctl)"
   echo "  -h, --help                  显示本帮助菜单"
@@ -84,13 +84,14 @@ show_help() {
   echo "  --min-speed SPEED           大带宽测速达标下限 MB/s (默认: 5.0)"
   echo "  --max-delay MS              最大允许延迟上限 (默认: 300)"
   echo "  --top NUM                   最终保留的最优节点数量 (默认: 20)"
+  echo "  --url, --speedtest-url URL  自定义测速下载 URL (默认: https://movies.jackyang.cc.cd/download?size=200)"
   echo "  -y, --yes                   非交互模式，跳过确认提示直接执行"
   echo ""
   echo "定时触发规则:"
   echo "  • 触发周期: 每日北京时间 (CST, UTC+8) 凌晨 02:00 ~ 06:00"
   echo "  • 触发策略: RandomizedDelaySec=4h (4小时内随机时刻执行，避免请求峰值)"
-  echo "  • 同步策略: 将 443 端口最优 IP 写入 /etc/cloudflare-access-tcp/access.env 并重启服务"
-  echo "  • 安全限制: 默认包含 --no-upload，严格不调用远端 API 更新优选 IP 列表"
+  echo "  • 候选来源: 自动从 Telegram 频道拉取最新 IP 列表并合并在线订阅/历史池"
+  echo "  • 同步策略: 测速完成后默认自动推送结果至 Cloudflare Workers 订阅服务器"
   echo ""
   echo "使用示例:"
   echo "  1. 默认安装定时测速服务:"
@@ -334,17 +335,18 @@ DOWNLOAD_TIME="10"
 # 下载测速达标数量
 TEST_COUNT="20"
 
-# 附加执行参数 (默认跳过 Telegram 交互并严格禁止远端 API 推送)
-EXTRA_ARGS="--skip-tg --no-upload -y"
+# 附加执行参数 (默认非交互自动推送)
+EXTRA_ARGS="-y"
 
 # Telegram 下载代理 (可选，如通过 SOCKS5 代理下载: socks5://127.0.0.1:1080 或 http://127.0.0.1:7890)
 TG_PROXY="${TG_PROXY_ARG}"
 
-# 自定义测速文件下载 URL (留空使用默认测速地址)
-CFST_URL=""
+# 自定义测速文件下载 URL
+CFST_URL="${CFST_URL_ARG}"
 
-# Cloudflare Workers 订阅管理地址
+# Cloudflare Workers 订阅管理地址与更新 Token (用于测速完成后自动推送)
 CF_SUB_URL="https://sub.19910417.xyz"
+CF_SUB_TOKEN=""
 EOF
     chmod 644 "$CONFIG_FILE"
     log "已生成配置: ${CONFIG_FILE}"
@@ -359,6 +361,9 @@ EOF
     fi
     if [[ "$MODE_ARG" != "speed" ]]; then
       set_config_value "MODE" "$MODE_ARG" "$CONFIG_FILE"
+    fi
+    if [[ -n "$CFST_URL_ARG" ]]; then
+      set_config_value "CFST_URL" "$CFST_URL_ARG" "$CONFIG_FILE"
     fi
   fi
 }
@@ -377,7 +382,7 @@ install_systemd_service() {
   # 1. 编写 Service 文件
   cat <<EOF > "$SERVICE_FILE"
 [Unit]
-Description=Preferred IP Daily Speed Test & Cloudflare Access TCP Sync Service
+Description=Preferred IP Daily Speed Test & Worker Sync Service
 Documentation=https://github.com/JayYang1991/vps-utils
 After=network-online.target
 Wants=network-online.target
@@ -386,7 +391,7 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=${DATA_DIR}
 EnvironmentFile=-${CONFIG_FILE}
-ExecStart=/usr/local/bin/preferred-ip-tester --target \$TARGET --mode \$MODE --ports \$PORTS --concurrency \$CONCURRENCY --min-speed \$MIN_SPEED --max-delay \$MAX_DELAY --max-loss \$MAX_LOSS --top \$TOP_COUNT --download-time \$DOWNLOAD_TIME --test-count \$TEST_COUNT \$EXTRA_ARGS
+ExecStart=/usr/local/bin/preferred-ip-tester --target \$TARGET --mode \$MODE --ports \$PORTS --concurrency \$CONCURRENCY --min-speed \$MIN_SPEED --max-delay \$MAX_DELAY --max-loss \$MAX_LOSS --top \$TOP_COUNT --download-time \$DOWNLOAD_TIME --test-count \$TEST_COUNT --url "\$CFST_URL" \$EXTRA_ARGS
 TimeoutStartSec=1800
 StandardOutput=journal
 StandardError=journal
@@ -399,7 +404,7 @@ EOF
   # 2. 编写 Timer 文件 (北京时间 02:00~06:00 随机时间点)
   cat <<EOF > "$TIMER_FILE"
 [Unit]
-Description=Daily Preferred IP Speed Test & Sync Timer (02:00 - 06:00 CST)
+Description=Daily Preferred IP Speed Test & Worker Sync Timer (02:00 - 06:00 CST)
 Documentation=https://github.com/JayYang1991/vps-utils
 
 [Timer]
@@ -442,11 +447,11 @@ uninstall_service() {
 
   # 提示是否清理二进制与数据文件
   if [[ "$ASSUME_YES" == "true" ]]; then
-    rm -f "${BIN_DIR}/preferred-ip-tester" "${BIN_DIR}/preferred-ip-sync" 2>/dev/null || true
+    rm -f "${BIN_DIR}/preferred-ip-tester" "${BIN_DIR}/preferred-ip-manager" "${BIN_DIR}/preferred-ip" 2>/dev/null || true
     rm -rf "$INSTALL_SHARE_DIR" "$DATA_DIR" "$CONF_DIR" 2>/dev/null || true
     log "已清理所有安装组件、配置与数据文件。"
   else
-    rm -f "${BIN_DIR}/preferred-ip-tester" "${BIN_DIR}/preferred-ip-sync" 2>/dev/null || true
+    rm -f "${BIN_DIR}/preferred-ip-tester" "${BIN_DIR}/preferred-ip-manager" "${BIN_DIR}/preferred-ip" 2>/dev/null || true
     read -r -p "是否同时删除配置文件与数据目录 (${CONF_DIR}, ${DATA_DIR})? [y/N]: " del_data
     if [[ "$del_data" =~ ^[Yy]$ ]]; then
       rm -rf "$INSTALL_SHARE_DIR" "$DATA_DIR" "$CONF_DIR" 2>/dev/null || true
@@ -488,6 +493,9 @@ show_status() {
       else
         echo -e " Telegram 代理: 未配置 (直连)"
       fi
+      local cfst_url_cfg
+      cfst_url_cfg=$(grep '^CFST_URL=' "$CONFIG_FILE" | cut -d= -f2- | tr -d '"' || echo "")
+      echo -e " 测速 URL     : ${cfst_url_cfg:-$CFST_URL_ARG}"
     fi
     echo -e " CLI 测试命令 : preferred-ip-tester"
   fi
@@ -495,20 +503,19 @@ show_status() {
 }
 
 run_test_now() {
-  log "正在立即触发一次优选测速与 cloudflare-access-tcp 写入任务..."
+  log "正在立即触发一次优选测速与订阅端推送任务..."
   if systemctl is-active --quiet "${SERVICE_NAME}.service" 2>/dev/null; then
     warn "检测到当前有测速服务正在运行中..."
   fi
 
   systemctl start "${SERVICE_NAME}.service"
-
-  log "任务已触发，正在跟踪实时运行日志 (按 Ctrl+C 可退出日志跟踪)..."
+  log "任务已触发，正在跟踪实时运行日志 (按 Ctrl+C 可退出跟踪，后台任务不受影响)..."
   journalctl -u "${SERVICE_NAME}.service" -f -n 50 --no-pager
 }
 
 show_logs() {
-  log "正在查看最近 50 条 ${SERVICE_NAME} 运行日志..."
-  journalctl -u "${SERVICE_NAME}.service" -n 50 --no-pager
+  log "查看 ${SERVICE_NAME} 最近运行日志..."
+  journalctl -u "${SERVICE_NAME}.service" -f -n 50 --no-pager
 }
 
 parse_arguments() {
@@ -562,6 +569,10 @@ parse_arguments() {
         TOP_COUNT_ARG="$2"
         shift 2
         ;;
+      --url|--speedtest-url)
+        CFST_URL_ARG="$2"
+        shift 2
+        ;;
       -y|--yes)
         ASSUME_YES=true
         shift
@@ -598,8 +609,9 @@ main() {
       echo -e "${GREEN}      preferred-ip-manager 优选测速定时任务安装成功！${NC}"
       echo -e "${GREEN}================================================================${NC}"
       echo -e " • 执行周期 : 每天北京时间 02:00 ~ 06:00 随机时刻自动测速"
-      echo -e " • 同步行为 : 443 端口最优 IP 自动写入 /etc/cloudflare-access-tcp/access.env"
-      echo -e " • 安全模式 : --no-upload 严格不推送远端 API"
+      echo -e " • 候选数据 : 自动从 Telegram 频道拉取最新 IP 并合并在线/历史源"
+      echo -e " • 测速地址 : ${CFST_URL_ARG}"
+      echo -e " • 订阅同步 : 测速完成后默认自动推送结果至 Cloudflare Workers 订阅端"
       if [[ -n "$TG_PROXY_ARG" ]]; then
         echo -e " • Telegram 代理 : ${GREEN}${TG_PROXY_ARG}${NC}"
       else
