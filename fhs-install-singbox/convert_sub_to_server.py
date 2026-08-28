@@ -397,7 +397,7 @@ def convert_to_server_config(
         "openaiassets.blob.core.windows.net",
         "openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net",
         "openaicom.imgix.net",
-        # Google AI / Gemini / DeepMind 域名
+        # Google AI / Gemini / DeepMind / Antigravity 域名
         "gemini.google.com",
         "bard.google.com",
         "ai.google.dev",
@@ -414,11 +414,26 @@ def convert_to_server_config(
         "robinfrontend-pa.googleapis.com",
         "alkalicore-pa.clients6.google.com",
         "alkalimakersuite-pa.clients6.google.com",
-        "webchannel-alkalimakersuite-pa.clients6.google.com"
+        "webchannel-alkalimakersuite-pa.clients6.google.com",
+        "alkalicore-pa.googleapis.com",
+        "alkalimakersuite-pa.googleapis.com",
+        "antigravity.google",
+        "antigravity-unleash.goog",
+        "antigravity.googleapis.com",
+        "antigravity-pa.googleapis.com",
+        "aiplatform.googleapis.com",
+        "aisandbox-pa.googleapis.com",
+        "bard-pa.googleapis.com",
+        "aida.googleapis.com",
+        "cloudaicompanion.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "firebasevertexai.googleapis.com",
+        "gemini.gstatic.com"
     ]
     ai_domain_keywords = [
         "openai",
-        "chatgpt"
+        "chatgpt",
+        "antigravity"
     ]
 
     route_rules.append({
