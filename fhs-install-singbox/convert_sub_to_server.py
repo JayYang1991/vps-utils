@@ -427,6 +427,7 @@ def convert_to_server_config(
         "aida.googleapis.com",
         "cloudaicompanion.googleapis.com",
         "cloudcode-pa.googleapis.com",
+        "cloudcode-pa.googleapis.com",
         "firebasevertexai.googleapis.com",
         "gemini.gstatic.com"
     ]
