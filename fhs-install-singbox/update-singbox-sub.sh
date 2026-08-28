@@ -13,7 +13,7 @@
 #        - outbounds 节点仅保留 443 和 8443 端口的 VLESS+Reality 节点
 #        - 8443 端口节点重写为 127.0.0.1:5000，443 端口节点重写为 127.0.0.1:5001
 #        - 自动新增 SOCKS5 本地入站 (127.0.0.1:1080) 与 2 个 VLESS+Reality 入站 (默认 12345, 12346)
-#        - 自动分流路由：SOCKS (1080) 与 VLESS (12345) 路由至 5000 出站；VLESS (12346) 路由至 5001 出站
+#        - 自动分流路由：OpenAI/Google AI 域名路由至 5001 出站；SOCKS (1080) 与 VLESS (12345) 路由至 5000 出站；VLESS (12346) 路由至 5001 出站
 #        - 支持各项端口映射与入站参数自定义
 #
 #   1. 备份原配置文件至 /tmp 目录
@@ -436,7 +436,7 @@ main() {
 
   # Server 模式转换流程
   if [[ "$MODE" == "server" ]]; then
-    echo "${aoi}info: 正在执行 Server 模式转换 (分流路由: SOCKS/${INBOUND_PORT}->${PORT_8443}, ${INBOUND_PORT_2}->${PORT_443})...${reset}"
+    echo "${aoi}info: 正在执行 Server 模式转换 (分流路由: AI域名->${PORT_443}, SOCKS/${INBOUND_PORT}->${PORT_8443}, ${INBOUND_PORT_2}->${PORT_443})...${reset}"
     ensure_python_converter
 
     local py_cmd=("python3" "$PYTHON_CONVERTER" "-i" "$TEMP_CONFIG" "-o" "$TEMP_CONFIG" "-e" "$CONFIG_PATH")

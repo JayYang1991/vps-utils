@@ -11,7 +11,8 @@ sing-box 订阅配置转 Server 模式转换脚本
 4. 443 端口站点默认修改为 5001 端口，IP 修改为 127.0.0.1 (tag: vless-out-5001)
 5. 新增 2 个 vless+reality 入站（默认 12345 和 12346 端口）与 1 个 SOCKS5 本地入站（默认 127.0.0.1:1080）
 6. 自动配置分流路由规则：
-   - socks-in (1080) 与 vless-in-12345 请求路由至 5000 出站 (vless-out-5000)
+   - OpenAI 与 Google AI 相关域名优先路由至 5001 出站 (vless-out-5001)
+   - socks-in (1080) 与 vless-in-12345 其它流量路由至 5000 出站 (vless-out-5000)
    - vless-in-12346 请求路由至 5001 出站 (vless-out-5001)
 7. 支持丰富的命令行参数配置与现有配置继承
 """
@@ -299,7 +300,8 @@ def convert_to_server_config(
             "type": "socks",
             "tag": "socks-in",
             "listen": actual_socks_listen,
-            "listen_port": int(socks_port)
+            "listen_port": int(socks_port),
+            "sniff": True
         })
 
     # (2) VLESS + Reality 入站 1 (默认 12345 端口 -> 路由至 5000)
@@ -308,6 +310,7 @@ def convert_to_server_config(
         "tag": vless_1_tag,
         "listen": inbound_listen,
         "listen_port": int(inbound_port),
+        "sniff": True,
         "users": [
             {
                 "uuid": final_uuid,
@@ -338,6 +341,7 @@ def convert_to_server_config(
             "tag": vless_2_tag,
             "listen": inbound_listen,
             "listen_port": int(inbound_port_2),
+            "sniff": True,
             "users": [
                 {
                     "uuid": final_uuid,
@@ -376,7 +380,54 @@ def convert_to_server_config(
 
     route_rules = []
 
-    # 规则 1: socks-in (1080) 与 vless-in-12345 -> 路由至 5000 端口出站
+    # 规则 1: OpenAI 与 Google AI 相关域名 -> 路由至 5001 端口出站
+    ai_domain_suffixes = [
+        # OpenAI 域名
+        "openai.com",
+        "chatgpt.com",
+        "oaistatic.com",
+        "oaiusercontent.com",
+        "oaistatsig.com",
+        "chat.com",
+        "sora.com",
+        "crixet.com",
+        "chatgpt.site",
+        "openai.com.cdn.cloudflare.net",
+        "openaiapi-site.azureedge.net",
+        "openaiassets.blob.core.windows.net",
+        "openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net",
+        "openaicom.imgix.net",
+        # Google AI / Gemini / DeepMind 域名
+        "gemini.google.com",
+        "bard.google.com",
+        "ai.google.dev",
+        "generativeai.google",
+        "makersuite.google.com",
+        "aistudio.google.com",
+        "aistudio.google",
+        "deepmind.com",
+        "deepmind.google",
+        "ai.studio",
+        "generativelanguage.googleapis.com",
+        "geller-pa.googleapis.com",
+        "proactivebackend-pa.googleapis.com",
+        "robinfrontend-pa.googleapis.com",
+        "alkalicore-pa.clients6.google.com",
+        "alkalimakersuite-pa.clients6.google.com",
+        "webchannel-alkalimakersuite-pa.clients6.google.com"
+    ]
+    ai_domain_keywords = [
+        "openai",
+        "chatgpt"
+    ]
+
+    route_rules.append({
+        "domain_suffix": ai_domain_suffixes,
+        "domain_keyword": ai_domain_keywords,
+        "outbound": target_out_5001
+    })
+
+    # 规则 2: socks-in (1080) 与 vless-in-12345 -> 路由至 5000 端口出站
     inbounds_5000 = []
     if socks_port and int(socks_port) > 0:
         inbounds_5000.append("socks-in")
@@ -387,7 +438,7 @@ def convert_to_server_config(
         "outbound": target_out_5000
     })
 
-    # 规则 2: vless-in-12346 -> 路由至 5001 端口出站
+    # 规则 3: vless-in-12346 -> 路由至 5001 端口出站
     if vless_2_tag:
         route_rules.append({
             "inbound": [vless_2_tag],
@@ -418,6 +469,7 @@ def convert_to_server_config(
     print(f" 入站 UUID   : {final_uuid}")
     print(f" 入站 ShortID: {final_shortid}")
     print(f" 路由分流规则:")
+    print(f"   - 域名 [OpenAI & Google AI 相关域名] -> {target_out_5001}")
     print(f"   - 入站 [{', '.join(inbounds_5000)}] -> {target_out_5000}")
     if vless_2_tag:
         print(f"   - 入站 [{vless_2_tag}] -> {target_out_5001}")
