@@ -145,8 +145,8 @@ generate_reality_keypair() {
   fi
   local key_output
   key_output=$(sing-box generate reality-keypair 2>&1)
-  NEW_PRIVATE_KEY=$(echo "$key_output" | awk "/PrivateKey/ {print $2}")
-  NEW_PUBLIC_KEY=$(echo "$key_output" | awk "/PublicKey/ {print $2}")
+  NEW_PRIVATE_KEY=$(echo "$key_output" | awk '/PrivateKey/ {print $2}')
+  NEW_PUBLIC_KEY=$(echo "$key_output" | awk '/PublicKey/ {print $2}')
   if [[ -z "$NEW_PRIVATE_KEY" || -z "$NEW_PUBLIC_KEY" ]]; then
     echo "${red}error: 解析 sing-box Reality 密钥对失败${reset}"
     exit 1

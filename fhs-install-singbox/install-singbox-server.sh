@@ -182,8 +182,8 @@ generate_keys() {
     exit 1
   fi
 
-  PRIVATE_KEY=$(echo "$KEY_OUTPUT" | awk "/PrivateKey/ {print $2}")
-  PUBLIC_KEY=$(echo "$KEY_OUTPUT" | awk "/PublicKey/ {print $2}")
+  PRIVATE_KEY=$(echo "$KEY_OUTPUT" | awk '/PrivateKey/ {print $2}')
+  PUBLIC_KEY=$(echo "$KEY_OUTPUT" | awk '/PublicKey/ {print $2}')
 
   if [[ -z "$PRIVATE_KEY" || -z "$PUBLIC_KEY" ]]; then
     echo "${red}error: 解析密钥失败${reset}"
