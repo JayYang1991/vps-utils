@@ -429,7 +429,11 @@ def convert_to_server_config(
         "cloudcode-pa.googleapis.com",
         "cloudcode-pa.googleapis.com",
         "firebasevertexai.googleapis.com",
-        "gemini.gstatic.com"
+        "gemini.gstatic.com",
+        "oauth2.googleapis.com",
+        "play.googleapis.com",
+        "www.googleapis.com",
+        "lh3.googleusercontent.com"
     ]
     ai_domain_keywords = [
         "openai",
