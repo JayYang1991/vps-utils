@@ -107,19 +107,32 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "正在查询 GitHub 最新 Release 版本信息 (${GITHUB_REPO})..."
-LATEST_TAG=$(curl -sL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "latest")
-log "检测到 subconverter 最新版本: ${LATEST_TAG}"
-
-log "正在从 GitHub Release 下载 ${DOWNLOAD_FILENAME}..."
-if ! curl -4 -L -q --retry 5 --retry-delay 5 -o "${TEMP_DIR}/${DOWNLOAD_FILENAME}" "${DOWNLOAD_URL}"; then
-  error "下载 ${DOWNLOAD_FILENAME} 失败，请检查网络连接。"
-  exit 1
+LOCAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+LOCAL_ARCHIVE=""
+if [[ -n "$LOCAL_SCRIPT_DIR" && -f "${LOCAL_SCRIPT_DIR}/${DOWNLOAD_FILENAME}" ]]; then
+  LOCAL_ARCHIVE="${LOCAL_SCRIPT_DIR}/${DOWNLOAD_FILENAME}"
+elif [[ -n "$LOCAL_SCRIPT_DIR" && -f "${LOCAL_SCRIPT_DIR}/subconverter.tar.gz" ]]; then
+  LOCAL_ARCHIVE="${LOCAL_SCRIPT_DIR}/subconverter.tar.gz"
 fi
 
-log "正在解压并安装 subconverter 到 /usr/local/subconverter ..."
+if [[ -n "$LOCAL_ARCHIVE" ]]; then
+  log "检测到本地安装包: ${LOCAL_ARCHIVE}，直接解压安装..."
+  tar -xzf "${LOCAL_ARCHIVE}" -C "$TEMP_DIR"
+else
+  log "正在查询 GitHub 最新 Release 版本信息 (${GITHUB_REPO})..."
+  LATEST_TAG=$(curl -sL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "latest")
+  log "检测到 subconverter 最新版本: ${LATEST_TAG}"
+
+  log "正在从 GitHub Release 下载 ${DOWNLOAD_FILENAME}..."
+  if ! curl -4 -L -q --retry 5 --retry-delay 5 -o "${TEMP_DIR}/${DOWNLOAD_FILENAME}" "${DOWNLOAD_URL}"; then
+    error "下载 ${DOWNLOAD_FILENAME} 失败，请检查网络连接。"
+    exit 1
+  fi
+  tar -xzf "${TEMP_DIR}/${DOWNLOAD_FILENAME}" -C "$TEMP_DIR"
+fi
+
+log "正在安装 subconverter 到 /usr/local/subconverter ..."
 mkdir -p /usr/local/subconverter
-tar -xzf "${TEMP_DIR}/${DOWNLOAD_FILENAME}" -C /tmp/subconverter_install.XXXXXX 2>/dev/null || tar -xzf "${TEMP_DIR}/${DOWNLOAD_FILENAME}" -C "$TEMP_DIR"
 
 if [[ -d "${TEMP_DIR}/subconverter" ]]; then
   cp -rf "${TEMP_DIR}/subconverter/"* /usr/local/subconverter/

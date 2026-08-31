@@ -535,7 +535,8 @@ vps-utils/
 │   └── cloudflare-warp-socks5.service # Systemd 服务 Unit 模板
 ├── subconverter/                       # 订阅转换后端程序
 │   ├── README.md                      # subconverter 安装指南
-│   └── install.sh                     # 自动化安装与端口配置脚本
+│   ├── install.sh                     # 自动化安装与端口配置脚本
+│   └── pack.sh                        # subconverter 项目离线打包脚本
 ├── preferred-ip-manager/               # 优选 IP 管理与测速工具
 │   ├── README.md                      # preferred-ip-manager 详细指南
 │   ├── install.sh                     # 自动安装与 Systemd 每日定时测速服务脚本

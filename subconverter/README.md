@@ -66,3 +66,21 @@ sudo bash install.sh -p 15051
 ## 配置文件路径
 
 - **配置文件路径**：`/usr/local/subconverter/pref.ini`
+
+---
+
+## 📦 项目离线打包 (`pack.sh`)
+
+项目提供了专用的自动化打包脚本 [`pack.sh`](./pack.sh)，可将 subconverter 二进制核心与规则集、配置模板等打包为标准压缩包，生成的归档文件可供 [`install.sh`](./install.sh) 本地直接离线安装使用：
+
+```bash
+# 自动检测当前系统架构并打包
+./pack.sh
+
+# 或指定目标架构打包 (支持 linux64, aarch64, armv7, linux32)
+./pack.sh --arch linux64
+```
+
+- **生成产物**：`subconverter/subconverter_${ARCH_NAME}.tar.gz`（及软链 `subconverter.tar.gz`）；
+- **离线支持**：打包产物生成后，执行 `sudo ./install.sh` 时会自动优先读取本地离线压缩包，无需连接外部网络即可完成部署；
+- **Git 忽略**：所有生成的 `.tar.gz` 压缩包已配置在 [`.gitignore`](./.gitignore) 中自动忽略，不会污染代码仓库。

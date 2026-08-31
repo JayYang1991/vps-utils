@@ -1,0 +1,7 @@
+# subconverter packaging outputs & local binaries
+*.tar.gz
+*.zip
+subconverter
+bin/
+build/
+pref.ini
