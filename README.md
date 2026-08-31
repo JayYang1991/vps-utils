@@ -23,7 +23,90 @@ sudo bash install.sh
 | :--- | :--- | :--- | :--- |
 | **目标 VPS (Target VPS)** | `sing-box` + `cloudflared-tunnel` + `subconverter` + `singbox-sub-converter` | `sudo ./install.sh -r target` | `sudo ./install.sh -r target -t full`<br>*(含 `vpngate` 纯净住宅代理)* |
 | **中转 VPS (Relay VPS)** | `sing-box` + `clash-singbox-sub-manager` + `cloudflare-access-tcp` | `sudo ./install.sh -r relay` | `sudo ./install.sh -r relay` |
-| **Client 端 (Client / 本地网关)** | `cloudflare-access-tcp` + `cloudflare-zero-trust` (WARP SOCKS5) | `sudo ./install.sh -r client` | `sudo ./install.sh -r client` |
+
+### 🔑 预设环境变量参考 (可选 / 自动化静默安装前设置)
+
+在执行 `sudo -E bash install.sh` 或通过 CI/CD / 脚本自动化部署前，可根据部署角色先在终端 `export` 对应环境变量。脚本在执行时会 **优先继承并自动填充** 这些变量，无需反复手动输入：
+
+#### 1. 目标 VPS 模式环境变量 (`--role target`)
+```bash
+# 【必填】Cloudflare Tunnel 隧道凭据 (在 Cloudflare Zero Trust 控制台 Networks -> Tunnels 获取)
+export TUNNEL_TOKEN="eyJhIjoi..."
+
+# 【可选】sing-box Reality 伪装域名与网络参数 (留空则使用内置默认值或自动生成)
+export SINGBOX_DOMAIN="dl.google.com"         # Reality SNI 伪装域名 (默认: dl.google.com)
+export SINGBOX_SOCKS_PORT="10086"             # SOCKS5 入站监听端口 (默认: 10086)
+export SINGBOX_SOCKS_USER="my_user"           # SOCKS5 认证账号 (默认: 自动随机生成)
+export SINGBOX_SOCKS_PASS="my_password"       # SOCKS5 认证密码 (默认: 自动随机生成)
+export SINGBOX_UUID="auto"                    # VLESS 用户 UUID (默认: 自动生成)
+
+# 【可选】自适应订阅转换服务配置
+export SERVER_IP="1.2.3.4"                    # 当前 VPS 公网 IP (用于节点订阅链接生成，默认自动获取)
+export SUB_TOKEN="my_custom_token"            # 订阅链接鉴权 Token (默认: 自动生成专属 UUID)
+
+# 【选装: --type full 纯净住宅代理】
+export VPNGATE_COUNTRY="JP"                   # 住宅代理国家筛选代码 (默认: JP)
+export SINGBOX_SUB_URL="https://..."          # VPNGate 节点上游前置代理订阅链接 (可选)
+```
+
+#### 2. 中转 VPS 模式环境变量 (`--role relay`)
+```bash
+# 【必填】Cloudflare Access Service Token 凭据 (用于穿透鉴权访问目标端/私有影视服务)
+export CF_SERVICE_TOKEN_ID="xxx.access"       # Access Service Token Client ID
+export CF_SERVICE_TOKEN_SECRET="yyy"          # Access Service Token Client Secret
+export DOMAINS="movies.domain.com,movies1.domain.com" # 转发目标域名列表 (逗号分隔)
+export PORTS="5000,5001"                      # 本地映射监听端口列表 (默认: 5000,5001)
+
+# 【可选】中转 Clash 订阅管理器配置
+export UPSTREAM_SUB_URL="https://sub.domain.com/sub?token=..." # 上游 Clash 订阅链接
+export UPSTREAM_PROXY="socks5h://127.0.0.1:2080"               # 拉取上游订阅的前置代理 (默认: 本地住宅代理)
+export ADMIN_USERNAME="admin"                 # 中转 Web 面板登录用户名 (默认: admin)
+export ADMIN_PASSWORD="my_password"           # 中转 Web 面板登录密码 (默认: admin1234)
+```
+
+#### 3. Client 端模式环境变量 (`--role client`)
+```bash
+# 【必填】Cloudflare Access Service Token 凭据 (用于本地 5000/5001 端口直通目标私有服务)
+export CF_SERVICE_TOKEN_ID="xxx.access"       # Access Service Token Client ID
+export CF_SERVICE_TOKEN_SECRET="yyy"          # Access Service Token Client Secret
+export DOMAINS="movies.domain.com,movies1.domain.com" # 转发目标域名列表 (逗号分隔)
+export PORTS="5000,5001"                      # 本地映射端口列表 (默认: 5000,5001)
+
+# 【可选】Cloudflare Zero Trust WARP 客户端配置
+export WARP_TEAM_NAME="myteam"                # Cloudflare Zero Trust 团队组织名 (可选)
+export SOCKS_PORT="1080"                      # WARP Docker SOCKS5 本地代理端口 (默认: 1080)
+
+# 【选装: sing-box 客户端模式】
+export SUB_URL="http://<目标VPS_IP>:8000/sub?token=..." # 客户端订阅链接
+```
+
+#### 4. 优选测速与通知推送环境变量 (`preferred-ip-manager`)
+```bash
+# Telegram 资源抓取凭据 (在 https://my.telegram.org 获取)
+export TG_API_ID="1234567"                    # Telegram API ID
+export TG_API_HASH="0123456789abcdef..."      # Telegram API HASH
+export TG_SESSION_PATH="/var/lib/preferred-ip-manager/tg_session" # TG 登录 Session 文件路径
+
+# Cloudflare DNS / 优选 IP 自动更新凭证
+export CF_API_TOKEN="xxx"                     # Cloudflare API Token (需具备 Zone:DNS:Edit 权限)
+export CF_ZONE_ID="yyy"                       # Cloudflare 托管区域 Zone ID
+export CF_DOMAIN="proxy.domain.com"           # 自动更新 A/AAAA 解析记录的域名
+
+# 测速前置代理
+export PROXY="socks5h://127.0.0.1:2080"       # 抓取 Telegram 消息与测速时走的前置代理
+```
+
+#### 💡 配合环境变量一键静默部署示例
+```bash
+# 目标 VPS 带环境变量一键静默安装 (推荐使用 sudo -E 继承当前用户环境)
+export TUNNEL_TOKEN="eyJhIjoi..."
+sudo -E bash install.sh --role target -y
+
+# Client 端带环境变量一键静默安装
+export CF_SERVICE_TOKEN_ID="xxx.access"
+export CF_SERVICE_TOKEN_SECRET="yyy"
+sudo -E bash install.sh --role client -y
+```
 
 ### 🛠️ 常用全局运维管理命令
 
