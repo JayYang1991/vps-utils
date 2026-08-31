@@ -293,15 +293,58 @@ get_component_status() {
 # ===================== 单组件安装函数 =====================
 
 install_component_singbox() {
-  log_step "正在安装 sing-box 服务端 (VLESS Reality / gRPC / SOCKS5 / 多协议入站)..."
-  local installer="${PROJECT_ROOT}/fhs-install-singbox/install-singbox-server.sh"
-  if [[ ! -f "$installer" ]]; then
-    log_error "未找到脚本: $installer"
-    return 1
+  local target_mode="${1:-$PACKAGE_TYPE}"
+  if [[ "$ROLE" == "client" ]]; then
+    target_mode="client"
   fi
-  chmod +x "$installer"
-  bash "$installer"
-  log_success "sing-box 服务端安装与配置完成！"
+
+  if [[ "$target_mode" == "client" ]]; then
+    log_step "正在以 [Client 客户端模式] 安装与配置 sing-box..."
+    local installer="${PROJECT_ROOT}/fhs-install-singbox/install-singbox-server.sh"
+    local sub_updater="${PROJECT_ROOT}/fhs-install-singbox/update-singbox-sub.sh"
+
+    # 1. 确保 sing-box 二进制与系统服务已就绪
+    if ! command -v sing-box &>/dev/null && [[ ! -f "/usr/local/bin/sing-box" ]]; then
+      if [[ -f "$installer" ]]; then
+        chmod +x "$installer"
+        bash "$installer"
+      fi
+    fi
+
+    # 2. 检查/拉取客户端订阅
+    local sub_url="${INPUT_SUB_URL:-}"
+    if [[ -z "$sub_url" ]] && [[ "$ASSUME_YES" != "true" ]]; then
+      echo ""
+      echo -e "${YELLOW}提示: Client 模式需要传入订阅链接以自动配置客户端入站、出站及路由分流规则。${NC}"
+      read -r -p "请输入 sing-box 订阅链接 URL (如 http://<IP>:8000/sub?token=...): " user_sub
+      sub_url="${user_sub:-}"
+    fi
+
+    if [[ -n "$sub_url" && -f "$sub_updater" ]]; then
+      chmod +x "$sub_updater"
+      bash "$sub_updater" --client -u "$sub_url" -y
+      log_success "sing-box 客户端订阅已拉取并成功应用至 /etc/sing-box/config.json！"
+    else
+      log_info "未传入订阅链接，sing-box 核心已安装，后续可执行 'update-singbox-sub.sh --client -u <URL>' 随时同步订阅。"
+    fi
+  else
+    log_step "正在安装 sing-box 服务端 (VLESS Reality / gRPC / SOCKS5 / 多协议入站)..."
+    local installer="${PROJECT_ROOT}/fhs-install-singbox/install-singbox-server.sh"
+    if [[ ! -f "$installer" ]]; then
+      log_error "未找到脚本: $installer"
+      return 1
+    fi
+    chmod +x "$installer"
+
+    local cmd=(bash "$installer")
+    [[ -n "$INPUT_DOMAIN" ]] && cmd+=("--domain" "$INPUT_DOMAIN")
+    [[ -n "$INPUT_PORT" ]] && cmd+=("--socks-port" "$INPUT_PORT")
+    [[ -n "$INPUT_USERNAME" ]] && cmd+=("--socks-user" "$INPUT_USERNAME")
+    [[ -n "$INPUT_PASSWORD" ]] && cmd+=("--socks-pass" "$INPUT_PASSWORD")
+
+    "${cmd[@]}"
+    log_success "sing-box 服务端安装与配置完成！"
+  fi
 }
 
 install_component_tunnel() {
@@ -1045,7 +1088,7 @@ show_custom_component_menu() {
   echo ""
   echo -e "${CYAN}----------------------------------------------------------------${NC}"
   echo -e "${BOLD}【单组件定制安装列表】${NC}"
-  echo -e "  1) sing-box 服务端 (VLESS Reality / gRPC / SOCKS5)"
+  echo -e "  1) sing-box 核心 (Server 服务端模式 / Client 客户端订阅模式)"
   echo -e "  2) Cloudflare Tunnel 隧道穿透与 VPS 出口 NAT 转发"
   echo -e "  3) subconverter 通用订阅转换后端 (端口 25500)"
   echo -e "  4) singbox-sub-converter 自适应订阅前端与 Web 后台 (端口 8000)"
@@ -1059,7 +1102,18 @@ show_custom_component_menu() {
   read -r -p "请选择要安装的组件编号 [0-9]: " comp_choice
 
   case "$comp_choice" in
-    1) install_component_singbox ;;
+    1)
+      echo ""
+      echo -e "${BOLD}请选择 sing-box 部署模式:${NC}"
+      echo -e "  1) ${GREEN}Server 服务端模式${NC} (VLESS Reality / gRPC / SOCKS5 多协议入站)"
+      echo -e "  2) ${PURPLE}Client 客户端模式${NC} (通过订阅 URL 同步节点与路由分流规则)"
+      read -r -p "请输入选项 [1-2] (默认: 1): " sb_mode_choice
+      if [[ "$sb_mode_choice" == "2" ]]; then
+        install_component_singbox "client"
+      else
+        install_component_singbox "server"
+      fi
+      ;;
     2) install_component_tunnel ;;
     3) install_component_subconverter ;;
     4) install_component_singbox_sub_converter ;;
