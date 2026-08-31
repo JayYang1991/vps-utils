@@ -97,9 +97,6 @@ curl_cmd() {
   curl -L -q --retry 5 --retry-delay 10 --retry-max-time 60 "$@"
 }
 
-escape_sed_replacement() {
-  echo "$1" | sed -e "s/[&|/]/\\&/g"
-}
 
 cleanup_temp() {
   if [[ -n "$TEMPLATE_DIR" ]] && [[ -d "$TEMPLATE_DIR" ]]; then
@@ -237,7 +234,59 @@ write_config() {
     exit 1
   }
 
-  if ! sed     -e "s|{SINGBOX_LOG_LEVEL}|$(escape_sed_replacement "${LOG_LEVEL}")|g"     -e "s|"{SINGBOX_SOCKS_PORT}"|${SOCKS_PORT}|g"     -e "s|{SINGBOX_SOCKS_PORT}|${SOCKS_PORT}|g"     -e "s|{SINGBOX_SOCKS_USER}|$(escape_sed_replacement "${SOCKS_USER}")|g"     -e "s|{SINGBOX_SOCKS_PASS}|$(escape_sed_replacement "${SOCKS_PASS}")|g"     -e "s|{SINGBOX_UUID}|$(escape_sed_replacement "${UUID}")|g"     -e "s|{SINGBOX_DOMAIN}|$(escape_sed_replacement "${DOMAIN}")|g"     -e "s|{SINGBOX_PRIVATE_KEY}|$(escape_sed_replacement "${PRIVATE_KEY}")|g"     -e "s|{SINGBOX_SHORT_ID}|$(escape_sed_replacement "${SHORT_ID}")|g"     -e "s|{SINGBOX_WS_PATH}|$(escape_sed_replacement "${WS_PATH}")|g"     -e "s|{SINGBOX_WS_HOST}|$(escape_sed_replacement "${WS_HOST}")|g"     -e "s|{SOCKS_OUT_SERVER}|$(escape_sed_replacement "${SOCKS_OUT_SERVER}")|g"     -e "s|"{SOCKS_OUT_PORT}"|${SOCKS_OUT_PORT}|g"     -e "s|{SOCKS_OUT_PORT}|${SOCKS_OUT_PORT}|g"     "$server_template" > "$server_config_path"; then
+  if ! python3 - "$server_template" "$server_config_path" \
+      "$LOG_LEVEL" "$SOCKS_PORT" "$SOCKS_USER" "$SOCKS_PASS" \
+      "$UUID" "$DOMAIN" "$PRIVATE_KEY" "$SHORT_ID" \
+      "$WS_PATH" "$WS_HOST" "$SOCKS_OUT_SERVER" "$SOCKS_OUT_PORT" << 'EOF'
+import sys
+import json
+
+template_file = sys.argv[1]
+output_file = sys.argv[2]
+log_level = sys.argv[3]
+socks_port = sys.argv[4]
+socks_user = sys.argv[5]
+socks_pass = sys.argv[6]
+uuid_val = sys.argv[7]
+domain = sys.argv[8]
+private_key = sys.argv[9]
+short_id = sys.argv[10]
+ws_path = sys.argv[11]
+ws_host = sys.argv[12]
+socks_out_srv = sys.argv[13]
+socks_out_prt = sys.argv[14]
+
+with open(template_file, "r", encoding="utf-8") as f:
+    content = f.read()
+
+replacements = {
+    "{SINGBOX_LOG_LEVEL}": log_level,
+    "{SINGBOX_SOCKS_PORT}": str(socks_port),
+    "{SINGBOX_SOCKS_USER}": socks_user,
+    "{SINGBOX_SOCKS_PASS}": socks_pass,
+    "{SINGBOX_UUID}": uuid_val,
+    "{SINGBOX_DOMAIN}": domain,
+    "{SINGBOX_PRIVATE_KEY}": private_key,
+    "{SINGBOX_SHORT_ID}": short_id,
+    "{SINGBOX_WS_PATH}": ws_path,
+    "{SINGBOX_WS_HOST}": ws_host,
+    "{SOCKS_OUT_SERVER}": socks_out_srv,
+    "{SOCKS_OUT_PORT}": str(socks_out_prt)
+}
+
+for k, v in replacements.items():
+    content = content.replace(k, v)
+
+try:
+    data = json.loads(content)
+except Exception as e:
+    sys.stderr.write(f"JSON 解析错误: {e}\n")
+    sys.exit(1)
+
+with open(output_file, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+EOF
+  then
     echo "${red}error: 写入配置文件失败${reset}"
     exit 1
   fi
