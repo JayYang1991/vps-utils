@@ -53,7 +53,7 @@ SERVICE_ACTION=""
 ASSUME_YES=false
 
 # 组件通用配置入参 (优先继承系统预设的环境变量)
-INPUT_TOKEN="${TUNNEL_TOKEN:-${CF_TUNNEL_TOKEN:-${TOKEN:-}}}"
+INPUT_TOKEN="${TUNNEL_TOKEN:-${CF_TUNNEL_TOKEN:-${TOKEN:-${WARP_TEAM_NAME:-${CF_TEAM_NAME:-${TEAM_NAME:-${TEAM:-}}}}}}}"
 INPUT_SUB_URL="${SUB_URL:-${SINGBOX_SUB_URL:-${UPSTREAM_SUB_URL:-}}}"
 INPUT_SERVICE_TOKEN_ID="${CF_SERVICE_TOKEN_ID:-${CF_ACCESS_CLIENT_ID:-${SERVICE_TOKEN_ID:-}}}"
 INPUT_SERVICE_TOKEN_SECRET="${CF_SERVICE_TOKEN_SECRET:-${CF_ACCESS_CLIENT_SECRET:-${SERVICE_TOKEN_SECRET:-}}}"
@@ -543,7 +543,15 @@ install_component_cf_warp() {
       log_error "未找到脚本: $installer"
       return 1
     fi
-    chmod +x "$installer"
+    if [[ -z "$INPUT_TOKEN" ]] && [[ "$ASSUME_YES" != "true" ]]; then
+      echo ""
+      echo -e "${YELLOW}提示: Cloudflare Zero Trust WARP 需要配置 Team 组织名称与 Service Token 进行设备注册与策略授权。${NC}"
+      read -r -p "请输入 Cloudflare Zero Trust Team 组织名称 (例如 myteam): " INPUT_TOKEN
+    fi
+    if [[ -z "$INPUT_SERVICE_TOKEN_ID" ]] && [[ "$ASSUME_YES" != "true" ]]; then
+      read -r -p "请输入 Cloudflare Access Service Token Client ID: " INPUT_SERVICE_TOKEN_ID
+      read -r -p "请输入 Cloudflare Access Service Token Client Secret: " INPUT_SERVICE_TOKEN_SECRET
+    fi
 
     local cmd=(bash "$installer" --service)
     if [[ -n "$INPUT_TOKEN" ]]; then
@@ -666,6 +674,21 @@ deploy_role_client() {
   echo -e "  1. ${GREEN}cloudflare-access-tcp${NC} (Cloudflare Access TCP 转发与自动优选 IP 容器, 端口 5000/5001)"
   echo -e "  2. ${GREEN}cloudflare-zero-trust${NC} (Docker WARP SOCKS5 代理客户端 + 策略路由隔离, 端口 1080)"
   echo ""
+
+  # 检查并提示 Client 模式必须配置的 Service Token 与 Team 组织名
+  if [[ -z "$INPUT_SERVICE_TOKEN_ID" || -z "$INPUT_SERVICE_TOKEN_SECRET" || -z "$INPUT_TOKEN" ]] && [[ "$ASSUME_YES" != "true" ]]; then
+    echo -e "${YELLOW}【必填凭据设置】Client 端运行需连接 Cloudflare Zero Trust，请提供以下凭据:${NC}"
+    if [[ -z "$INPUT_SERVICE_TOKEN_ID" ]]; then
+      read -r -p "请输入 Cloudflare Access Service Token Client ID: " INPUT_SERVICE_TOKEN_ID
+    fi
+    if [[ -z "$INPUT_SERVICE_TOKEN_SECRET" ]]; then
+      read -r -p "请输入 Cloudflare Access Service Token Client Secret: " INPUT_SERVICE_TOKEN_SECRET
+    fi
+    if [[ -z "$INPUT_TOKEN" ]]; then
+      read -r -p "请输入 Cloudflare Zero Trust Team 组织名称 (例如 myteam): " INPUT_TOKEN
+    fi
+    echo ""
+  fi
 
   if [[ "$ASSUME_YES" != "true" ]]; then
     read -r -p "确认开始执行部署? [Y/n] " confirm

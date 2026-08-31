@@ -68,16 +68,14 @@ export ADMIN_PASSWORD="my_password"           # 中转 Web 面板登录密码 (�
 
 #### 3. Client 端模式环境变量 (`--role client`)
 ```bash
-# 【必填】Cloudflare Access Service Token 凭据 (用于本地 5000/5001 端口直通目标私有服务)
-export CF_SERVICE_TOKEN_ID="xxx.access"       # Access Service Token Client ID
-export CF_SERVICE_TOKEN_SECRET="yyy"          # Access Service Token Client Secret
+# 【必填项】Cloudflare Access Service Token 凭据与 Zero Trust Team 组织名称
+export CF_SERVICE_TOKEN_ID="xxx.access"       # Access Service Token Client ID (必填)
+export CF_SERVICE_TOKEN_SECRET="yyy"          # Access Service Token Client Secret (必填)
+export WARP_TEAM_NAME="myteam"                # Cloudflare Zero Trust Team 组织名称 (必填)
 
-# 【可选】Access TCP 转发目标域名与端口 (留空则使用内置默认: movies.19910417.xyz -> 5000, movies1.19910417.xyz -> 5001)
+# 【可选项】Access TCP 转发目标域名与端口 (留空则使用内置默认: movies.19910417.xyz -> 5000, movies1.19910417.xyz -> 5001)
 export DOMAINS="movies.domain.com,movies1.domain.com" # 自定义转发目标域名列表 (可选，逗号分隔)
 export PORTS="5000,5001"                      # 自定义本地映射端口列表 (可选，逗号分隔)
-
-# 【可选】Cloudflare Zero Trust WARP 客户端配置
-export WARP_TEAM_NAME="myteam"                # Cloudflare Zero Trust 团队组织名 (可选)
 export SOCKS_PORT="1080"                      # WARP Docker SOCKS5 本地代理端口 (默认: 1080)
 
 # 【选装: sing-box 客户端模式】
@@ -106,9 +104,10 @@ export PROXY="socks5h://127.0.0.1:2080"       # 抓取 Telegram 消息与测速�
 export TUNNEL_TOKEN="eyJhIjoi..."
 sudo -E bash install.sh --role target -y
 
-# Client 端带环境变量一键静默安装
+# Client 端带环境变量一键静默安装 (必填 Service Token 与 Team 组织名)
 export CF_SERVICE_TOKEN_ID="xxx.access"
 export CF_SERVICE_TOKEN_SECRET="yyy"
+export WARP_TEAM_NAME="myteam"
 sudo -E bash install.sh --role client -y
 ```
 
