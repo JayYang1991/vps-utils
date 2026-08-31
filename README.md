@@ -54,8 +54,10 @@ export SINGBOX_SUB_URL="https://..."          # VPNGate 节点上游前置代理
 # 【必填】Cloudflare Access Service Token 凭据 (用于穿透鉴权访问目标端/私有影视服务)
 export CF_SERVICE_TOKEN_ID="xxx.access"       # Access Service Token Client ID
 export CF_SERVICE_TOKEN_SECRET="yyy"          # Access Service Token Client Secret
-export DOMAINS="movies.domain.com,movies1.domain.com" # 转发目标域名列表 (逗号分隔)
-export PORTS="5000,5001"                      # 本地映射监听端口列表 (默认: 5000,5001)
+
+# 【可选】Access TCP 转发目标域名与端口 (留空则使用内置默认: movies.19910417.xyz -> 5000, movies1.19910417.xyz -> 5001)
+export DOMAINS="movies.domain.com,movies1.domain.com" # 自定义转发目标域名列表 (可选，逗号分隔)
+export PORTS="5000,5001"                      # 自定义本地映射监听端口列表 (可选，逗号分隔)
 
 # 【可选】中转 Clash 订阅管理器配置
 export UPSTREAM_SUB_URL="https://sub.domain.com/sub?token=..." # 上游 Clash 订阅链接
@@ -69,8 +71,10 @@ export ADMIN_PASSWORD="my_password"           # 中转 Web 面板登录密码 (�
 # 【必填】Cloudflare Access Service Token 凭据 (用于本地 5000/5001 端口直通目标私有服务)
 export CF_SERVICE_TOKEN_ID="xxx.access"       # Access Service Token Client ID
 export CF_SERVICE_TOKEN_SECRET="yyy"          # Access Service Token Client Secret
-export DOMAINS="movies.domain.com,movies1.domain.com" # 转发目标域名列表 (逗号分隔)
-export PORTS="5000,5001"                      # 本地映射端口列表 (默认: 5000,5001)
+
+# 【可选】Access TCP 转发目标域名与端口 (留空则使用内置默认: movies.19910417.xyz -> 5000, movies1.19910417.xyz -> 5001)
+export DOMAINS="movies.domain.com,movies1.domain.com" # 自定义转发目标域名列表 (可选，逗号分隔)
+export PORTS="5000,5001"                      # 自定义本地映射端口列表 (可选，逗号分隔)
 
 # 【可选】Cloudflare Zero Trust WARP 客户端配置
 export WARP_TEAM_NAME="myteam"                # Cloudflare Zero Trust 团队组织名 (可选)
