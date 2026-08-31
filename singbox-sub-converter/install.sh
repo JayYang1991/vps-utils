@@ -152,6 +152,20 @@ else
 fi
 
 download_and_extract_package() {
+  LOCAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+  mkdir -p "${TARGET_DIR}/data"
+
+  if [ -n "$LOCAL_SCRIPT_DIR" ] && [ -f "${LOCAL_SCRIPT_DIR}/singbox-sub-converter.tar.gz" ]; then
+    echo "检测到本地安装包: ${LOCAL_SCRIPT_DIR}/singbox-sub-converter.tar.gz，直接解压..."
+    tar -xzf "${LOCAL_SCRIPT_DIR}/singbox-sub-converter.tar.gz" -C "${TARGET_DIR}"
+    return 0
+  elif [ -n "$LOCAL_SCRIPT_DIR" ] && [ -d "${LOCAL_SCRIPT_DIR}/app" ]; then
+    echo "检测到本地源码目录: ${LOCAL_SCRIPT_DIR}/app，直接同步源码..."
+    cp -rf "${LOCAL_SCRIPT_DIR}/app" "${TARGET_DIR}/"
+    [ -f "${LOCAL_SCRIPT_DIR}/requirements.txt" ] && cp -f "${LOCAL_SCRIPT_DIR}/requirements.txt" "${TARGET_DIR}/"
+    return 0
+  fi
+
   echo "正在从 GitHub Release 下载最新的 singbox-sub-converter.tar.gz ..."
   echo "下载地址: ${PACKAGE_URL}"
 
@@ -162,7 +176,6 @@ download_and_extract_package() {
   fi
 
   echo "正在解压安装包至 ${TARGET_DIR} ..."
-  mkdir -p "${TARGET_DIR}/data"
   tar -xzf "${TMP_ARCHIVE}" -C "${TARGET_DIR}"
   rm -f "${TMP_ARCHIVE}"
 }

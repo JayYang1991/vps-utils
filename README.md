@@ -2,6 +2,46 @@
 
 `vps-utils` 是一个面向 Linux VPS 运维、代理服务端部署（sing-box）、Cloudflare 边缘网络协同（Zero Trust / Tunnel / 优选 IP）、VPNGate 纯净住宅 IP 链式代理池、中转节点订阅自适应转换以及安全中转的全套工具箱与实用项目合集。
 
+
+---
+
+## ⚡ 一键综合安装与管理 (Quick Start)
+
+`vps-utils` 在根目录提供了统一的交互式与非交互式综合安装部署脚本 [`install.sh`](./install.sh)，支持按照 **目标 VPS**、**中转 VPS**、**Client 端** 三大角色一键完成全套组件的自动化安装、配置与全局生命周期管理：
+
+```bash
+# 方式 1：在 VPS 上通过 curl 极速拉取并启动交互式安装菜单
+bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/install.sh)
+
+# 方式 2：在克隆好的本地仓库目录下直接运行
+sudo bash install.sh
+```
+
+### 🚀 按角色一键静默 / 命令行安装命令
+
+| 部署角色 | 核心组件矩阵 | 一键标准安装命令 | 增强/全功能安装命令 |
+| :--- | :--- | :--- | :--- |
+| **目标 VPS (Target VPS)** | `sing-box` + `cloudflared-tunnel` + `subconverter` + `singbox-sub-converter` | `sudo ./install.sh -r target` | `sudo ./install.sh -r target -t full`<br>*(含 `vpngate` 纯净住宅代理)* |
+| **中转 VPS (Relay VPS)** | `sing-box` + `clash-singbox-sub-manager` + `cloudflare-access-tcp` | `sudo ./install.sh -r relay` | `sudo ./install.sh -r relay` |
+| **Client 端 (Client / 本地网关)** | `cloudflare-access-tcp` + `cloudflare-zero-trust` (WARP SOCKS5) | `sudo ./install.sh -r client` | `sudo ./install.sh -r client` |
+
+### 🛠️ 常用全局运维管理命令
+
+脚本安装完成后会自动注册系统全局命令 `vps-utils`（别名 `vps-manager`）：
+
+```bash
+# 查看所有已安装组件的运行状态与端口监听
+vps-utils status
+
+# 快捷管理服务 (start / stop / restart / logs)
+vps-utils restart all                    # 重启全部已部署组件
+vps-utils restart cf-access-tcp          # 重启指定组件
+vps-utils logs singbox-sub-converter     # 查看指定组件实时运行日志
+
+# 一键卸载组件或全部清理
+vps-utils -u all                         # 彻底卸载全部组件并清理环境
+```
+
 ---
 
 ## 🌐 整体系统与全链路架构
@@ -385,6 +425,7 @@ clash-singbox-sub-manager status
 ```text
 vps-utils/
 ├── README.md                           # 本统一说明文档 (系统架构、部署流程与工具矩阵)
+├── install.sh                          # 统一综合一键安装与运维管理入口 (支持目标VPS/中转VPS/Client端)
 ├── fhs-install-singbox/                # sing-box 服务端与 VPS 自动化运维脚本
 │   ├── README.md                      # fhs-install-singbox 详细指南
 │   ├── setup_vps_server.sh            # 远程 VPS 自动化部署脚本
