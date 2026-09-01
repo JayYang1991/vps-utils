@@ -55,10 +55,6 @@ while [ $# -gt 0 ]; do
       ACTION="uninstall"
       shift 1
       ;;
-    -y|--yes|--assume-yes)
-      ASSUME_YES=true
-      shift 1
-      ;;
     -t|--token)
       INPUT_SUB_TOKEN="$2"
       shift 2
@@ -152,8 +148,10 @@ elif [ -z "$PORT" ]; then
     PORT="8000"
 fi
 
-# 确认 SUB_TOKEN
-if [ -n "$EXISTING_TOKEN" ]; then
+# 确认 SUB_TOKEN (显式传入 > 现有 Token > 自动随机生成)
+if [ -n "$INPUT_SUB_TOKEN" ]; then
+    SUB_TOKEN="$INPUT_SUB_TOKEN"
+elif [ -n "$EXISTING_TOKEN" ]; then
     SUB_TOKEN="$EXISTING_TOKEN"
 else
     SUB_TOKEN=$(cat /proc/sys/kernel/random/uuid | tr -d '-')

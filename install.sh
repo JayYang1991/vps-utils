@@ -410,13 +410,11 @@ install_component_singbox_sub_converter() {
     read -r -p "请输入本服务器公网 IP 地址 (用于订阅节点生成, 默认: $PUBLIC_IPV4): " user_ip
     ip="${user_ip:-$PUBLIC_IPV4}"
   fi
+  ip="${ip:-$PUBLIC_IPV4}"
 
-  local cmd=(bash "$installer" -p "$port")
-  if [[ -n "$ip" ]]; then
-    cmd+=("-i" "$ip")
-  fi
-  if [[ "$ASSUME_YES" == "true" ]]; then
-    cmd+=("-y")
+  local cmd=(bash "$installer" -i "$ip" -p "$port")
+  if [[ -n "$INPUT_SUB_TOKEN" ]]; then
+    cmd+=("-t" "$INPUT_SUB_TOKEN")
   fi
 
   "${cmd[@]}"
