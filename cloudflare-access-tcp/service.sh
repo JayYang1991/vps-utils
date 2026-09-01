@@ -399,11 +399,18 @@ cmd_rebuild() {
 
 cmd_uninstall() {
   check_root
-  echo -e "${YELLOW}警告: 即将完全停止并卸载 ${SERVICE_NAME} 服务，清理容器与相关配置！${NC}"
-  read -r -p "确认卸载？[y/N]: " confirm
-  if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
-    log "已取消卸载。"
-    exit 0
+  local force=false
+  for arg in "$@"; do
+    [[ "$arg" == "-y" || "$arg" == "--yes" ]] && force=true
+  done
+
+  if [[ "$force" != "true" ]]; then
+    echo -e "${YELLOW}警告: 即将完全停止并卸载 ${SERVICE_NAME} 服务，清理容器与相关配置！${NC}"
+    read -r -p "确认卸载？[y/N]: " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+      log "已取消卸载。"
+      exit 0
+    fi
   fi
 
   log "正在停止并禁用 Systemd 服务..."
@@ -476,7 +483,7 @@ case "$ACTION" in
     cmd_rebuild
     ;;
   uninstall)
-    cmd_uninstall
+    cmd_uninstall "$@"
     ;;
   help|-h|--help)
     show_help

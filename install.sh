@@ -498,12 +498,12 @@ install_component_cf_access_tcp() {
   fi
   chmod +x "$installer"
 
-  local token_id="${INPUT_SERVICE_TOKEN_ID:-}"
-  local token_secret="${INPUT_SERVICE_TOKEN_SECRET:-}"
-  local domains="${INPUT_DOMAINS:-movies.19910417.xyz,movies1.19910417.xyz}"
-  local ports="${INPUT_PORTS:-5000,5001}"
+  local token_id="${INPUT_SERVICE_TOKEN_ID:-${SERVICE_TOKEN_ID:-}}"
+  local token_secret="${INPUT_SERVICE_TOKEN_SECRET:-${SERVICE_TOKEN_SECRET:-}}"
+  local domains="${INPUT_DOMAINS:-${DOMAINS:-movies.19910417.xyz,movies1.19910417.xyz}}"
+  local ports="${INPUT_PORTS:-${PORTS:-5000,5001}}"
 
-  if [[ -z "$token_id" ]] && [[ "$ASSUME_YES" != "true" ]]; then
+  if [[ -z "$token_id" || -z "$token_secret" ]] && [[ "$ASSUME_YES" != "true" ]]; then
     echo ""
     echo -e "${YELLOW}提示: Service Token 用于安全鉴权穿透 Cloudflare Access 保护的 TCP 服务。${NC}"
     read -r -p "请输入 Cloudflare Access Service Token Client ID: " token_id
@@ -512,6 +512,12 @@ install_component_cf_access_tcp() {
     domains="${user_domains:-$domains}"
     read -r -p "请输入本地映射端口列表 (英文逗号分隔, 默认: $ports): " user_ports
     ports="${user_ports:-$ports}"
+  fi
+
+  if [[ -z "$token_id" || -z "$token_secret" ]] && [[ "$ASSUME_YES" == "true" ]]; then
+    token_id="${token_id:-demo_access_client_id.access}"
+    token_secret="${token_secret:-demo_access_client_secret_1234567890abcdef}"
+    log_warn "未通过环境变量提供 Service Token，自动写入占位测试 Token (后续可在 /etc/cloudflare-access-tcp/access.env 修改)"
   fi
 
   local cmd=(bash "$installer" --domains "$domains" --ports "$ports")
@@ -890,7 +896,8 @@ uninstall_component() {
       log_warn "正在卸载 sing-box 服务端..."
       systemctl stop sing-box 2>/dev/null || true
       systemctl disable sing-box 2>/dev/null || true
-      rm -f /etc/systemd/system/sing-box.service /usr/local/bin/sing-box
+      rm -f /etc/systemd/system/sing-box.service /usr/local/bin/sing-box /usr/bin/sing-box
+      rm -rf /etc/sing-box /var/lib/sing-box
       systemctl daemon-reload
       log_success "sing-box 已卸载！"
       ;;
@@ -899,9 +906,13 @@ uninstall_component() {
       systemctl stop cloudflared 2>/dev/null || true
       systemctl disable cloudflared 2>/dev/null || true
       rm -f /etc/systemd/system/cloudflared.service /usr/local/bin/cloudflared
+      rm -rf /etc/cloudflared
       if [[ -f "${PROJECT_ROOT}/cloudflared-tunnel/setup-cloudflare-one.sh" ]]; then
         bash "${PROJECT_ROOT}/cloudflared-tunnel/setup-cloudflare-one.sh" --unset || true
       fi
+      systemctl stop cloudflare-one-nat.service 2>/dev/null || true
+      systemctl disable cloudflare-one-nat.service 2>/dev/null || true
+      rm -f /etc/systemd/system/cloudflare-one-nat.service /usr/local/bin/setup-cloudflare-one.sh
       systemctl daemon-reload
       log_success "Cloudflare Tunnel 已卸载！"
       ;;
@@ -954,9 +965,9 @@ uninstall_component() {
     cf-access-tcp)
       log_warn "正在卸载 cloudflare-access-tcp..."
       if command -v cloudflare-access-tcp &>/dev/null; then
-        cloudflare-access-tcp uninstall || true
+        cloudflare-access-tcp uninstall -y || true
       elif [[ -f "${PROJECT_ROOT}/cloudflare-access-tcp/service.sh" ]]; then
-        bash "${PROJECT_ROOT}/cloudflare-access-tcp/service.sh" uninstall || true
+        bash "${PROJECT_ROOT}/cloudflare-access-tcp/service.sh" uninstall -y || true
       else
         docker stop cloudflare-access-tcp 2>/dev/null || true
         docker rm -f cloudflare-access-tcp 2>/dev/null || true

@@ -159,6 +159,9 @@ install_files() {
     else
         info "正在初始化配置 (Port: ${PORT}, User: ${USERNAME}, Proxy: ${UPSTREAM_PROXY})..."
         python3 -c "
+import sys
+sys.path.insert(0, '${INSTALL_DIR}')
+sys.path.insert(0, '${SCRIPT_DIR}')
 from config import ConfigManager
 cm = ConfigManager('${INSTALL_DIR}/config.json')
 cm.set('server', 'port', int('${PORT}'), auto_save=False)
