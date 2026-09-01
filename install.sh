@@ -555,25 +555,36 @@ install_component_cf_warp() {
       log_error "未找到脚本: $installer"
       return 1
     fi
-    if [[ -z "$INPUT_TOKEN" ]] && [[ "$ASSUME_YES" != "true" ]]; then
+    local team="${INPUT_TOKEN:-${CF_WARP_TEAM:-${WARP_TEAM:-}}}"
+    local token_id="${INPUT_SERVICE_TOKEN_ID:-${SERVICE_TOKEN_ID:-}}"
+    local token_secret="${INPUT_SERVICE_TOKEN_SECRET:-${SERVICE_TOKEN_SECRET:-}}"
+
+    if [[ -z "$team" ]] && [[ "$ASSUME_YES" != "true" ]]; then
       echo ""
       echo -e "${YELLOW}提示: Cloudflare Zero Trust WARP 需要配置 Team 组织名称与 Service Token 进行设备注册与策略授权。${NC}"
-      read -r -p "请输入 Cloudflare Zero Trust Team 组织名称 (例如 myteam): " INPUT_TOKEN
+      read -r -p "请输入 Cloudflare Zero Trust Team 组织名称 (例如 myteam): " team
     fi
-    if [[ -z "$INPUT_SERVICE_TOKEN_ID" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-      read -r -p "请输入 Cloudflare Access Service Token Client ID: " INPUT_SERVICE_TOKEN_ID
-      read -r -p "请输入 Cloudflare Access Service Token Client Secret: " INPUT_SERVICE_TOKEN_SECRET
+    if [[ -z "$token_id" ]] && [[ "$ASSUME_YES" != "true" ]]; then
+      read -r -p "请输入 Cloudflare Access Service Token Client ID: " token_id
+      read -r -p "请输入 Cloudflare Access Service Token Client Secret: " token_secret
+    fi
+
+    if [[ -z "$team" ]] && [[ "$ASSUME_YES" == "true" ]]; then
+      team="demo-team"
+      token_id="${token_id:-demo_access_client_id.access}"
+      token_secret="${token_secret:-demo_access_client_secret_1234567890abcdef}"
+      log_warn "未通过环境变量提供 Team / Service Token，使用测试占位参数 (后续可在 /etc/cloudflare-warp/warp.env 修改)"
     fi
 
     local cmd=(bash "$installer" --service)
-    if [[ -n "$INPUT_TOKEN" ]]; then
-      cmd+=("--team" "$INPUT_TOKEN")
+    if [[ -n "$team" ]]; then
+      cmd+=("--team" "$team")
     fi
-    if [[ -n "$INPUT_SERVICE_TOKEN_ID" ]]; then
-      cmd+=("--service-token-id" "$INPUT_SERVICE_TOKEN_ID")
+    if [[ -n "$token_id" ]]; then
+      cmd+=("--service-token-id" "$token_id")
     fi
-    if [[ -n "$INPUT_SERVICE_TOKEN_SECRET" ]]; then
-      cmd+=("--service-token-secret" "$INPUT_SERVICE_TOKEN_SECRET")
+    if [[ -n "$token_secret" ]]; then
+      cmd+=("--service-token-secret" "$token_secret")
     fi
 
     "${cmd[@]}"
