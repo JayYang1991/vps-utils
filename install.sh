@@ -910,9 +910,11 @@ uninstall_component() {
       log_warn "正在卸载 sing-box 服务端..."
       systemctl stop sing-box 2>/dev/null || true
       systemctl disable sing-box 2>/dev/null || true
-      rm -f /etc/systemd/system/sing-box.service /usr/local/bin/sing-box /usr/bin/sing-box
+      dpkg -P sing-box 2>/dev/null || true
+      rm -f /etc/systemd/system/sing-box* /usr/lib/systemd/system/sing-box* /lib/systemd/system/sing-box* /usr/local/bin/sing-box /usr/bin/sing-box
       rm -rf /etc/sing-box /var/lib/sing-box
       systemctl daemon-reload
+      systemctl reset-failed 2>/dev/null || true
       log_success "sing-box 已卸载！"
       ;;
     tunnel)
@@ -1014,11 +1016,20 @@ uninstall_component() {
       log_success "preferred-ip-manager 已卸载！"
       ;;
     all)
-      log_warn "即将卸载所有已部署的 vps-utils 组件..."
+      log_warn "即将卸载所有已部署的 vps-utils 组件与系统文件..."
       for c in singbox tunnel subconverter singbox-sub-converter clash-sub-manager vpngate cf-access-tcp cf-warp preferred-ip; do
         uninstall_component "$c"
       done
-      log_success "所有组件已全部彻底卸载并清理完毕！"
+
+      log_warn "正在清理全局管理命令与目录..."
+      rm -f /usr/local/bin/vps-utils /usr/local/bin/vps-manager /usr/local/bin/vps /usr/local/bin/vpsutils 2>/dev/null || true
+      rm -rf /usr/local/share/vps-utils /tmp/vps-utils* 2>/dev/null || true
+
+      # 彻底重载与重置 systemd 失败状态
+      systemctl daemon-reload 2>/dev/null || true
+      systemctl reset-failed 2>/dev/null || true
+
+      log_success "所有组件、安装目录及 vps-utils 全局命令已全部彻底卸载并清理完毕！"
       ;;
     *)
       log_error "未知卸载组件: $comp"

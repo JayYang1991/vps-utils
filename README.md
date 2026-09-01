@@ -124,7 +124,9 @@ vps-utils restart cf-access-tcp          # 重启指定组件
 vps-utils logs singbox-sub-converter     # 查看指定组件实时运行日志
 
 # 一键卸载组件或全部清理
-vps-utils -u all                         # 彻底卸载全部组件并清理环境
+sudo bash uninstall.sh                   # 彻底卸载全部组件、安装文件与全局命令 (一键完全清理)
+vps-utils -u all                         # 通过全局命令彻底卸载全部组件并清理环境
+vps-utils -u <component>                 # 仅卸载指定的单个组件 (如: vps-utils -u singbox)
 ```
 
 ---
