@@ -607,7 +607,7 @@ install_component_preferred_ip() {
 
 # ===================== 角色方案一键部署 =====================
 
-# 1. 目标 VPS (Target VPS): sing-box + Tunnel/NAT + subconverter + singbox-sub-converter (+ 选装 vpngate)
+# 1. 目标 VPS (Target VPS): sing-box + Tunnel/NAT + subconverter + singbox-sub-converter + vpngate-singbox-openvpn
 deploy_role_target() {
   echo ""
   echo -e "${CYAN}================================================================${NC}"
@@ -618,9 +618,7 @@ deploy_role_target() {
   echo -e "  2. ${GREEN}Cloudflare Tunnel & NAT 转发${NC} (Tunnel 穿透 + 出口 NAT MASQUERADE 规则)"
   echo -e "  3. ${GREEN}subconverter${NC} (通用订阅转换后端, 端口 25500)"
   echo -e "  4. ${GREEN}singbox-sub-converter${NC} (自适应订阅前端与 Web 管理面板, 端口 8000)"
-  if [[ "$PACKAGE_TYPE" == "full" ]]; then
-    echo -e "  5. ${GREEN}vpngate-singbox-openvpn${NC} (纯净住宅 IP 链式代理, 端口 2080)"
-  fi
+  echo -e "  5. ${GREEN}vpngate-singbox-openvpn${NC} (纯净住宅 IP 链式代理, 端口 2080)"
   echo ""
 
   if [[ "$ASSUME_YES" != "true" ]]; then
@@ -636,10 +634,7 @@ deploy_role_target() {
   install_component_tunnel
   install_component_subconverter
   install_component_singbox_sub_converter
-
-  if [[ "$PACKAGE_TYPE" == "full" ]]; then
-    install_component_vpngate
-  fi
+  install_component_vpngate
 
   show_deployment_summary "target"
 }
@@ -728,6 +723,7 @@ show_deployment_summary() {
     echo -e "${BOLD}已就绪服务概览:${NC}"
     echo -e "  • 自适应订阅 Web 面板 : ${YELLOW}http://${PUBLIC_IPV4}:8000${NC} (默认账号: ${GREEN}jayyang${NC} / 密码: ${GREEN}admin1234${NC})"
     echo -e "  • subconverter 转换后端: ${YELLOW}http://${PUBLIC_IPV4}:25500${NC}"
+    echo -e "  • vpngate 住宅 IP 代理 : ${YELLOW}127.0.0.1:2080${NC} (SOCKS5, 管理命令: ${CYAN}vpngate-tunnel status${NC})"
     echo -e "  • sing-box 服务端入站  : VLESS Reality (${YELLOW}443${NC} / ${YELLOW}8443${NC}), SOCKS5 (${YELLOW}10086${NC}), gRPC (${YELLOW}8088${NC})"
     echo -e "  • Cloudflare Tunnel  : 请在 Zero Trust 后台配置公共域名映射 (sub, subapi, grpc)"
   elif [[ "$role" == "relay" ]]; then
@@ -1037,16 +1033,6 @@ show_main_menu() {
 
   case "$menu_choice" in
     1)
-      echo ""
-      echo -e "${BOLD}选择目标 VPS (Target VPS) 套件规格:${NC}"
-      echo -e "  1) ${GREEN}标准套件 (Standard)${NC}: sing-box + Tunnel/NAT + subconverter + singbox-sub-converter"
-      echo -e "  2) ${PURPLE}全功能套件 (Full)${NC}   : 标准套件 + vpngate 住宅IP链式代理 (端口 2080)"
-      read -r -p "请选择规格 [1-2] (默认: 1): " target_type_choice
-      if [[ "$target_type_choice" == "2" ]]; then
-        PACKAGE_TYPE="full"
-      else
-        PACKAGE_TYPE="standard"
-      fi
       deploy_role_target
       ;;
     2)
