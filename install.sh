@@ -53,7 +53,8 @@ SERVICE_ACTION=""
 ASSUME_YES=false
 
 # 组件通用配置入参 (优先继承系统预设的环境变量)
-INPUT_TOKEN="${TUNNEL_TOKEN:-${CF_TUNNEL_TOKEN:-${TOKEN:-${WARP_TEAM_NAME:-${CF_TEAM_NAME:-${TEAM_NAME:-${TEAM:-}}}}}}}"
+INPUT_TOKEN="${TUNNEL_TOKEN:-${CF_TUNNEL_TOKEN:-${WARP_TEAM:-${CF_WARP_TEAM:-${WARP_TEAM_NAME:-${CF_TEAM_NAME:-${TEAM_NAME:-${TEAM:-${TOKEN:-}}}}}}}}}"
+INPUT_SUB_TOKEN="${SUB_TOKEN:-}"
 INPUT_SUB_URL="${SUB_URL:-${SINGBOX_SUB_URL:-${UPSTREAM_SUB_URL:-}}}"
 INPUT_SERVICE_TOKEN_ID="${CF_SERVICE_TOKEN_ID:-${CF_ACCESS_CLIENT_ID:-${SERVICE_TOKEN_ID:-}}}"
 INPUT_SERVICE_TOKEN_SECRET="${CF_SERVICE_TOKEN_SECRET:-${CF_ACCESS_CLIENT_SECRET:-${SERVICE_TOKEN_SECRET:-}}}"
@@ -63,6 +64,7 @@ INPUT_SERVER_IP="${SERVER_IP:-${SERVER_HOST:-}}"
 INPUT_PROXY="${PROXY:-${PROXY_URL:-}}"
 INPUT_COUNTRY="${COUNTRY:-${VPNGATE_COUNTRY:-JP}}"
 INPUT_PORT="${PORT:-}"
+INPUT_SOCKS_PORT="${SINGBOX_SOCKS_PORT:-${SOCKS_PORT:-}}"
 INPUT_USERNAME="${USERNAME:-${ADMIN_USERNAME:-${SOCKS_USER:-}}}"
 INPUT_PASSWORD="${PASSWORD:-${ADMIN_PASSWORD:-${SOCKS_PASS:-}}}"
 INPUT_DOMAIN="${SINGBOX_DOMAIN:-${DOMAIN:-}}"
@@ -373,7 +375,7 @@ collect_and_validate_role_parameters() {
       prompt_param "INPUT_TOKEN" "Cloudflare Tunnel Token (用于隧道穿透)" "true" "" "TUNNEL_TOKEN" "-t <TOKEN>"
       prompt_param "INPUT_SERVER_IP" "服务器公网 IP (用于节点连接与订阅生成)" "false" "${PUBLIC_IPV4:-127.0.0.1}" "SERVER_IP" "-i <IP>"
       prompt_param "INPUT_DOMAIN" "sing-box Reality SNI 伪装域名" "false" "dl.google.com" "SINGBOX_DOMAIN" "--domain <DOMAIN>"
-      prompt_param "INPUT_PORT" "sing-box Reality 端口" "false" "443" "SINGBOX_PORT" "-p <PORT>"
+      prompt_param "INPUT_SOCKS_PORT" "sing-box SOCKS5 认证端口" "false" "10086" "SINGBOX_SOCKS_PORT" "--socks-port <PORT>"
       prompt_param "INPUT_USERNAME" "sing-box SOCKS5 认证用户名" "false" "${INPUT_USERNAME:-user_$(cat /proc/sys/kernel/random/uuid 2>/dev/null | cut -c1-6 || echo '886c12')}" "SOCKS_USER" "--user <USER>"
       prompt_param "INPUT_PASSWORD" "sing-box SOCKS5 认证密码" "false" "${INPUT_PASSWORD:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | cut -c1-16 || echo 'admin1234')}" "SOCKS_PASS" "--pass <PASS>"
       prompt_param "INPUT_SUB_TOKEN" "订阅安全访问 Token (Web / API 订阅)" "false" "${INPUT_SUB_TOKEN:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' || echo 'sub_token_uuid')}" "SUB_TOKEN" "--token <TOKEN>"
@@ -436,7 +438,7 @@ collect_and_validate_role_parameters() {
       printf " %-32s %-45s\n" "Cloudflare Tunnel Token" "${mask_token}"
       printf " %-32s %-45s\n" "服务器公网 IP (SERVER_IP)" "${INPUT_SERVER_IP}"
       printf " %-32s %-45s\n" "Reality SNI 伪装域名" "${INPUT_DOMAIN}"
-      printf " %-32s %-45s\n" "sing-box Reality 端口" "${INPUT_PORT}"
+      printf " %-32s %-45s\n" "sing-box SOCKS5 端口" "${INPUT_SOCKS_PORT:-10086}"
       printf " %-32s %-45s\n" "SOCKS5 认证账号" "${INPUT_USERNAME}"
       printf " %-32s %-45s\n" "SOCKS5 认证密码" "${INPUT_PASSWORD:0:4}****"
       printf " %-32s %-45s\n" "订阅访问 Token (SUB_TOKEN)" "${INPUT_SUB_TOKEN}"
@@ -513,7 +515,7 @@ install_component_singbox() {
 
     local cmd=(bash "$installer")
     [[ -n "$INPUT_DOMAIN" ]] && cmd+=("--domain" "$INPUT_DOMAIN")
-    [[ -n "$INPUT_PORT" ]] && cmd+=("--socks-port" "$INPUT_PORT")
+    [[ -n "$INPUT_SOCKS_PORT" ]] && cmd+=("--socks-port" "$INPUT_SOCKS_PORT")
     [[ -n "$INPUT_USERNAME" ]] && cmd+=("--socks-user" "$INPUT_USERNAME")
     [[ -n "$INPUT_PASSWORD" ]] && cmd+=("--socks-pass" "$INPUT_PASSWORD")
 
