@@ -55,6 +55,14 @@ while [ $# -gt 0 ]; do
       ACTION="uninstall"
       shift 1
       ;;
+    -y|--yes|--assume-yes)
+      ASSUME_YES=true
+      shift 1
+      ;;
+    -t|--token)
+      INPUT_SUB_TOKEN="$2"
+      shift 2
+      ;;
     -i|--ip|--server-ip)
       SERVER_IP="$2"
       shift 2
@@ -65,11 +73,11 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     *)
-      if [ -z "$SERVER_IP" ]; then
-        SERVER_IP="$1"
-      elif [ -z "$PORT" ]; then
+      if [[ "$1" =~ ^[0-9]+$ ]]; then
         PORT="$1"
         IS_EXPLICIT_PORT=true
+      elif [[ -z "$SERVER_IP" && "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        SERVER_IP="$1"
       fi
       shift 1
       ;;
@@ -219,6 +227,7 @@ Environment="SB_CONFIG_PATH=/etc/sing-box/config.json"
 Environment="PORT=$PORT"
 Environment="SUB_TOKEN=$SUB_TOKEN"
 Environment="SERVER_HOST=$SERVER_IP"
+Environment="SUBAPI_URL=${SUBAPI_URL:-http://127.0.0.1:25500}"
 
 [Install]
 WantedBy=multi-user.target
@@ -297,6 +306,7 @@ Environment="SB_CONFIG_PATH=/etc/sing-box/config.json"
 Environment="PORT=$PORT"
 Environment="SUB_TOKEN=$SUB_TOKEN"
 Environment="SERVER_HOST=$SERVER_IP"
+Environment="SUBAPI_URL=${SUBAPI_URL:-http://127.0.0.1:25500}"
 
 [Install]
 WantedBy=multi-user.target

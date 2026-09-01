@@ -402,16 +402,24 @@ install_component_singbox_sub_converter() {
   fi
   chmod +x "$installer"
 
-  local ip="${INPUT_SERVER_IP:-}"
+  local ip="${INPUT_SERVER_IP:-${PUBLIC_IPV4:-}}"
   local port="${INPUT_PORT:-8000}"
 
-  if [[ -z "$INPUT_SERVER_IP" ]] && [[ "$ASSUME_YES" != "true" ]]; then
+  if [[ -z "$ip" ]] && [[ "$ASSUME_YES" != "true" ]]; then
     echo ""
     read -r -p "请输入本服务器公网 IP 地址 (用于订阅节点生成, 默认: $PUBLIC_IPV4): " user_ip
     ip="${user_ip:-$PUBLIC_IPV4}"
   fi
 
-  bash "$installer" -i "$ip" -p "$port"
+  local cmd=(bash "$installer" -p "$port")
+  if [[ -n "$ip" ]]; then
+    cmd+=("-i" "$ip")
+  fi
+  if [[ "$ASSUME_YES" == "true" ]]; then
+    cmd+=("-y")
+  fi
+
+  "${cmd[@]}"
   log_success "singbox-sub-converter 自适应订阅服务安装完成！"
 }
 

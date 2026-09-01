@@ -118,16 +118,24 @@ esac
 
 DOWNLOAD_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH_NAME}"
 
-log "正在从 Cloudflare 官方 GitHub 下载最新版 cloudflared (架构: ${ARCH_NAME})..."
-log "下载地址: ${DOWNLOAD_URL}"
+if [[ -f "/usr/local/bin/cloudflared" ]] && /usr/local/bin/cloudflared --version &>/dev/null; then
+  log "检测到已存在 cloudflared 二进制: $(/usr/local/bin/cloudflared --version | head -n1)"
+else
+  log "正在从 Cloudflare 官方 GitHub 下载最新版 cloudflared (架构: ${ARCH_NAME})..."
+  log "下载地址: ${DOWNLOAD_URL}"
 
-mkdir -p /usr/local/bin
-if ! curl -4 -L -q --retry 5 --retry-delay 5 -o /usr/local/bin/cloudflared "${DOWNLOAD_URL}"; then
-  error "下载 cloudflared 失败，请检查网络连接。"
-  exit 1
+  TMP_BIN=$(mktemp /tmp/cloudflared.XXXXXX)
+  if ! curl -4 -L -q --retry 5 --retry-delay 5 -o "${TMP_BIN}" "${DOWNLOAD_URL}"; then
+    error "下载 cloudflared 失败，请检查网络连接。"
+    rm -f "${TMP_BIN}" 2>/dev/null || true
+    exit 1
+  fi
+  chmod +x "${TMP_BIN}"
+  systemctl stop cloudflared 2>/dev/null || true
+  mkdir -p /usr/local/bin
+  install -m 755 "${TMP_BIN}" /usr/local/bin/cloudflared
+  rm -f "${TMP_BIN}" 2>/dev/null || true
 fi
-
-chmod +x /usr/local/bin/cloudflared
 
 log "验证 cloudflared 可执行文件..."
 /usr/local/bin/cloudflared --version

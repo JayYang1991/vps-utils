@@ -457,8 +457,8 @@ def fetch_subconfigs() -> list:
         
     return cached_subconfigs_data
 
-def convert_via_subapi(sub_url: str, target: str, config_url: str = "", max_retries: int = 5) -> str:
-    """Use https://subapi.19910417.xyz/ online conversion API with 5 retries and progressive timeout (+10s per attempt)."""
+def convert_via_subapi(sub_url: str, target: str, config_url: str = "", max_retries: int = 3) -> str:
+    """Convert subscription via subconverter API (preferring local http://127.0.0.1:25500 with fallback to external subapi)."""
     if not sub_url:
         logger.warning(f"⚠️ Subapi 转换跳过: 传入的 sub_url 为空 (target={target})")
         return ""
@@ -473,42 +473,48 @@ def convert_via_subapi(sub_url: str, target: str, config_url: str = "", max_retr
     else:
         cfg = config_url
 
-    api_url = f"{SUBAPI_CONVERT_URL.format(target=subapi_target, url=encoded_url)}&config={urllib.parse.quote(cfg, safe='')}"
-    curl_cmd = f"curl -s -L -A \"Mozilla/5.0\" \"{api_url}\""
-    
-    for attempt in range(1, max_retries + 1):
-        current_timeout = attempt * 10  # 10s, 20s, 30s, 40s, 50s
-        req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
-        try:
-            with urllib.request.urlopen(req, timeout=current_timeout) as resp:
-                status_code = resp.status
-                content = resp.read().decode("utf-8")
-                is_valid_content = any(k in content for k in ["proxies", "outbounds", "outbound", "port", "inbounds"])
-                if status_code == 200 and len(content) > 100 and is_valid_content:
-                    logger.info(f"✅ Subapi 订阅转换成功! [目标: {target}, 策略规则: {cfg}, 响应大小: {len(content)} 字节, 第 {attempt} 次尝试]")
-                    return content
-                else:
-                    logger.error(f"❌ Subapi 转换响应异常 [HTTP {status_code}] [目标: {target}, 订阅源: {sub_url}, 规则: {cfg}]: 返回内容缺少节点定义!\n测试 curl 命令: {curl_cmd}")
-                    break
-        except urllib.error.HTTPError as e:
-            err_body = ""
+    subapi_endpoints = []
+    env_subapi = os.getenv("SUBAPI_URL", "").strip()
+    if env_subapi:
+        subapi_endpoints.append(env_subapi)
+    subapi_endpoints.extend(["http://127.0.0.1:25500", "https://subapi.19910417.xyz"])
+    endpoints = list(dict.fromkeys(subapi_endpoints))
+
+    for base_subapi in endpoints:
+        api_url = f"{base_subapi.rstrip('/')}/sub?target={subapi_target}&url={encoded_url}&filter_local=false&config={urllib.parse.quote(cfg, safe='')}"
+        curl_cmd = f"curl -s -L -A \"Mozilla/5.0\" \"{api_url}\""
+        
+        for attempt in range(1, max_retries + 1):
+            current_timeout = 60 * attempt
+            req = urllib.request.Request(api_url, headers={"User-Agent": "Mozilla/5.0"})
             try:
-                err_body = e.read().decode("utf-8")[:250]
-            except Exception:
-                pass
-            logger.error(f"❌ Subapi 转换 HTTP 错误 [HTTP {e.code} {e.reason}] [目标: {target}, 订阅源: {sub_url}] - 详细返回: {err_body}\n测试 curl 命令: {curl_cmd}")
-            break
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            err_msg = str(e.reason if hasattr(e, "reason") else e)
-            if attempt < max_retries:
-                next_timeout = (attempt + 1) * 10
-                logger.warning(f"⚠️ Subapi 在线转换超时/网络抖动 (第 {attempt}/{max_retries} 次请求超时 {current_timeout}s: {err_msg})，增加超时时间至 {next_timeout}s 并进行第 {attempt+1} 次重试...\n测试 curl 命令: {curl_cmd}")
-                time.sleep(1)
-            else:
-                logger.error(f"❌ Subapi 在线转换连续超时 [已重试 {max_retries} 次, 最终超时 {current_timeout}s] [目标: {target}, 订阅源: {sub_url}] - 错误信息: {err_msg}\n测试 curl 命令: {curl_cmd}")
-        except Exception as e:
-            logger.error(f"❌ Subapi 转换未捕获异常 [目标: {target}, 订阅源: {sub_url}] - 错误信息: {str(e)}\n测试 curl 命令: {curl_cmd}")
-            break
+                with urllib.request.urlopen(req, timeout=current_timeout) as resp:
+                    status_code = resp.status
+                    content = resp.read().decode("utf-8")
+                    is_valid_content = any(k in content for k in ["proxies", "outbounds", "outbound", "port", "inbounds"])
+                    if status_code == 200 and len(content) > 100 and is_valid_content:
+                        logger.info(f"✅ Subapi 订阅转换成功! [端点: {base_subapi}, 目标: {target}, 响应大小: {len(content)} 字节]")
+                        return content
+                    else:
+                        logger.error(f"❌ Subapi 转换响应异常 [HTTP {status_code}] [端点: {base_subapi}, 目标: {target}]: 返回内容缺少节点定义!\n测试 curl 命令: {curl_cmd}")
+                        break
+            except urllib.error.HTTPError as e:
+                err_body = ""
+                try:
+                    err_body = e.read().decode("utf-8")[:250]
+                except Exception:
+                    pass
+                logger.error(f"❌ Subapi 转换 HTTP 错误 [HTTP {e.code} {e.reason}] [端点: {base_subapi}, 目标: {target}] - 详细返回: {err_body}\n测试 curl 命令: {curl_cmd}")
+                break
+            except (urllib.error.URLError, TimeoutError, OSError) as e:
+                err_msg = str(e.reason if hasattr(e, "reason") else e)
+                if attempt < max_retries:
+                    time.sleep(0.5)
+                else:
+                    logger.warning(f"⚠️ Subapi 端点 [{base_subapi}] 请求失败 ({err_msg})，尝试下一个备用端点...")
+            except Exception as e:
+                logger.error(f"❌ Subapi 转换未捕获异常 [端点: {base_subapi}]: {str(e)}\n测试 curl 命令: {curl_cmd}")
+                break
             
     return ""
 
