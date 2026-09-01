@@ -298,20 +298,195 @@ get_component_status() {
   esac
 }
 
-# ===================== 单组件安装函数 =====================
+# ===================== 参数检查与交互收集机制 =====================
+declare -a MISSING_REQUIRED_PARAMS=()
 
-install_component_singbox() {
-  local target_mode="${1:-$PACKAGE_TYPE}"
-  if [[ "$ROLE" == "client" ]]; then
-    target_mode="client"
+prompt_param() {
+  local var_name="$1"
+  local desc="$2"
+  local is_req="$3"
+  local def_val="$4"
+  local env_hint="$5"
+  local cli_hint="$6"
+
+  local current_val="${!var_name}"
+
+  if [[ "$ASSUME_YES" == "true" ]]; then
+    # 静默模式校验
+    if [[ "$is_req" == "true" ]]; then
+      if [[ -z "$current_val" ]]; then
+        MISSING_REQUIRED_PARAMS+=("${desc}|${env_hint}|${cli_hint}")
+      fi
+    else
+      # 可选参数：若未指定则赋予预设默认值
+      if [[ -z "$current_val" ]]; then
+        printf -v "$var_name" '%s' "$def_val"
+      fi
+    fi
+  else
+    # 交互模式提示与确认
+    local prompt_str=""
+    if [[ "$is_req" == "true" ]]; then
+      prompt_str="${BOLD}${CYAN}[必填项]${NC} ${desc}"
+      if [[ -n "$current_val" ]]; then
+        prompt_str+=" [当前值: ${GREEN}${current_val}${NC}]: "
+      else
+        prompt_str+=": "
+      fi
+      while true; do
+        read -r -p "$(echo -e "$prompt_str")" user_input
+        user_input="${user_input:-$current_val}"
+        if [[ -n "$user_input" ]]; then
+          printf -v "$var_name" '%s' "$user_input"
+          break
+        else
+          echo -e "  ${RED}❌ 此项为必填项，不能为空，请重新输入！${NC}"
+        fi
+      done
+    else
+      # 可选参数
+      local effective_val="${current_val:-$def_val}"
+      prompt_str="${BOLD}${YELLOW}[可选项]${NC} ${desc}"
+      if [[ -n "$effective_val" ]]; then
+        prompt_str+=" [默认值: ${GREEN}${effective_val}${NC}]: "
+      else
+        prompt_str+=" [默认: 留空]: "
+      fi
+      read -r -p "$(echo -e "$prompt_str")" user_input
+      user_input="${user_input:-$effective_val}"
+      printf -v "$var_name" '%s' "$user_input"
+    fi
+  fi
+}
+
+collect_and_validate_role_parameters() {
+  local role="$1"
+  MISSING_REQUIRED_PARAMS=()
+
+  echo ""
+  echo -e "${CYAN}================================================================================${NC}"
+  echo -e "${BOLD}${PURPLE}  📋 检查与配置部署参数: 角色 [${role^^}]${NC}"
+  echo -e "${CYAN}================================================================================${NC}"
+
+  case "$role" in
+    target)
+      prompt_param "INPUT_TOKEN" "Cloudflare Tunnel Token (用于隧道穿透)" "true" "" "TUNNEL_TOKEN" "-t <TOKEN>"
+      prompt_param "INPUT_SERVER_IP" "服务器公网 IP (用于节点连接与订阅生成)" "false" "${PUBLIC_IPV4:-127.0.0.1}" "SERVER_IP" "-i <IP>"
+      prompt_param "INPUT_DOMAIN" "sing-box Reality SNI 伪装域名" "false" "dl.google.com" "SINGBOX_DOMAIN" "--domain <DOMAIN>"
+      prompt_param "INPUT_PORT" "sing-box Reality 端口" "false" "443" "SINGBOX_PORT" "-p <PORT>"
+      prompt_param "INPUT_USERNAME" "sing-box SOCKS5 认证用户名" "false" "${INPUT_USERNAME:-user_$(cat /proc/sys/kernel/random/uuid 2>/dev/null | cut -c1-6 || echo '886c12')}" "SOCKS_USER" "--user <USER>"
+      prompt_param "INPUT_PASSWORD" "sing-box SOCKS5 认证密码" "false" "${INPUT_PASSWORD:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' | cut -c1-16 || echo 'admin1234')}" "SOCKS_PASS" "--pass <PASS>"
+      prompt_param "INPUT_SUB_TOKEN" "订阅安全访问 Token (Web / API 订阅)" "false" "${INPUT_SUB_TOKEN:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null | tr -d '-' || echo 'sub_token_uuid')}" "SUB_TOKEN" "--token <TOKEN>"
+      prompt_param "INPUT_COUNTRY" "VPNGate 住宅节点筛选国家代码" "false" "JP" "VPNGATE_COUNTRY" "-c <COUNTRY>"
+      ;;
+    relay)
+      prompt_param "INPUT_SERVICE_TOKEN_ID" "Cloudflare Access Service Token Client ID" "true" "" "SERVICE_TOKEN_ID" "-i <TOKEN_ID>"
+      prompt_param "INPUT_SERVICE_TOKEN_SECRET" "Cloudflare Access Service Token Client Secret" "true" "" "SERVICE_TOKEN_SECRET" "-s <TOKEN_SECRET>"
+      prompt_param "INPUT_DOMAINS" "Access TCP 转发目标域名列表 (逗号分隔)" "false" "movies.19910417.xyz,movies1.19910417.xyz" "DOMAINS" "--domains <D1,D2>"
+      prompt_param "INPUT_PORTS" "Access TCP 本地映射监听端口列表 (逗号分隔)" "false" "5000,5001" "PORTS" "--ports <P1,P2>"
+      prompt_param "INPUT_PORT" "clash-sub-manager Web 端口" "false" "8000" "PORT" "-p <PORT>"
+      prompt_param "INPUT_USERNAME" "clash-sub-manager Web 管理账号" "false" "admin" "USERNAME" "-u <USER>"
+      prompt_param "INPUT_PASSWORD" "clash-sub-manager Web 管理密码" "false" "admin1234" "PASSWORD" "-P <PASS>"
+      prompt_param "INPUT_SUB_URL" "上游 Clash 原始订阅链接 (留空为本地提取模式)" "false" "" "SUB_URL" "-s <URL>"
+      prompt_param "INPUT_PROXY" "上游拉取与测速代理" "false" "socks5h://127.0.0.1:2080" "PROXY" "--proxy <PROXY>"
+      prompt_param "INPUT_DOMAIN" "sing-box Reality 伪装域名" "false" "dl.google.com" "SINGBOX_DOMAIN" "--domain <DOMAIN>"
+      ;;
+    client)
+      prompt_param "INPUT_TOKEN" "Cloudflare Zero Trust Team 组织名称" "true" "" "WARP_TEAM" "-t <TEAM>"
+      prompt_param "INPUT_SERVICE_TOKEN_ID" "Cloudflare Access Service Token Client ID" "true" "" "SERVICE_TOKEN_ID" "-i <TOKEN_ID>"
+      prompt_param "INPUT_SERVICE_TOKEN_SECRET" "Cloudflare Access Service Token Client Secret" "true" "" "SERVICE_TOKEN_SECRET" "-s <TOKEN_SECRET>"
+      prompt_param "INPUT_DOMAINS" "Access TCP 转发目标域名列表 (逗号分隔)" "false" "movies.19910417.xyz,movies1.19910417.xyz" "DOMAINS" "--domains <D1,D2>"
+      prompt_param "INPUT_PORTS" "Access TCP 本地映射监听端口列表 (逗号分隔)" "false" "5000,5001" "PORTS" "--ports <P1,P2>"
+      prompt_param "INPUT_PORT" "Cloudflare WARP SOCKS5 代理端口" "false" "1080" "PORT" "-p <PORT>"
+      ;;
+  esac
+
+  # 静默模式下检测到缺少必选参数：立即报错并退出
+  if [[ "$ASSUME_YES" == "true" ]] && [[ ${#MISSING_REQUIRED_PARAMS[@]} -gt 0 ]]; then
+    echo ""
+    echo -e "${RED}================================================================================${NC}"
+    echo -e "${BOLD}${RED}  ❌ [静默模式启动失败] 检测到缺少必选参数 / 环境变量！${NC}"
+    echo -e "${RED}================================================================================${NC}"
+    echo -e "当前部署角色 [${role^^}] 在非交互静默模式 (-y) 下检测到以下必选参数未设置:"
+    echo ""
+    printf " %-35s %-25s %-20s\n" "缺少必选参数" "对应环境变量设置" "CLI 命令行传参选项"
+    echo -e "--------------------------------------------------------------------------------"
+    for item in "${MISSING_REQUIRED_PARAMS[@]}"; do
+      IFS="|" read -r p_desc p_env p_cli <<< "$item"
+      printf " %-35b %-25b %-20b\n" "${YELLOW}${p_desc}${NC}" "${GREEN}export ${p_env}=\"...\"${NC}" "${CYAN}${p_cli}${NC}"
+    done
+    echo -e "${RED}================================================================================${NC}"
+    echo ""
+    log_error "请先 export 设置上述环境变量后再执行静默安装，或移除 '-y' 参数进入交互确认模式。"
+    exit 1
   fi
 
-  if [[ "$target_mode" == "client" ]]; then
-    log_step "正在以 [Client 客户端模式] 安装与配置 sing-box..."
+  # 打印已确认的参数清单并进行最终部署确认
+  echo ""
+  echo -e "${CYAN}--------------------------------------------------------------------------------${NC}"
+  echo -e "${BOLD}${GREEN}               📋 已确认的部署参数清单 (Role: ${role^^})                         ${NC}"
+  echo -e "${CYAN}--------------------------------------------------------------------------------${NC}"
+  printf " %-32s %-45s\n" "配置参数名称" "当前设定值"
+  echo -e "--------------------------------------------------------------------------------"
+
+  case "$role" in
+    target)
+      local mask_token="${INPUT_TOKEN:0:8}***${INPUT_TOKEN: -6}"
+      [[ ${#INPUT_TOKEN} -lt 14 ]] && mask_token="******"
+      printf " %-32s %-45s\n" "Cloudflare Tunnel Token" "${mask_token}"
+      printf " %-32s %-45s\n" "服务器公网 IP (SERVER_IP)" "${INPUT_SERVER_IP}"
+      printf " %-32s %-45s\n" "Reality SNI 伪装域名" "${INPUT_DOMAIN}"
+      printf " %-32s %-45s\n" "sing-box Reality 端口" "${INPUT_PORT}"
+      printf " %-32s %-45s\n" "SOCKS5 认证账号" "${INPUT_USERNAME}"
+      printf " %-32s %-45s\n" "SOCKS5 认证密码" "${INPUT_PASSWORD:0:4}****"
+      printf " %-32s %-45s\n" "订阅访问 Token (SUB_TOKEN)" "${INPUT_SUB_TOKEN}"
+      printf " %-32s %-45s\n" "VPNGate 筛选国家" "${INPUT_COUNTRY}"
+      ;;
+    relay)
+      local mask_sec="${INPUT_SERVICE_TOKEN_SECRET:0:6}******"
+      [[ ${#INPUT_SERVICE_TOKEN_SECRET} -lt 10 ]] && mask_sec="******"
+      printf " %-32s %-45s\n" "Service Token Client ID" "${INPUT_SERVICE_TOKEN_ID}"
+      printf " %-32s %-45s\n" "Service Token Secret" "${mask_sec}"
+      printf " %-32s %-45s\n" "TCP 转发目标域名 (DOMAINS)" "${INPUT_DOMAINS}"
+      printf " %-32s %-45s\n" "TCP 本地映射端口 (PORTS)" "${INPUT_PORTS}"
+      printf " %-32s %-45s\n" "Web 管理端口 (PORT)" "${INPUT_PORT}"
+      printf " %-32s %-45s\n" "Web 管理账号 / 密码" "${INPUT_USERNAME} / ${INPUT_PASSWORD}"
+      printf " %-32s %-45s\n" "上游 Clash 订阅链接" "${INPUT_SUB_URL:-[本地 sing-box 提取模式]}"
+      printf " %-32s %-45s\n" "上游拉取代理" "${INPUT_PROXY}"
+      ;;
+    client)
+      local mask_sec="${INPUT_SERVICE_TOKEN_SECRET:0:6}******"
+      [[ ${#INPUT_SERVICE_TOKEN_SECRET} -lt 10 ]] && mask_sec="******"
+      printf " %-32s %-45s\n" "Zero Trust Team 组织名称" "${INPUT_TOKEN}"
+      printf " %-32s %-45s\n" "Service Token Client ID" "${INPUT_SERVICE_TOKEN_ID}"
+      printf " %-32s %-45s\n" "Service Token Secret" "${mask_sec}"
+      printf " %-32s %-45s\n" "TCP 转发目标域名 (DOMAINS)" "${INPUT_DOMAINS}"
+      printf " %-32s %-45s\n" "TCP 本地映射端口 (PORTS)" "${INPUT_PORTS}"
+      printf " %-32s %-45s\n" "WARP SOCKS5 监听端口" "${INPUT_PORT:-1080}"
+      ;;
+  esac
+  echo -e "${CYAN}--------------------------------------------------------------------------------${NC}"
+  echo ""
+
+  if [[ "$ASSUME_YES" != "true" ]]; then
+    read -r -p "确认以上所有配置参数正确并开始执行部署? [Y/n] " confirm
+    confirm="${confirm:-y}"
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      log_warn "用户取消部署。"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# ===================== 单个组件安装函数 =====================
+
+install_component_singbox() {
+  local mode="${1:-server}"
+  if [[ "$mode" == "client" ]]; then
+    log_step "正在安装 sing-box 客户端核心..."
     local installer="${PROJECT_ROOT}/fhs-install-singbox/install-singbox-server.sh"
     local sub_updater="${PROJECT_ROOT}/fhs-install-singbox/update-singbox-sub.sh"
-
-    # 1. 确保 sing-box 二进制与系统服务已就绪
     if ! command -v sing-box &>/dev/null && [[ ! -f "/usr/local/bin/sing-box" ]]; then
       if [[ -f "$installer" ]]; then
         chmod +x "$installer"
@@ -319,21 +494,13 @@ install_component_singbox() {
       fi
     fi
 
-    # 2. 检查/拉取客户端订阅
     local sub_url="${INPUT_SUB_URL:-}"
-    if [[ -z "$sub_url" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-      echo ""
-      echo -e "${YELLOW}提示: Client 模式需要传入订阅链接以自动配置客户端入站、出站及路由分流规则。${NC}"
-      read -r -p "请输入 sing-box 订阅链接 URL (如 http://<IP>:8000/sub?token=...): " user_sub
-      sub_url="${user_sub:-}"
-    fi
-
     if [[ -n "$sub_url" && -f "$sub_updater" ]]; then
       chmod +x "$sub_updater"
       bash "$sub_updater" --client -u "$sub_url" -y
       log_success "sing-box 客户端订阅已拉取并成功应用至 /etc/sing-box/config.json！"
     else
-      log_info "未传入订阅链接，sing-box 核心已安装，后续可执行 'update-singbox-sub.sh --client -u <URL>' 随时同步订阅。"
+      log_info "sing-box 核心已安装，后续可执行 'update-singbox-sub.sh --client -u <URL>' 随时同步订阅。"
     fi
   else
     log_step "正在安装 sing-box 服务端 (VLESS Reality / gRPC / SOCKS5 / 多协议入站)..."
@@ -364,13 +531,15 @@ install_component_tunnel() {
   fi
   chmod +x "$installer"
 
-  local token="$INPUT_TOKEN"
-  if [[ -z "$token" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-    echo ""
-    echo -e "${YELLOW}提示: Cloudflare Tunnel Token 可在 Cloudflare Zero Trust 控制台 (Networks -> Tunnels) 创建获取。${NC}"
-    read -r -p "请输入 Cloudflare Tunnel Token (若留空则以 Quick Tunnel 模式运行): " token
+  if [[ -z "$INPUT_TOKEN" ]]; then
+    prompt_param "INPUT_TOKEN" "Cloudflare Tunnel Token (用于隧道穿透)" "true" "" "TUNNEL_TOKEN" "-t <TOKEN>"
+    if [[ "$ASSUME_YES" == "true" && ${#MISSING_REQUIRED_PARAMS[@]} -gt 0 ]]; then
+      log_error "静默模式 (-y) 下缺少必需参数: TUNNEL_TOKEN (请使用 -t <TOKEN> 或 export TUNNEL_TOKEN=\"...\")"
+      exit 1
+    fi
   fi
 
+  local token="$INPUT_TOKEN"
   local cmd=(bash "$installer")
   if [[ -n "$token" ]]; then
     cmd+=("-t" "$token")
@@ -388,7 +557,7 @@ install_component_subconverter() {
   fi
   chmod +x "$installer"
 
-  local port="${INPUT_PORT:-25500}"
+  local port="25500"
   bash "$installer" -p "$port"
   log_success "subconverter 订阅转换后端已成功安装并启动！"
 }
@@ -402,15 +571,8 @@ install_component_singbox_sub_converter() {
   fi
   chmod +x "$installer"
 
-  local ip="${INPUT_SERVER_IP:-${PUBLIC_IPV4:-}}"
-  local port="${INPUT_PORT:-8000}"
-
-  if [[ -z "$ip" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-    echo ""
-    read -r -p "请输入本服务器公网 IP 地址 (用于订阅节点生成, 默认: $PUBLIC_IPV4): " user_ip
-    ip="${user_ip:-$PUBLIC_IPV4}"
-  fi
-  ip="${ip:-$PUBLIC_IPV4}"
+  local ip="${INPUT_SERVER_IP:-${PUBLIC_IPV4:-127.0.0.1}}"
+  local port="8000"
 
   local cmd=(bash "$installer" -i "$ip" -p "$port")
   if [[ -n "$INPUT_SUB_TOKEN" ]]; then
@@ -433,12 +595,6 @@ install_component_clash_sub_manager() {
   local port="${INPUT_PORT:-8000}"
   local sub_url="${INPUT_SUB_URL:-}"
   local proxy="${INPUT_PROXY:-socks5h://127.0.0.1:2080}"
-
-  if [[ -z "$INPUT_SUB_URL" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-    echo ""
-    read -r -p "请输入上游 Clash 订阅链接 (可留空，后续在 Web 界面或配置文件设置): " user_sub
-    sub_url="${user_sub:-}"
-  fi
 
   local cmd=(bash "$installer" -p "$port" --proxy "$proxy")
   if [[ -n "$sub_url" ]]; then
@@ -468,15 +624,7 @@ install_component_vpngate() {
 
   local sub_url="${INPUT_SUB_URL:-}"
   local country="${INPUT_COUNTRY:-JP}"
-  local port="${INPUT_PORT:-2080}"
-
-  if [[ -z "$INPUT_SUB_URL" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-    echo ""
-    read -r -p "请输入 Sing-box 上游节点订阅链接 (用于连接 VPNGate 节点, 可选): " user_sub
-    sub_url="${user_sub:-}"
-    read -r -p "请输入住宅节点筛选国家代码 (如 JP, US, KR，默认: JP): " user_country
-    country="${user_country:-JP}"
-  fi
+  local port="2080"
 
   local cmd=(bash "$installer" -p "$port" -c "$country")
   if [[ -n "$sub_url" ]]; then
@@ -498,27 +646,21 @@ install_component_cf_access_tcp() {
   fi
   chmod +x "$installer"
 
-  local token_id="${INPUT_SERVICE_TOKEN_ID:-${SERVICE_TOKEN_ID:-}}"
-  local token_secret="${INPUT_SERVICE_TOKEN_SECRET:-${SERVICE_TOKEN_SECRET:-}}"
-  local domains="${INPUT_DOMAINS:-${DOMAINS:-movies.19910417.xyz,movies1.19910417.xyz}}"
-  local ports="${INPUT_PORTS:-${PORTS:-5000,5001}}"
-
-  if [[ -z "$token_id" || -z "$token_secret" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-    echo ""
-    echo -e "${YELLOW}提示: Service Token 用于安全鉴权穿透 Cloudflare Access 保护的 TCP 服务。${NC}"
-    read -r -p "请输入 Cloudflare Access Service Token Client ID: " token_id
-    read -r -p "请输入 Cloudflare Access Service Token Client Secret: " token_secret
-    read -r -p "请输入转发目标域名列表 (英文逗号分隔, 默认: $domains): " user_domains
-    domains="${user_domains:-$domains}"
-    read -r -p "请输入本地映射端口列表 (英文逗号分隔, 默认: $ports): " user_ports
-    ports="${user_ports:-$ports}"
+  if [[ -z "$INPUT_SERVICE_TOKEN_ID" || -z "$INPUT_SERVICE_TOKEN_SECRET" ]]; then
+    prompt_param "INPUT_SERVICE_TOKEN_ID" "Cloudflare Access Service Token Client ID" "true" "" "SERVICE_TOKEN_ID" "-i <TOKEN_ID>"
+    prompt_param "INPUT_SERVICE_TOKEN_SECRET" "Cloudflare Access Service Token Client Secret" "true" "" "SERVICE_TOKEN_SECRET" "-s <TOKEN_SECRET>"
+    prompt_param "INPUT_DOMAINS" "Access TCP 转发目标域名列表 (逗号分隔)" "false" "movies.19910417.xyz,movies1.19910417.xyz" "DOMAINS" "--domains <D1,D2>"
+    prompt_param "INPUT_PORTS" "Access TCP 本地映射监听端口列表 (逗号分隔)" "false" "5000,5001" "PORTS" "--ports <P1,P2>"
+    if [[ "$ASSUME_YES" == "true" && ${#MISSING_REQUIRED_PARAMS[@]} -gt 0 ]]; then
+      log_error "静默模式 (-y) 下缺少必需参数: SERVICE_TOKEN_ID / SERVICE_TOKEN_SECRET"
+      exit 1
+    fi
   fi
 
-  if [[ -z "$token_id" || -z "$token_secret" ]] && [[ "$ASSUME_YES" == "true" ]]; then
-    token_id="${token_id:-demo_access_client_id.access}"
-    token_secret="${token_secret:-demo_access_client_secret_1234567890abcdef}"
-    log_warn "未通过环境变量提供 Service Token，自动写入占位测试 Token (后续可在 /etc/cloudflare-access-tcp/access.env 修改)"
-  fi
+  local token_id="${INPUT_SERVICE_TOKEN_ID:-}"
+  local token_secret="${INPUT_SERVICE_TOKEN_SECRET:-}"
+  local domains="${INPUT_DOMAINS:-movies.19910417.xyz,movies1.19910417.xyz}"
+  local ports="${INPUT_PORTS:-5000,5001}"
 
   local cmd=(bash "$installer" --domains "$domains" --ports "$ports")
   if [[ -n "$token_id" ]]; then
@@ -534,71 +676,42 @@ install_component_cf_access_tcp() {
 
 install_component_cf_warp() {
   log_step "正在安装 Cloudflare Zero Trust (WARP) 客户端套件..."
-  local warp_type="docker"
+  ensure_docker
+  local installer="${PROJECT_ROOT}/cloudflare-zero-trust/docker-run.sh"
+  if [[ ! -f "$installer" ]]; then
+    log_error "未找到脚本: $installer"
+    return 1
+  fi
 
-  if [[ "$ASSUME_YES" != "true" ]]; then
-    echo ""
-    echo "请选择 Cloudflare WARP 部署模式:"
-    echo "  1) Docker SOCKS5 代理客户端 (推荐, 策略路由隔离, 端口 1080)"
-    echo "  2) Linux 官方原生 cloudflare-warp 客户端 (全局 VPN / WARP Connector)"
-    read -r -p "请输入选择 [1-2] (默认: 1): " warp_choice
-    warp_choice="${warp_choice:-1}"
-    if [[ "$warp_choice" == "2" ]]; then
-      warp_type="native"
+  if [[ -z "$INPUT_TOKEN" || -z "$INPUT_SERVICE_TOKEN_ID" || -z "$INPUT_SERVICE_TOKEN_SECRET" ]]; then
+    prompt_param "INPUT_TOKEN" "Cloudflare Zero Trust Team 组织名称" "true" "" "WARP_TEAM" "-t <TEAM>"
+    prompt_param "INPUT_SERVICE_TOKEN_ID" "Cloudflare Access Service Token Client ID" "true" "" "SERVICE_TOKEN_ID" "-i <TOKEN_ID>"
+    prompt_param "INPUT_SERVICE_TOKEN_SECRET" "Cloudflare Access Service Token Client Secret" "true" "" "SERVICE_TOKEN_SECRET" "-s <TOKEN_SECRET>"
+    prompt_param "INPUT_PORT" "Cloudflare WARP SOCKS5 代理端口" "false" "1080" "PORT" "-p <PORT>"
+    if [[ "$ASSUME_YES" == "true" && ${#MISSING_REQUIRED_PARAMS[@]} -gt 0 ]]; then
+      log_error "静默模式 (-y) 下缺少必需参数: WARP_TEAM / SERVICE_TOKEN_ID / SERVICE_TOKEN_SECRET"
+      exit 1
     fi
   fi
 
-  if [[ "$warp_type" == "docker" ]]; then
-    ensure_docker
-    local installer="${PROJECT_ROOT}/cloudflare-zero-trust/docker-run.sh"
-    if [[ ! -f "$installer" ]]; then
-      log_error "未找到脚本: $installer"
-      return 1
-    fi
-    local team="${INPUT_TOKEN:-${CF_WARP_TEAM:-${WARP_TEAM:-}}}"
-    local token_id="${INPUT_SERVICE_TOKEN_ID:-${SERVICE_TOKEN_ID:-}}"
-    local token_secret="${INPUT_SERVICE_TOKEN_SECRET:-${SERVICE_TOKEN_SECRET:-}}"
+  local team="${INPUT_TOKEN:-}"
+  local token_id="${INPUT_SERVICE_TOKEN_ID:-}"
+  local token_secret="${INPUT_SERVICE_TOKEN_SECRET:-}"
+  local port="${INPUT_PORT:-1080}"
 
-    if [[ -z "$team" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-      echo ""
-      echo -e "${YELLOW}提示: Cloudflare Zero Trust WARP 需要配置 Team 组织名称与 Service Token 进行设备注册与策略授权。${NC}"
-      read -r -p "请输入 Cloudflare Zero Trust Team 组织名称 (例如 myteam): " team
-    fi
-    if [[ -z "$token_id" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-      read -r -p "请输入 Cloudflare Access Service Token Client ID: " token_id
-      read -r -p "请输入 Cloudflare Access Service Token Client Secret: " token_secret
-    fi
-
-    if [[ -z "$team" ]] && [[ "$ASSUME_YES" == "true" ]]; then
-      team="demo-team"
-      token_id="${token_id:-demo_access_client_id.access}"
-      token_secret="${token_secret:-demo_access_client_secret_1234567890abcdef}"
-      log_warn "未通过环境变量提供 Team / Service Token，使用测试占位参数 (后续可在 /etc/cloudflare-warp/warp.env 修改)"
-    fi
-
-    local cmd=(bash "$installer" --service)
-    if [[ -n "$team" ]]; then
-      cmd+=("--team" "$team")
-    fi
-    if [[ -n "$token_id" ]]; then
-      cmd+=("--service-token-id" "$token_id")
-    fi
-    if [[ -n "$token_secret" ]]; then
-      cmd+=("--service-token-secret" "$token_secret")
-    fi
-
-    "${cmd[@]}"
-    log_success "Cloudflare WARP Docker SOCKS5 服务已启动并注册开机自启！"
-  else
-    local installer="${PROJECT_ROOT}/cloudflare-zero-trust/install.sh"
-    if [[ ! -f "$installer" ]]; then
-      log_error "未找到脚本: $installer"
-      return 1
-    fi
-    chmod +x "$installer"
-    bash "$installer"
-    log_success "Cloudflare WARP 原生客户端安装完成！"
+  local cmd=(bash "$installer" --service -p "$port")
+  if [[ -n "$team" ]]; then
+    cmd+=("--team" "$team")
   fi
+  if [[ -n "$token_id" ]]; then
+    cmd+=("--service-token-id" "$token_id")
+  fi
+  if [[ -n "$token_secret" ]]; then
+    cmd+=("--service-token-secret" "$token_secret")
+  fi
+
+  "${cmd[@]}"
+  log_success "Cloudflare WARP Docker SOCKS5 服务已启动并注册开机自启！"
 }
 
 install_component_preferred_ip() {
@@ -624,26 +737,7 @@ install_component_preferred_ip() {
 
 # 1. 目标 VPS (Target VPS): sing-box + Tunnel/NAT + subconverter + singbox-sub-converter + vpngate-singbox-openvpn
 deploy_role_target() {
-  echo ""
-  echo -e "${CYAN}================================================================${NC}"
-  echo -e "${BOLD}${PURPLE}  🚀 开始部署: 目标 VPS (Target / 出口网关服务器) 套件${NC}"
-  echo -e "${CYAN}================================================================${NC}"
-  echo -e "预设组件清单:"
-  echo -e "  1. ${GREEN}sing-box 服务端${NC} (VLESS Reality / gRPC 8088 / SOCKS 10086 / 原生出口)"
-  echo -e "  2. ${GREEN}Cloudflare Tunnel & NAT 转发${NC} (Tunnel 穿透 + 出口 NAT MASQUERADE 规则)"
-  echo -e "  3. ${GREEN}subconverter${NC} (通用订阅转换后端, 端口 25500)"
-  echo -e "  4. ${GREEN}singbox-sub-converter${NC} (自适应订阅前端与 Web 管理面板, 端口 8000)"
-  echo -e "  5. ${GREEN}vpngate-singbox-openvpn${NC} (纯净住宅 IP 链式代理, 端口 2080)"
-  echo ""
-
-  if [[ "$ASSUME_YES" != "true" ]]; then
-    read -r -p "确认开始执行部署? [Y/n] " confirm
-    confirm="${confirm:-y}"
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-      log_warn "用户取消部署。"
-      return 0
-    fi
-  fi
+  collect_and_validate_role_parameters "target" || return 0
 
   install_component_singbox
   install_component_tunnel
@@ -656,25 +750,7 @@ deploy_role_target() {
 
 # 2. 中转 VPS (Relay VPS): sing-box + clash-singbox-sub-manager + cloudflare-access-tcp + preferred-ip-manager
 deploy_role_relay() {
-  echo ""
-  echo -e "${CYAN}================================================================${NC}"
-  echo -e "${BOLD}${PURPLE}  🚀 开始部署: 中转 VPS (Relay / 流量中继与受限分发) 套件${NC}"
-  echo -e "${CYAN}================================================================${NC}"
-  echo -e "预设组件清单:"
-  echo -e "  1. ${GREEN}sing-box 服务端 / 核心${NC} (入站提取 / 转发网关)"
-  echo -e "  2. ${GREEN}clash-singbox-sub-manager${NC} (本地 Clash 订阅同步/注入管理器, 零外部 Subapi 依赖, 端口 8000)"
-  echo -e "  3. ${GREEN}cloudflare-access-tcp${NC} (Cloudflare Access TCP 转发与自动优选 IP 容器, 端口 5000/5001)"
-  echo -e "  4. ${GREEN}preferred-ip-manager${NC} (Cloudflare 优选 IP 定时测速与推送服务)"
-  echo ""
-
-  if [[ "$ASSUME_YES" != "true" ]]; then
-    read -r -p "确认开始执行部署? [Y/n] " confirm
-    confirm="${confirm:-y}"
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-      log_warn "用户取消部署。"
-      return 0
-    fi
-  fi
+  collect_and_validate_role_parameters "relay" || return 0
 
   install_component_singbox
   install_component_clash_sub_manager
@@ -686,38 +762,7 @@ deploy_role_relay() {
 
 # 3. Client 端 (Client): cloudflare-access-tcp + cloudflare-zero-trust WARP
 deploy_role_client() {
-  echo ""
-  echo -e "${CYAN}================================================================${NC}"
-  echo -e "${BOLD}${PURPLE}  🚀 开始部署: Client 端 (Client / 本地网关 / 个人客户端) 套件${NC}"
-  echo -e "${CYAN}================================================================${NC}"
-  echo -e "预设组件清单:"
-  echo -e "  1. ${GREEN}cloudflare-access-tcp${NC} (Cloudflare Access TCP 转发与自动优选 IP 容器, 端口 5000/5001)"
-  echo -e "  2. ${GREEN}cloudflare-zero-trust${NC} (Docker WARP SOCKS5 代理客户端 + 策略路由隔离, 端口 1080)"
-  echo ""
-
-  # 检查并提示 Client 模式必须配置的 Service Token 与 Team 组织名
-  if [[ -z "$INPUT_SERVICE_TOKEN_ID" || -z "$INPUT_SERVICE_TOKEN_SECRET" || -z "$INPUT_TOKEN" ]] && [[ "$ASSUME_YES" != "true" ]]; then
-    echo -e "${YELLOW}【必填凭据设置】Client 端运行需连接 Cloudflare Zero Trust，请提供以下凭据:${NC}"
-    if [[ -z "$INPUT_SERVICE_TOKEN_ID" ]]; then
-      read -r -p "请输入 Cloudflare Access Service Token Client ID: " INPUT_SERVICE_TOKEN_ID
-    fi
-    if [[ -z "$INPUT_SERVICE_TOKEN_SECRET" ]]; then
-      read -r -p "请输入 Cloudflare Access Service Token Client Secret: " INPUT_SERVICE_TOKEN_SECRET
-    fi
-    if [[ -z "$INPUT_TOKEN" ]]; then
-      read -r -p "请输入 Cloudflare Zero Trust Team 组织名称 (例如 myteam): " INPUT_TOKEN
-    fi
-    echo ""
-  fi
-
-  if [[ "$ASSUME_YES" != "true" ]]; then
-    read -r -p "确认开始执行部署? [Y/n] " confirm
-    confirm="${confirm:-y}"
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-      log_warn "用户取消部署。"
-      return 0
-    fi
-  fi
+  collect_and_validate_role_parameters "client" || return 0
 
   install_component_cf_access_tcp
   install_component_cf_warp
