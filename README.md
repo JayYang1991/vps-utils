@@ -21,7 +21,7 @@ sudo bash install.sh
 
 | 部署角色 | 核心组件矩阵 | 一键标准安装命令 | 增强/全功能安装命令 |
 | **目标 VPS (Target VPS)** | `sing-box` + `cloudflared-tunnel` + `subconverter` + `singbox-sub-converter` + `vpngate-singbox-openvpn` | `sudo ./install.sh -r target` | `sudo ./install.sh -r target` |
-| **中转 VPS (Relay VPS)** | `sing-box` + `clash-singbox-sub-manager` + `cloudflare-access-tcp` | `sudo ./install.sh -r relay` | `sudo ./install.sh -r relay` |
+| **中转 VPS (Relay VPS)** | `sing-box` + `clash-singbox-sub-manager` + `cloudflare-access-tcp` + `preferred-ip-manager` | `sudo ./install.sh -r relay` | `sudo ./install.sh -r relay` |
 
 ### 🔑 预设环境变量参考 (可选 / 自动化静默安装前设置)
 

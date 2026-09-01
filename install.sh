@@ -643,7 +643,7 @@ deploy_role_target() {
   show_deployment_summary "target"
 }
 
-# 2. 中转 VPS (Relay VPS): sing-box + clash-singbox-sub-manager + cloudflare-access-tcp
+# 2. 中转 VPS (Relay VPS): sing-box + clash-singbox-sub-manager + cloudflare-access-tcp + preferred-ip-manager
 deploy_role_relay() {
   echo ""
   echo -e "${CYAN}================================================================${NC}"
@@ -653,6 +653,7 @@ deploy_role_relay() {
   echo -e "  1. ${GREEN}sing-box 服务端 / 核心${NC} (入站提取 / 转发网关)"
   echo -e "  2. ${GREEN}clash-singbox-sub-manager${NC} (本地 Clash 订阅同步/注入管理器, 零外部 Subapi 依赖, 端口 8000)"
   echo -e "  3. ${GREEN}cloudflare-access-tcp${NC} (Cloudflare Access TCP 转发与自动优选 IP 容器, 端口 5000/5001)"
+  echo -e "  4. ${GREEN}preferred-ip-manager${NC} (Cloudflare 优选 IP 定时测速与推送服务)"
   echo ""
 
   if [[ "$ASSUME_YES" != "true" ]]; then
@@ -667,6 +668,7 @@ deploy_role_relay() {
   install_component_singbox
   install_component_clash_sub_manager
   install_component_cf_access_tcp
+  install_component_preferred_ip
 
   show_deployment_summary "relay"
 }
@@ -736,6 +738,7 @@ show_deployment_summary() {
     echo -e "  • 订阅管理 CLI 工具   : ${CYAN}clash-singbox-sub-manager status${NC}"
     echo -e "  • Access TCP 本地映射  : ${YELLOW}127.0.0.1:5000${NC} / ${YELLOW}127.0.0.1:5001${NC}"
     echo -e "  • Access TCP 管理 CLI : ${CYAN}cloudflare-access-tcp status${NC}"
+    echo -e "  • 优选 IP 定时测速推送 : ${CYAN}preferred-ip-manager status${NC} (每日凌晨 02:00~06:00 随机测速)"
     echo -e "  • sing-box 服务端状态  : ${CYAN}systemctl status sing-box${NC}"
   elif [[ "$role" == "client" ]]; then
     echo -e "${BOLD}已就绪服务概览:${NC}"
