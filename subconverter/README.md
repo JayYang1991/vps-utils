@@ -69,6 +69,30 @@ sudo bash install.sh -p 15051
 
 ---
 
+## 一键卸载
+
+若需卸载 `subconverter` 服务并清理相关程序文件，可使用 [`uninstall.sh`](./uninstall.sh)：
+
+```bash
+# 本地执行卸载
+cd subconverter
+sudo bash uninstall.sh
+
+# 免确认静默卸载
+sudo bash uninstall.sh -y
+
+# 卸载并保留配置文件 (pref.ini)
+sudo bash uninstall.sh --keep-config
+```
+
+或通过远程脚本执行卸载：
+
+```bash
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/JayYang1991/vps-utils/main/subconverter/uninstall.sh)
+```
+
+---
+
 ## 📦 项目离线打包 (`pack.sh`)
 
 项目提供了专用的自动化打包脚本 [`pack.sh`](./pack.sh)，可将 subconverter 二进制核心与规则集、配置模板等打包为标准压缩包，生成的归档文件可供 [`install.sh`](./install.sh) 本地直接离线安装使用：

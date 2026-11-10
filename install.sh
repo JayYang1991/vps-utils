@@ -981,10 +981,14 @@ uninstall_component() {
       ;;
     subconverter)
       log_warn "正在卸载 subconverter..."
-      systemctl stop subconverter 2>/dev/null || true
-      systemctl disable subconverter 2>/dev/null || true
-      rm -rf /etc/systemd/system/subconverter.service /usr/local/subconverter /usr/local/bin/subconverter
-      systemctl daemon-reload
+      if [[ -f "${PROJECT_ROOT}/subconverter/uninstall.sh" ]]; then
+        bash "${PROJECT_ROOT}/subconverter/uninstall.sh" -y || true
+      else
+        systemctl stop subconverter 2>/dev/null || true
+        systemctl disable subconverter 2>/dev/null || true
+        rm -rf /etc/systemd/system/subconverter.service /usr/local/subconverter /usr/local/bin/subconverter
+        systemctl daemon-reload
+      fi
       log_success "subconverter 已卸载！"
       ;;
     singbox-sub-converter)
